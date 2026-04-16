@@ -94,8 +94,11 @@ func (h *SubscriptionHandler) Subscribe(c *gin.Context) {
 	}
 	c.Header("Subscription-Userinfo", userinfo)
 
-	// 设置 Content-Disposition
-	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", user.Username))
+	// 浏览器直接查看，客户端通过 Content-Type 识别格式
+	// 仅在客户端主动请求下载时附加 filename
+	if c.Query("dl") == "1" {
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", user.Username))
+	}
 
 	// 返回订阅内容
 	c.Data(http.StatusOK, contentType, []byte(content))
