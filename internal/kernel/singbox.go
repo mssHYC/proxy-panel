@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -83,9 +84,83 @@ func (e *SingboxEngine) RemoveUser(tag, uuid, email string) error {
 	return errors.New("sing-box 不支持热加载用户，请重启内核")
 }
 
-// GenerateConfig v1.0 返回空 JSON，v1.1 实现
+// GenerateConfig 生成 sing-box 完整配置
 func (e *SingboxEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) ([]byte, error) {
-	return []byte("{}"), nil
+	cfg := map[string]interface{}{
+		"log": map[string]interface{}{
+			"level": "warn",
+		},
+	}
+
+	inbounds := make([]interface{}, 0)
+
+	for _, node := range nodes {
+		inbound := e.buildInbound(node, users)
+		if inbound != nil {
+			inbounds = append(inbounds, inbound)
+		}
+	}
+
+	cfg["inbounds"] = inbounds
+	cfg["outbounds"] = []interface{}{
+		map[string]interface{}{"type": "direct", "tag": "direct"},
+		map[string]interface{}{"type": "block", "tag": "block"},
+	}
+
+	return json.MarshalIndent(cfg, "", "  ")
+}
+
+func (e *SingboxEngine) buildInbound(node NodeConfig, users []UserConfig) map[string]interface{} {
+	s := node.Settings
+
+	switch node.Protocol {
+	case "hysteria2":
+		userList := make([]map[string]interface{}, 0)
+		for _, u := range users {
+			userList = append(userList, map[string]interface{}{
+				"name":     u.Email,
+				"password": u.UUID,
+			})
+		}
+
+		inbound := map[string]interface{}{
+			"type":        "hysteria2",
+			"tag":         node.Tag,
+			"listen":      "::",
+			"listen_port": node.Port,
+			"users":       userList,
+		}
+
+		// TLS 配置
+		certPath := getSettingStr(s, "cert_path", "")
+		keyPath := getSettingStr(s, "key_path", "")
+		if certPath != "" && keyPath != "" {
+			inbound["tls"] = map[string]interface{}{
+				"enabled":          true,
+				"certificate_path": certPath,
+				"key_path":         keyPath,
+			}
+		}
+
+		// 混淆配置
+		obfs := getSettingStr(s, "obfs", "")
+		if obfs != "" {
+			obfsPassword := getSettingStr(s, "obfs_password", "")
+			inbound["obfs"] = map[string]interface{}{
+				"type":     obfs,
+				"password": obfsPassword,
+			}
+		}
+
+		return inbound
+
+	case "vless", "vmess", "trojan":
+		// TODO: 后续支持
+		return nil
+
+	default:
+		return nil
+	}
 }
 
 // WriteConfig 将配置写入文件
