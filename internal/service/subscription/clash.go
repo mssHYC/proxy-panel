@@ -28,7 +28,6 @@ allow-lan: true
 bind-address: "*"
 find-process-mode: strict
 external-controller: 0.0.0.0:9090
-global-client-fingerprint: chrome
 
 geox-url:
   geoip: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"

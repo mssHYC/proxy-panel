@@ -66,6 +66,11 @@ func parseSettings(node model.Node) nodeSettings {
 		s.ShortID = s.ShortIDs[0]
 	}
 
+	// ShortID 可能是逗号分隔的多个值，客户端只取第一个
+	if strings.Contains(s.ShortID, ",") {
+		s.ShortID = strings.TrimSpace(strings.Split(s.ShortID, ",")[0])
+	}
+
 	// SNI: 去除可能带的端口号 (如 www.tesla.com:443 → www.tesla.com)
 	if strings.Contains(s.SNI, ":") {
 		s.SNI = strings.Split(s.SNI, ":")[0]
