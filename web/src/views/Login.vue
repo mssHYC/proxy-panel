@@ -3,9 +3,12 @@
     <el-card class="login-card" shadow="always">
       <div class="login-header">
         <h1 class="login-title">ProxyPanel</h1>
-        <p class="login-subtitle">管理面板登录</p>
+        <p class="login-subtitle">{{ phase === 'login' ? '管理面板登录' : '请输入验证码' }}</p>
       </div>
+
+      <!-- 阶段1: 用户名 + 密码 -->
       <el-form
+        v-if="phase === 'login'"
         ref="formRef"
         :model="form"
         :rules="rules"
@@ -42,6 +45,32 @@
           </el-button>
         </el-form-item>
       </el-form>
+
+      <!-- 阶段2: TOTP 验证码 -->
+      <div v-else class="totp-phase">
+        <p class="totp-hint">请输入验证器 App 中的 6 位动态验证码</p>
+        <el-input
+          v-model="totpCode"
+          placeholder="000000"
+          size="large"
+          maxlength="6"
+          class="totp-input"
+          @keyup.enter="handleVerify2FA"
+        />
+        <el-button
+          type="primary"
+          size="large"
+          :loading="loading"
+          class="login-btn"
+          style="margin-top: 16px"
+          @click="handleVerify2FA"
+        >
+          验 证
+        </el-button>
+        <div class="totp-back">
+          <el-link type="primary" @click="backToLogin">返回登录</el-link>
+        </div>
+      </div>
     </el-card>
   </div>
 </template>
@@ -52,13 +81,18 @@ import { useRouter } from 'vue-router'
 import { User, Lock } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
-import { login } from '../api/auth'
+import { login, verify2FA } from '../api/auth'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
 const auth = useAuthStore()
 const formRef = ref<FormInstance>()
 const loading = ref(false)
+
+// 登录阶段: 'login' | 'totp'
+const phase = ref<'login' | 'totp'>('login')
+const tempToken = ref('')
+const totpCode = ref('')
 
 const form = reactive({
   username: '',
@@ -77,15 +111,48 @@ async function handleLogin() {
   loading.value = true
   try {
     const res = await login(form.username, form.password)
-    auth.setToken(res.data.token)
-    ElMessage.success('登录成功')
-    router.push('/')
+    if (res.data.require_2fa) {
+      // 需要二次验证
+      tempToken.value = res.data.temp_token
+      phase.value = 'totp'
+      totpCode.value = ''
+    } else {
+      // 直接登录成功
+      auth.setToken(res.data.token)
+      ElMessage.success('登录成功')
+      router.push('/')
+    }
   } catch (err: any) {
     const msg = err.response?.data?.error || '登录失败，请检查用户名和密码'
     ElMessage.error(msg)
   } finally {
     loading.value = false
   }
+}
+
+async function handleVerify2FA() {
+  if (totpCode.value.length !== 6) {
+    ElMessage.warning('请输入 6 位验证码')
+    return
+  }
+  loading.value = true
+  try {
+    const res = await verify2FA(tempToken.value, totpCode.value)
+    auth.setToken(res.data.token)
+    ElMessage.success('登录成功')
+    router.push('/')
+  } catch (err: any) {
+    const msg = err.response?.data?.error || '验证码错误，请重试'
+    ElMessage.error(msg)
+  } finally {
+    loading.value = false
+  }
+}
+
+function backToLogin() {
+  phase.value = 'login'
+  tempToken.value = ''
+  totpCode.value = ''
 }
 </script>
 
@@ -124,5 +191,25 @@ async function handleLogin() {
 
 .login-btn {
   width: 100%;
+}
+
+.totp-phase {
+  text-align: center;
+}
+
+.totp-hint {
+  font-size: 14px;
+  color: #606266;
+  margin-bottom: 20px;
+}
+
+.totp-input :deep(.el-input__inner) {
+  text-align: center;
+  font-size: 24px;
+  letter-spacing: 8px;
+}
+
+.totp-back {
+  margin-top: 16px;
 }
 </style>
