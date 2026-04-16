@@ -191,27 +191,13 @@
             <el-form-item label="证书文件路径">
               <div class="flex gap-2 w-full">
                 <el-input v-model="form.cert_path" placeholder="如: /opt/proxy-panel/certs/domain.crt" />
-                <el-dropdown trigger="click" @command="fillCertPath">
-                  <el-button>引用<el-icon class="ml-1"><ArrowDown /></el-icon></el-button>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item v-for="c in systemCerts" :key="c.label" :command="c.cert">{{ c.label }}</el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
+                <el-button @click="fillSystemCert">填充</el-button>
               </div>
             </el-form-item>
             <el-form-item label="私钥文件路径">
               <div class="flex gap-2 w-full">
                 <el-input v-model="form.key_path" placeholder="如: /opt/proxy-panel/certs/domain.key" />
-                <el-dropdown trigger="click" @command="fillKeyPath">
-                  <el-button>引用<el-icon class="ml-1"><ArrowDown /></el-icon></el-button>
-                  <template #dropdown>
-                    <el-dropdown-menu>
-                      <el-dropdown-item v-for="c in systemCerts" :key="c.label" :command="c.key">{{ c.label }}</el-dropdown-item>
-                    </el-dropdown-menu>
-                  </template>
-                </el-dropdown>
+                <el-button @click="fillSystemCert">填充</el-button>
               </div>
             </el-form-item>
             <el-form-item label="跳过证书验证">
@@ -259,28 +245,14 @@
           </el-form-item>
           <el-form-item label="证书文件路径">
             <div class="flex gap-2 w-full">
-              <el-input v-model="form.cert_path" placeholder="如: /opt/proxy-panel/certs/hy2.crt" />
-              <el-dropdown trigger="click" @command="fillCertPath">
-                <el-button>引用<el-icon class="ml-1"><ArrowDown /></el-icon></el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item v-for="c in systemCerts" :key="c.label" :command="c.cert">{{ c.label }}</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+              <el-input v-model="form.cert_path" placeholder="如: /opt/proxy-panel/certs/domain.crt" />
+              <el-button @click="fillSystemCert">填充</el-button>
             </div>
           </el-form-item>
           <el-form-item label="私钥文件路径">
             <div class="flex gap-2 w-full">
-              <el-input v-model="form.key_path" placeholder="如: /opt/proxy-panel/certs/hy2.key" />
-              <el-dropdown trigger="click" @command="fillKeyPath">
-                <el-button>引用<el-icon class="ml-1"><ArrowDown /></el-icon></el-button>
-                <template #dropdown>
-                  <el-dropdown-menu>
-                    <el-dropdown-item v-for="c in systemCerts" :key="c.label" :command="c.key">{{ c.label }}</el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+              <el-input v-model="form.key_path" placeholder="如: /opt/proxy-panel/certs/domain.key" />
+              <el-button @click="fillSystemCert">填充</el-button>
             </div>
           </el-form-item>
           <el-form-item label="混淆类型">
@@ -361,18 +333,11 @@ const ssMethods = [
 
 const fingerprints = ['chrome', 'firefox', 'safari', 'edge', 'ios', 'android', 'random', 'randomized']
 
-// 系统预设证书路径
-const systemCerts = [
-  { label: 'acme.sh 签发证书', cert: '/opt/proxy-panel/certs/${domain}.crt', key: '/opt/proxy-panel/certs/${domain}.key' },
-  { label: 'Cloudflare Origin', cert: '/opt/proxy-panel/certs/origin.crt', key: '/opt/proxy-panel/certs/origin.key' },
-  { label: 'Hysteria2 自签证书', cert: '/opt/proxy-panel/certs/hy2.crt', key: '/opt/proxy-panel/certs/hy2.key' },
-]
-
-function fillCertPath(path: string) {
-  form.cert_path = path.replace('${domain}', form.sni || 'example.com')
-}
-function fillKeyPath(path: string) {
-  form.key_path = path.replace('${domain}', form.sni || 'example.com')
+// 填充系统证书路径
+function fillSystemCert() {
+  const domain = form.sni || 'example.com'
+  form.cert_path = `/opt/proxy-panel/certs/${domain}.crt`
+  form.key_path = `/opt/proxy-panel/certs/${domain}.key`
 }
 
 // ---- 计算属性 ----
