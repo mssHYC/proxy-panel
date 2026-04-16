@@ -36,7 +36,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	trafficHandler := handler.NewTrafficHandler(trafficSvc)
 	settingHandler := handler.NewSettingHandler(db)
 	notifyHandler := handler.NewNotifyHandler(notifySvc)
-	subHandler := handler.NewSubscriptionHandler(userSvc, nodeSvc)
+	subHandler := handler.NewSubscriptionHandler(userSvc, nodeSvc, db)
 
 	// 限流器
 	rateLimiter := NewRateLimiter()

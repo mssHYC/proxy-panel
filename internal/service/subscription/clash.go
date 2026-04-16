@@ -13,56 +13,313 @@ type ClashGenerator struct{}
 func (g *ClashGenerator) Generate(nodes []model.Node, user *model.User, baseURL string) (string, string, error) {
 	var b strings.Builder
 
-	// 全局配置
-	b.WriteString("port: 7890\n")
-	b.WriteString("socks-port: 7891\n")
-	b.WriteString("allow-lan: false\n")
-	b.WriteString("mode: rule\n")
-	b.WriteString("log-level: info\n\n")
-
-	// DNS
-	b.WriteString("dns:\n")
-	b.WriteString("  enable: true\n")
-	b.WriteString("  nameserver:\n")
-	b.WriteString("    - 223.5.5.5\n")
-	b.WriteString("    - 119.29.29.29\n\n")
-
-	// proxies
-	b.WriteString("proxies:\n")
+	// 收集节点名
 	var proxyNames []string
+	for _, node := range nodes {
+		proxyNames = append(proxyNames, node.Name)
+	}
+
+	// === 全局配置 ===
+	b.WriteString(`log-level: info
+mode: rule
+ipv6: true
+mixed-port: 7890
+allow-lan: true
+bind-address: "*"
+find-process-mode: strict
+external-controller: 0.0.0.0:9090
+global-client-fingerprint: chrome
+
+geox-url:
+  geoip: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"
+  geosite: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geosite.dat"
+  mmdb: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.metadb"
+geo-auto-update: true
+geo-update-interval: 24
+
+profile:
+  store-selected: true
+  store-fake-ip: true
+
+sniffer:
+  enable: true
+  override-destination: false
+  sniff:
+    QUIC:
+      ports: [443]
+    TLS:
+      ports: [443]
+    HTTP:
+      ports: [80]
+
+dns:
+  enable: true
+  prefer-h3: false
+  listen: 0.0.0.0:1053
+  ipv6: true
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - "dns.google"
+    - "localhost.ptlogin2.qq.com"
+  use-hosts: true
+  nameserver:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+  proxy-server-nameserver:
+    - https://223.5.5.5/dns-query
+    - https://1.12.12.12/dns-query
+  nameserver-policy:
+    "geosite:cn,private":
+      - https://doh.pub/dns-query
+      - https://dns.alidns.com/dns-query
+
+`)
+
+	// === proxies ===
+	b.WriteString("proxies:\n")
 	for _, node := range nodes {
 		proxy := g.buildProxy(node, user)
 		if proxy != "" {
 			b.WriteString(proxy)
-			proxyNames = append(proxyNames, node.Name)
 		}
 	}
 	b.WriteString("\n")
 
-	// proxy-groups
+	// === proxy-groups ===
 	b.WriteString("proxy-groups:\n")
-	b.WriteString("  - name: Proxy\n")
-	b.WriteString("    type: select\n")
-	b.WriteString("    proxies:\n")
-	for _, name := range proxyNames {
-		b.WriteString(fmt.Sprintf("      - %s\n", name))
-	}
-	b.WriteString("      - DIRECT\n")
 
-	b.WriteString("  - name: Auto\n")
-	b.WriteString("    type: url-test\n")
-	b.WriteString("    url: http://www.gstatic.com/generate_204\n")
-	b.WriteString("    interval: 300\n")
-	b.WriteString("    proxies:\n")
-	for _, name := range proxyNames {
-		b.WriteString(fmt.Sprintf("      - %s\n", name))
+	// 手动切换
+	b.WriteString("  - name: 手动切换\n    type: select\n    proxies:\n")
+	for _, n := range proxyNames {
+		b.WriteString(fmt.Sprintf("      - %s\n", n))
+	}
+
+	// 自动选择
+	b.WriteString("  - name: 自动选择\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies:\n")
+	for _, n := range proxyNames {
+		b.WriteString(fmt.Sprintf("      - %s\n", n))
+	}
+
+	// 全球代理
+	b.WriteString("  - name: 全球代理\n    type: select\n    proxies:\n      - 手动切换\n      - 自动选择\n")
+	for _, n := range proxyNames {
+		b.WriteString(fmt.Sprintf("      - %s\n", n))
+	}
+
+	// 流媒体
+	b.WriteString("  - name: 流媒体\n    type: select\n    proxies:\n      - 手动切换\n      - 自动选择\n      - DIRECT\n")
+	for _, n := range proxyNames {
+		b.WriteString(fmt.Sprintf("      - %s\n", n))
+	}
+
+	// DNS_Proxy
+	b.WriteString("  - name: DNS_Proxy\n    type: select\n    proxies:\n      - 自动选择\n      - 手动切换\n      - DIRECT\n")
+	for _, n := range proxyNames {
+		b.WriteString(fmt.Sprintf("      - %s\n", n))
+	}
+
+	// 各服务组 (引用手动切换+自动选择)
+	for _, svc := range []string{"Telegram", "Google", "YouTube", "Bing", "OpenAI", "ClaudeAI", "GitHub"} {
+		b.WriteString(fmt.Sprintf("  - name: %s\n    type: select\n    proxies:\n      - 手动切换\n      - 自动选择\n", svc))
+		for _, n := range proxyNames {
+			b.WriteString(fmt.Sprintf("      - %s\n", n))
+		}
+		if svc == "Google" || svc == "GitHub" {
+			b.WriteString("      - DIRECT\n")
+		}
+	}
+
+	// 流媒体子组
+	for _, svc := range []string{"Netflix", "HBO", "Disney"} {
+		b.WriteString(fmt.Sprintf("  - name: %s\n    type: select\n    proxies:\n      - 流媒体\n      - 手动切换\n      - 自动选择\n", svc))
+		for _, n := range proxyNames {
+			b.WriteString(fmt.Sprintf("      - %s\n", n))
+		}
+	}
+
+	// Spotify (含 DIRECT)
+	b.WriteString("  - name: Spotify\n    type: select\n    proxies:\n      - 流媒体\n      - 手动切换\n      - 自动选择\n      - DIRECT\n")
+	for _, n := range proxyNames {
+		b.WriteString(fmt.Sprintf("      - %s\n", n))
+	}
+
+	// 国内媒体
+	b.WriteString("  - name: 国内媒体\n    type: select\n    proxies:\n      - DIRECT\n")
+	for _, n := range proxyNames {
+		b.WriteString(fmt.Sprintf("      - %s\n", n))
+	}
+
+	// 本地直连
+	b.WriteString("  - name: 本地直连\n    type: select\n    proxies:\n      - DIRECT\n      - 自动选择\n")
+	for _, n := range proxyNames {
+		b.WriteString(fmt.Sprintf("      - %s\n", n))
+	}
+
+	// 漏网之鱼
+	b.WriteString("  - name: 漏网之鱼\n    type: select\n    proxies:\n      - DIRECT\n      - 手动切换\n      - 自动选择\n")
+	for _, n := range proxyNames {
+		b.WriteString(fmt.Sprintf("      - %s\n", n))
 	}
 	b.WriteString("\n")
 
-	// rules
+	// === rule-providers ===
+	b.WriteString(`rule-providers:
+  lan:
+    type: http
+    behavior: classical
+    interval: 86400
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Lan/Lan.yaml
+    path: ./Rules/lan.yaml
+  reject:
+    type: http
+    behavior: domain
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/reject.txt
+    path: ./ruleset/reject.yaml
+    interval: 86400
+  proxy:
+    type: http
+    behavior: domain
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/proxy.txt
+    path: ./ruleset/proxy.yaml
+    interval: 86400
+  direct:
+    type: http
+    behavior: domain
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/direct.txt
+    path: ./ruleset/direct.yaml
+    interval: 86400
+  private:
+    type: http
+    behavior: domain
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/private.txt
+    path: ./ruleset/private.yaml
+    interval: 86400
+  gfw:
+    type: http
+    behavior: domain
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/gfw.txt
+    path: ./ruleset/gfw.yaml
+    interval: 86400
+  telegramcidr:
+    type: http
+    behavior: ipcidr
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/telegramcidr.txt
+    path: ./ruleset/telegramcidr.yaml
+    interval: 86400
+  applications:
+    type: http
+    behavior: classical
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/applications.txt
+    path: ./ruleset/applications.yaml
+    interval: 86400
+  Disney:
+    type: http
+    behavior: classical
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Disney/Disney.yaml
+    path: ./ruleset/disney.yaml
+    interval: 86400
+  Netflix:
+    type: http
+    behavior: classical
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Netflix/Netflix.yaml
+    path: ./ruleset/netflix.yaml
+    interval: 86400
+  YouTube:
+    type: http
+    behavior: classical
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/YouTube/YouTube.yaml
+    path: ./ruleset/youtube.yaml
+    interval: 86400
+  HBO:
+    type: http
+    behavior: classical
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/HBO/HBO.yaml
+    path: ./ruleset/hbo.yaml
+    interval: 86400
+  OpenAI:
+    type: http
+    behavior: classical
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/OpenAI/OpenAI.yaml
+    path: ./ruleset/openai.yaml
+    interval: 86400
+  ClaudeAI:
+    type: http
+    behavior: classical
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Claude/Claude.yaml
+    path: ./ruleset/claudeai.yaml
+    interval: 86400
+  Bing:
+    type: http
+    behavior: classical
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Bing/Bing.yaml
+    path: ./ruleset/bing.yaml
+    interval: 86400
+  Google:
+    type: http
+    behavior: classical
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Google/Google.yaml
+    path: ./ruleset/google.yaml
+    interval: 86400
+  GitHub:
+    type: http
+    behavior: classical
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/GitHub/GitHub.yaml
+    path: ./ruleset/github.yaml
+    interval: 86400
+  Spotify:
+    type: http
+    behavior: classical
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Spotify/Spotify.yaml
+    path: ./ruleset/spotify.yaml
+    interval: 86400
+  ChinaMaxDomain:
+    type: http
+    behavior: domain
+    interval: 86400
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax/ChinaMax_Domain.yaml
+    path: ./Rules/ChinaMaxDomain.yaml
+  ChinaMaxIPNoIPv6:
+    type: http
+    behavior: ipcidr
+    interval: 86400
+    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax/ChinaMax_IP_No_IPv6.yaml
+    path: ./Rules/ChinaMaxIPNoIPv6.yaml
+
+`)
+
+	// === rules ===
 	b.WriteString("rules:\n")
-	b.WriteString("  - GEOIP,CN,DIRECT\n")
-	b.WriteString("  - MATCH,Proxy\n")
+	// 自定义规则优先
+	for _, rule := range customRules {
+		rule = strings.TrimSpace(rule)
+		if rule != "" && !strings.HasPrefix(rule, "#") {
+			b.WriteString(fmt.Sprintf("  - %s\n", rule))
+		}
+	}
+	// 默认规则
+	b.WriteString(`  - RULE-SET,YouTube,YouTube,no-resolve
+  - RULE-SET,Google,Google,no-resolve
+  - RULE-SET,GitHub,GitHub
+  - RULE-SET,telegramcidr,Telegram,no-resolve
+  - RULE-SET,Spotify,Spotify,no-resolve
+  - RULE-SET,Netflix,Netflix
+  - RULE-SET,HBO,HBO
+  - RULE-SET,Bing,Bing
+  - RULE-SET,OpenAI,OpenAI
+  - RULE-SET,ClaudeAI,ClaudeAI
+  - RULE-SET,Disney,Disney
+  - RULE-SET,proxy,全球代理
+  - RULE-SET,gfw,全球代理
+  - RULE-SET,applications,本地直连
+  - RULE-SET,ChinaMaxDomain,本地直连
+  - RULE-SET,ChinaMaxIPNoIPv6,本地直连,no-resolve
+  - RULE-SET,lan,本地直连,no-resolve
+  - GEOIP,CN,本地直连
+  - MATCH,漏网之鱼
+`)
 
 	return b.String(), "text/yaml; charset=utf-8", nil
 }

@@ -3,7 +3,9 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
+	"proxy-panel/internal/database"
 	"proxy-panel/internal/service"
 	"proxy-panel/internal/service/subscription"
 
@@ -14,11 +16,12 @@ import (
 type SubscriptionHandler struct {
 	userSvc *service.UserService
 	nodeSvc *service.NodeService
+	db      *database.DB
 }
 
 // NewSubscriptionHandler 创建订阅处理器
-func NewSubscriptionHandler(userSvc *service.UserService, nodeSvc *service.NodeService) *SubscriptionHandler {
-	return &SubscriptionHandler{userSvc: userSvc, nodeSvc: nodeSvc}
+func NewSubscriptionHandler(userSvc *service.UserService, nodeSvc *service.NodeService, db *database.DB) *SubscriptionHandler {
+	return &SubscriptionHandler{userSvc: userSvc, nodeSvc: nodeSvc, db: db}
 }
 
 // Subscribe 处理订阅请求
@@ -65,6 +68,15 @@ func (h *SubscriptionHandler) Subscribe(c *gin.Context) {
 
 	// 构建 baseURL
 	baseURL := fmt.Sprintf("%s://%s", scheme(c), c.Request.Host)
+
+	// 加载自定义规则
+	var customRulesStr string
+	h.db.QueryRow("SELECT value FROM settings WHERE key = 'custom_rules'").Scan(&customRulesStr)
+	if customRulesStr != "" {
+		subscription.SetCustomRules(strings.Split(customRulesStr, "\n"))
+	} else {
+		subscription.SetCustomRules(nil)
+	}
 
 	// 生成订阅内容
 	gen := subscription.GetGenerator(format)
