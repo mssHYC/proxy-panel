@@ -149,44 +149,39 @@ download_singbox() {
 }
 
 # ============================================
-# 交互式配置
+# TLS 证书相关函数
 # ============================================
 
-interactive_config() {
-    step "配置 ProxyPanel..."
-    echo ""
-
-    # 面板端口
-    read -p "面板端口 [8080]: " PANEL_PORT
-    PANEL_PORT=${PANEL_PORT:-8080}
-
-    # 验证端口范围
-    if ! [[ "$PANEL_PORT" =~ ^[0-9]+$ ]] || [[ "$PANEL_PORT" -lt 1 || "$PANEL_PORT" -gt 65535 ]]; then
-        error "无效的端口号: $PANEL_PORT"
+# 安装 acme.sh (方案 1-4 共用)
+install_acme() {
+    if [[ ! -f ~/.acme.sh/acme.sh ]]; then
+        info "安装 acme.sh..."
+        curl -s https://get.acme.sh | sh -s email=admin@"${DOMAIN}" 2>/dev/null || {
+            warn "acme.sh 安装失败，请检查网络"
+            return 1
+        }
     fi
+    # 设置默认 CA 为 Let's Encrypt
+    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt 2>/dev/null || true
+    return 0
+}
 
-    # 管理员用户名
-    read -p "管理员用户名 [admin]: " ADMIN_USER
-    ADMIN_USER=${ADMIN_USER:-admin}
+# 安装证书到指定路径
+install_cert() {
+    local ecc_flag=""
+    [[ "$1" == "ecc" ]] && ecc_flag="--ecc"
+    ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" $ecc_flag \
+        --fullchain-file "$CERT_PATH" \
+        --key-file "$KEY_PATH" \
+        --reloadcmd "systemctl restart ${SERVICE_NAME} 2>/dev/null; systemctl restart ${XRAY_SERVICE} 2>/dev/null" \
+        2>/dev/null || warn "证书安装失败"
+    chmod 600 "$CERT_PATH" "$KEY_PATH" 2>/dev/null || true
+    info "证书已安装到: $CERT_PATH"
+    info "续期将自动执行 (acme.sh cron)"
+}
 
-    # 管理员密码
-    while true; do
-        read -sp "管理员密码 (≥8位): " ADMIN_PASS
-        echo
-        if [[ ${#ADMIN_PASS} -ge 8 ]]; then
-            read -sp "确认密码: " ADMIN_PASS_CONFIRM
-            echo
-            if [[ "$ADMIN_PASS" == "$ADMIN_PASS_CONFIRM" ]]; then
-                break
-            else
-                warn "两次密码不一致，请重新输入"
-            fi
-        else
-            warn "密码长度至少 8 位"
-        fi
-    done
-
-    # TLS 方案选择
+# TLS 证书方案交互选择菜单，设置全局变量: TLS_ENABLED, CERT_PATH, KEY_PATH, DOMAIN
+setup_tls() {
     echo ""
     echo "选择 TLS 证书方案:"
     echo "  [1] HTTP 验证申请 (standalone，需 80 端口空闲)"
@@ -203,34 +198,6 @@ interactive_config() {
     KEY_PATH=""
     DOMAIN=""
 
-    # 安装 acme.sh (方案 1-4 共用)
-    install_acme() {
-        if [[ ! -f ~/.acme.sh/acme.sh ]]; then
-            info "安装 acme.sh..."
-            curl -s https://get.acme.sh | sh -s email=admin@"${DOMAIN}" 2>/dev/null || {
-                warn "acme.sh 安装失败，请检查网络"
-                return 1
-            }
-        fi
-        # 设置默认 CA 为 Let's Encrypt
-        ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt 2>/dev/null || true
-        return 0
-    }
-
-    # 安装证书到指定路径
-    install_cert() {
-        local ecc_flag=""
-        [[ "$1" == "ecc" ]] && ecc_flag="--ecc"
-        ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" $ecc_flag \
-            --fullchain-file "$CERT_PATH" \
-            --key-file "$KEY_PATH" \
-            --reloadcmd "systemctl restart ${SERVICE_NAME} 2>/dev/null; systemctl restart ${XRAY_SERVICE} 2>/dev/null" \
-            2>/dev/null || warn "证书安装失败"
-        chmod 600 "$CERT_PATH" "$KEY_PATH" 2>/dev/null || true
-        info "证书已安装到: $CERT_PATH"
-        info "续期将自动执行 (acme.sh cron)"
-    }
-
     case "$TLS_MODE" in
         1)
             # HTTP standalone 模式
@@ -243,7 +210,7 @@ interactive_config() {
 
             install_acme || {
                 warn "跳过证书申请，安装完成后可手动执行"
-                break
+                return 0
             }
 
             info "正在申请证书 (HTTP standalone，需 80 端口空闲)..."
@@ -257,7 +224,7 @@ interactive_config() {
                 warn "  - 80 端口被占用 (nginx/apache)"
                 warn "安装完成后可手动执行:"
                 warn "  ~/.acme.sh/acme.sh --issue -d ${DOMAIN} --standalone"
-                break
+                return 0
             }
 
             install_cert "ecc"
@@ -289,7 +256,7 @@ interactive_config() {
 
             install_acme || {
                 warn "跳过证书申请"
-                break
+                return 0
             }
 
             info "正在通过 Cloudflare DNS API 申请证书..."
@@ -300,13 +267,13 @@ interactive_config() {
                 # 通配符证书: *.example.com + example.com
                 ~/.acme.sh/acme.sh --issue -d "$MAIN_DOMAIN" -d "$DOMAIN" --dns dns_cf --keylength ec-256 || {
                     warn "证书申请失败，请检查 API Token 权限和域名是否在 Cloudflare"
-                    break
+                    return 0
                 }
                 DOMAIN="$MAIN_DOMAIN"
             else
                 ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_cf --keylength ec-256 || {
                     warn "证书申请失败，请检查 API Token 权限"
-                    break
+                    return 0
                 }
             fi
 
@@ -334,7 +301,7 @@ interactive_config() {
 
             install_acme || {
                 warn "跳过证书申请"
-                break
+                return 0
             }
 
             info "正在通过 DNSPod DNS API 申请证书..."
@@ -343,7 +310,7 @@ interactive_config() {
 
             ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_dp --keylength ec-256 || {
                 warn "证书申请失败，请检查 API Token 和域名是否托管在 DNSPod"
-                break
+                return 0
             }
 
             install_cert "ecc"
@@ -370,7 +337,7 @@ interactive_config() {
 
             install_acme || {
                 warn "跳过证书申请"
-                break
+                return 0
             }
 
             info "正在通过阿里云 DNS API 申请证书..."
@@ -379,7 +346,7 @@ interactive_config() {
 
             ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_ali --keylength ec-256 || {
                 warn "证书申请失败，请检查 AccessKey 和域名是否托管在阿里云"
-                break
+                return 0
             }
 
             install_cert "ecc"
@@ -440,6 +407,189 @@ interactive_config() {
             error "无效的选项: $TLS_MODE"
             ;;
     esac
+}
+
+# ============================================
+# 证书管理子命令
+# ============================================
+
+cert_status() {
+    echo "========== 证书状态 =========="
+
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        warn "配置文件不存在: $CONFIG_FILE"
+        return
+    fi
+
+    local tls_enabled
+    tls_enabled=$(grep '^\s*tls:' "$CONFIG_FILE" | head -1 | awk '{print $2}')
+    local cert_file
+    cert_file=$(grep '^\s*cert:' "$CONFIG_FILE" | head -1 | awk '{print $2}' | tr -d '"')
+    local key_file
+    key_file=$(grep '^\s*key:' "$CONFIG_FILE" | head -1 | awk '{print $2}' | tr -d '"')
+
+    if [ "$tls_enabled" = "true" ]; then
+        echo -e "TLS 状态: ${GREEN}已启用${NC}"
+    else
+        echo -e "TLS 状态: ${YELLOW}未启用${NC}"
+    fi
+
+    if [[ -n "$cert_file" && -f "$cert_file" ]]; then
+        echo "证书文件: $cert_file"
+        echo "私钥文件: $key_file"
+
+        # 解析证书信息
+        local subject
+        subject=$(openssl x509 -in "$cert_file" -noout -subject 2>/dev/null | sed 's/subject=//')
+        local issuer
+        issuer=$(openssl x509 -in "$cert_file" -noout -issuer 2>/dev/null | sed 's/issuer=//')
+        local not_after
+        not_after=$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | cut -d= -f2)
+        local not_before
+        not_before=$(openssl x509 -in "$cert_file" -noout -startdate 2>/dev/null | cut -d= -f2)
+
+        echo "域名:     $subject"
+        echo "颁发者:   $issuer"
+        echo "生效时间: $not_before"
+        echo "到期时间: $not_after"
+
+        # 检查是否即将过期 (30 天)
+        local expire_epoch
+        expire_epoch=$(date -d "$not_after" +%s 2>/dev/null || date -jf "%b %d %H:%M:%S %Y %Z" "$not_after" +%s 2>/dev/null)
+        local now_epoch
+        now_epoch=$(date +%s)
+        if [[ -n "$expire_epoch" ]]; then
+            local days_left=$(( (expire_epoch - now_epoch) / 86400 ))
+            if [[ $days_left -lt 0 ]]; then
+                echo -e "状态:     ${RED}已过期${NC}"
+            elif [[ $days_left -lt 30 ]]; then
+                echo -e "状态:     ${YELLOW}即将过期 (${days_left} 天后)${NC}"
+            else
+                echo -e "状态:     ${GREEN}正常 (${days_left} 天后到期)${NC}"
+            fi
+        fi
+    elif [[ -n "$cert_file" ]]; then
+        echo -e "证书文件: ${RED}$cert_file (不存在)${NC}"
+    else
+        echo "证书文件: 未配置"
+    fi
+
+    # 检查 acme.sh 自动续期
+    if [[ -f ~/.acme.sh/acme.sh ]]; then
+        echo ""
+        echo "acme.sh:  已安装"
+        local cron_exists
+        cron_exists=$(crontab -l 2>/dev/null | grep -c acme.sh || true)
+        if [ "$cron_exists" -gt 0 ]; then
+            echo -e "自动续期: ${GREEN}已配置${NC}"
+        else
+            echo -e "自动续期: ${YELLOW}未配置${NC}"
+        fi
+    fi
+
+    echo "=============================="
+}
+
+cert_setup() {
+    check_root
+
+    # 显示当前状态
+    cert_status
+    echo ""
+
+    # 执行 TLS 设置
+    setup_tls
+
+    # 更新 config.yaml
+    if [[ -f "$CONFIG_FILE" ]]; then
+        sed -i "s|^  tls:.*|  tls: ${TLS_ENABLED}|" "$CONFIG_FILE"
+        sed -i "s|^  cert:.*|  cert: \"${CERT_PATH}\"|" "$CONFIG_FILE"
+        # 匹配 cert 行之后紧跟的 key 行
+        sed -i "/^  cert:/{ n; s|^  key:.*|  key: \"${KEY_PATH}\"|; }" "$CONFIG_FILE"
+        info "config.yaml 已更新"
+    fi
+
+    # 重启服务
+    info "重启面板..."
+    systemctl restart ${SERVICE_NAME} 2>/dev/null || true
+    info "✅ 证书设置完成"
+}
+
+cert_renew() {
+    check_root
+
+    if [[ ! -f ~/.acme.sh/acme.sh ]]; then
+        error "acme.sh 未安装，无法续期。如果使用自定义证书，请手动更换。"
+    fi
+
+    info "正在续期所有证书..."
+    ~/.acme.sh/acme.sh --renew-all --force || {
+        warn "续期失败，请检查域名解析和网络"
+        return 1
+    }
+
+    info "重启服务..."
+    systemctl restart ${SERVICE_NAME} 2>/dev/null || true
+    systemctl restart ${XRAY_SERVICE} 2>/dev/null || true
+
+    info "✅ 证书续期完成"
+    cert_status
+}
+
+do_cert() {
+    case "${2:-}" in
+        setup)   cert_setup ;;
+        status)  cert_status ;;
+        renew)   cert_renew ;;
+        *)
+            echo "证书管理命令:"
+            echo "  $0 cert setup   - 设置/更换 TLS 证书"
+            echo "  $0 cert status  - 查看当前证书信息"
+            echo "  $0 cert renew   - 手动续期证书"
+            ;;
+    esac
+}
+
+# ============================================
+# 交互式配置
+# ============================================
+
+interactive_config() {
+    step "配置 ProxyPanel..."
+    echo ""
+
+    # 面板端口
+    read -p "面板端口 [8080]: " PANEL_PORT
+    PANEL_PORT=${PANEL_PORT:-8080}
+
+    # 验证端口范围
+    if ! [[ "$PANEL_PORT" =~ ^[0-9]+$ ]] || [[ "$PANEL_PORT" -lt 1 || "$PANEL_PORT" -gt 65535 ]]; then
+        error "无效的端口号: $PANEL_PORT"
+    fi
+
+    # 管理员用户名
+    read -p "管理员用户名 [admin]: " ADMIN_USER
+    ADMIN_USER=${ADMIN_USER:-admin}
+
+    # 管理员密码
+    while true; do
+        read -sp "管理员密码 (≥8位): " ADMIN_PASS
+        echo
+        if [[ ${#ADMIN_PASS} -ge 8 ]]; then
+            read -sp "确认密码: " ADMIN_PASS_CONFIRM
+            echo
+            if [[ "$ADMIN_PASS" == "$ADMIN_PASS_CONFIRM" ]]; then
+                break
+            else
+                warn "两次密码不一致，请重新输入"
+            fi
+        else
+            warn "密码长度至少 8 位"
+        fi
+    done
+
+    # TLS 方案选择
+    setup_tls
 
     # Telegram 通知
     echo ""
@@ -1144,6 +1294,7 @@ show_help() {
     echo "  reset-pwd   重置管理员密码"
     echo "  backup      备份配置和数据"
     echo "  restore     从备份恢复 (可选: restore <文件路径>)"
+    echo "  cert        证书管理 (cert setup|status|renew)"
     echo "  help        显示此帮助"
     echo ""
 }
@@ -1163,6 +1314,7 @@ main() {
         reset-pwd)  do_reset_pwd ;;
         backup)     do_backup ;;
         restore)    do_restore "$2" ;;
+        cert)       do_cert "$@" ;;
         help|--help|-h)
             show_help ;;
         "")
@@ -1171,7 +1323,7 @@ main() {
             echo ""
             ;;
         *)
-            error "未知命令: $1\n用法: $0 {install|update|uninstall|status|restart|logs|reset-pwd|backup|restore|help}"
+            error "未知命令: $1\n用法: $0 {install|update|uninstall|status|restart|logs|reset-pwd|backup|restore|cert|help}"
             ;;
     esac
 }
