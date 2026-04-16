@@ -32,9 +32,12 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	r.GET("/favicon.svg", gin.WrapH(fileServer))
 	r.GET("/icons.svg", gin.WrapH(fileServer))
 
+	// 预读 index.html 用于 SPA 回退
+	indexHTML, _ := fs.ReadFile(web.DistFS, "dist/index.html")
+
 	// SPA 回退：非 API 路由都返回 index.html
 	r.NoRoute(func(c *gin.Context) {
-		c.FileFromFS("index.html", http.FS(distFS))
+		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
 	})
 
 	// 初始化 Handlers
