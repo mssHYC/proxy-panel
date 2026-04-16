@@ -2,6 +2,7 @@ package router
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -10,6 +11,21 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
+
+// DomainGuard - 域名访问限制中间件，拒绝通过 IP 直接访问
+func DomainGuard(domain string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		host := c.Request.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		if !strings.EqualFold(host, domain) {
+			c.AbortWithStatus(http.StatusForbidden)
+			return
+		}
+		c.Next()
+	}
+}
 
 // JWTAuth - JWT 认证中间件
 func JWTAuth(secret string) gin.HandlerFunc {

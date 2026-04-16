@@ -400,10 +400,10 @@ func (e *XrayEngine) buildStreamSettings(node NodeConfig) map[string]interface{}
 		stream["tlsSettings"] = tlsSettings
 	case "reality":
 		stream["realitySettings"] = map[string]interface{}{
-			"dest":         getSettingStr(node.Settings, "dest", ""),
-			"serverNames":  getSettingSlice(node.Settings, "serverNames"),
-			"privateKey":   getSettingStr(node.Settings, "privateKey", ""),
-			"shortIds":     getSettingSlice(node.Settings, "shortIds"),
+			"dest":        getSettingStrAny(node.Settings, "", "dest"),
+			"serverNames": getSettingSliceAny(node.Settings, "server_names", "serverNames"),
+			"privateKey":  getSettingStrAny(node.Settings, "", "private_key", "privateKey"),
+			"shortIds":    getSettingSliceAny(node.Settings, "short_ids", "shortIds"),
 		}
 	}
 
@@ -448,6 +448,26 @@ func getSettingSlice(m map[string]interface{}, key string) []string {
 			}
 		}
 		return result
+	}
+	return nil
+}
+
+// getSettingStrAny 尝试多个 key 名，返回第一个匹配的字符串值
+func getSettingStrAny(m map[string]interface{}, defaultVal string, keys ...string) string {
+	for _, key := range keys {
+		if v := getSettingStr(m, key, ""); v != "" {
+			return v
+		}
+	}
+	return defaultVal
+}
+
+// getSettingSliceAny 尝试多个 key 名，返回第一个匹配的字符串切片
+func getSettingSliceAny(m map[string]interface{}, keys ...string) []string {
+	for _, key := range keys {
+		if v := getSettingSlice(m, key); len(v) > 0 {
+			return v
+		}
 	}
 	return nil
 }

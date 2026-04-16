@@ -23,6 +23,11 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 
 	r := gin.Default()
 
+	// 域名绑定：配置了域名时，拒绝通过 IP 直接访问
+	if cfg.Server.Domain != "" {
+		r.Use(DomainGuard(cfg.Server.Domain))
+	}
+
 	// 嵌入的前端静态文件
 	distFS, _ := fs.Sub(web.DistFS, "dist")
 	fileServer := http.FileServer(http.FS(distFS))
@@ -83,6 +88,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 			auth.GET("/nodes/:id", nodeHandler.Get)
 			auth.PUT("/nodes/:id", nodeHandler.Update)
 			auth.DELETE("/nodes/:id", nodeHandler.Delete)
+			auth.POST("/nodes/generate-reality-keypair", nodeHandler.GenerateRealityKeypair)
 
 			// 内核管理
 			auth.GET("/kernel/status", kernelHandler.Status)

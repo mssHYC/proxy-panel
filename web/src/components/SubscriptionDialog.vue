@@ -76,7 +76,19 @@ function getSubUrl(format: string): string {
 async function copyUrl(format: string) {
   const url = getSubUrl(format)
   try {
-    await navigator.clipboard.writeText(url)
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(url)
+    } else {
+      // HTTP 环境下 fallback: 使用临时 textarea
+      const ta = document.createElement('textarea')
+      ta.value = url
+      ta.style.position = 'fixed'
+      ta.style.left = '-9999px'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
     ElMessage.success('已复制到剪贴板')
   } catch {
     ElMessage.error('复制失败，请手动复制')

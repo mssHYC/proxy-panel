@@ -1,8 +1,13 @@
 package handler
 
 import (
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
 	"net/http"
 	"strconv"
+
+	"golang.org/x/crypto/curve25519"
 
 	"proxy-panel/internal/service"
 
@@ -92,6 +97,42 @@ func (h *NodeHandler) Update(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, node)
+}
+
+// GenerateRealityKeypair 生成 x25519 密钥对和 Short IDs
+func (h *NodeHandler) GenerateRealityKeypair(c *gin.Context) {
+	// 生成 x25519 私钥
+	var privateKey [32]byte
+	if _, err := rand.Read(privateKey[:]); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成密钥失败"})
+		return
+	}
+	// x25519 clamping
+	privateKey[0] &= 248
+	privateKey[31] &= 127
+	privateKey[31] |= 64
+
+	// 计算公钥
+	publicKey, err := curve25519.X25519(privateKey[:], curve25519.Basepoint)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "计算公钥失败"})
+		return
+	}
+
+	// 生成 Short IDs (8个，长度递减)
+	shortIDs := make([]string, 0, 8)
+	lengths := []int{8, 6, 8, 10, 2, 4, 8, 4}
+	for _, l := range lengths {
+		buf := make([]byte, (l+1)/2)
+		rand.Read(buf)
+		shortIDs = append(shortIDs, hex.EncodeToString(buf)[:l])
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"private_key": base64.RawURLEncoding.EncodeToString(privateKey[:]),
+		"public_key":  base64.RawURLEncoding.EncodeToString(publicKey),
+		"short_ids":   shortIDs,
+	})
 }
 
 // Delete 删除节点

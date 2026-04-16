@@ -16,10 +16,11 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port int    `yaml:"port"`
-	TLS  bool   `yaml:"tls"`
-	Cert string `yaml:"cert"`
-	Key  string `yaml:"key"`
+	Port   int    `yaml:"port"`
+	TLS    bool   `yaml:"tls"`
+	Cert   string `yaml:"cert"`
+	Key    string `yaml:"key"`
+	Domain string `yaml:"domain"`
 }
 
 type DatabaseConfig struct {

@@ -214,6 +214,15 @@
             <el-form-item label="SNI (Server Names)">
               <el-input v-model="form.sni" placeholder="如: www.google.com" />
             </el-form-item>
+            <el-form-item>
+              <template #label>
+                <span>密钥对 & Short IDs</span>
+              </template>
+              <el-button type="primary" :loading="generatingKeypair" @click="handleGenerateKeypair" size="small">
+                自动生成
+              </el-button>
+              <span class="ml-2 text-xs text-gray-400">生成 x25519 密钥对和 Short IDs</span>
+            </el-form-item>
             <el-form-item label="Private Key">
               <el-input v-model="form.reality_private_key" placeholder="xray x25519 生成的私钥" />
             </el-form-item>
@@ -282,7 +291,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
-import { getNodes, createNode, updateNode, deleteNode } from '../api/node'
+import { getNodes, createNode, updateNode, deleteNode, generateRealityKeypair } from '../api/node'
 import { getSettings } from '../api/setting'
 
 // ---- 状态 ----
@@ -337,6 +346,23 @@ const fingerprints = ['chrome', 'firefox', 'safari', 'edge', 'ios', 'android', '
 // 系统证书路径 (从 settings API 加载，来自 install.sh 安装时生成的 config.yaml)
 const systemCertPath = ref('')
 const systemKeyPath = ref('')
+
+// Reality 密钥对生成
+const generatingKeypair = ref(false)
+async function handleGenerateKeypair() {
+  generatingKeypair.value = true
+  try {
+    const { data } = await generateRealityKeypair()
+    form.reality_private_key = data.private_key
+    form.reality_public_key = data.public_key
+    form.reality_short_id = (data.short_ids as string[]).join(',')
+    ElMessage.success('密钥对和 Short IDs 已生成')
+  } catch {
+    ElMessage.error('生成失败')
+  } finally {
+    generatingKeypair.value = false
+  }
+}
 
 async function loadSystemCertPaths() {
   try {

@@ -365,11 +365,26 @@ const handleDisable2FA = async () => {
 
 // 复制密钥
 const copySecret = () => {
-  navigator.clipboard.writeText(totpSecret.value).then(() => {
-    ElMessage.success('密钥已复制到剪贴板')
-  }).catch(() => {
+  const text = totpSecret.value
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(() => {
+        ElMessage.success('密钥已复制到剪贴板')
+      })
+    } else {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.left = '-9999px'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      ElMessage.success('密钥已复制到剪贴板')
+    }
+  } catch {
     ElMessage.warning('复制失败，请手动复制')
-  })
+  }
 }
 
 const fetchSettings = async () => {

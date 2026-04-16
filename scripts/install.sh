@@ -649,6 +649,7 @@ server:
   tls: ${TLS_ENABLED}
   cert: "${CERT_PATH}"
   key: "${KEY_PATH}"
+  domain: "${DOMAIN}"
 
 database:
   path: ${INSTALL_DIR}/data/panel.db
@@ -745,17 +746,6 @@ generate_default_singbox_config() {
 {
   "log": {
     "level": "warn"
-  },
-  "experimental": {
-    "v2ray_api": {
-      "listen": "127.0.0.1:9090",
-      "stats": {
-        "enabled": true,
-        "inbounds": [],
-        "outbounds": [],
-        "users": []
-      }
-    }
   },
   "inbounds": [],
   "outbounds": [
@@ -914,6 +904,9 @@ print_summary() {
     echo "============================================"
     echo ""
     echo "  访问地址: ${protocol}://${access_host}:${PANEL_PORT}"
+    if [[ -n "$DOMAIN" ]]; then
+        echo "  域名绑定: ${DOMAIN} (IP 直接访问已禁止)"
+    fi
     echo "  管理员:   ${ADMIN_USER}"
     echo "  密码:     ********"
     echo ""

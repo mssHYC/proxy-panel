@@ -58,7 +58,11 @@ func main() {
 	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
-	log.Printf("ProxyPanel 启动成功，监听 %s", addr)
+	if cfg.Server.Domain != "" {
+		log.Printf("ProxyPanel 启动成功，域名: %s，监听 %s", cfg.Server.Domain, addr)
+	} else {
+		log.Printf("ProxyPanel 启动成功，监听 %s", addr)
+	}
 	if cfg.Server.TLS && cfg.Server.Cert != "" && cfg.Server.Key != "" {
 		log.Printf("TLS 已启用，证书: %s", cfg.Server.Cert)
 		if err := r.RunTLS(addr, cfg.Server.Cert, cfg.Server.Key); err != nil {
