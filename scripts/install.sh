@@ -120,8 +120,13 @@ download_panel() {
 download_xray() {
     step "下载 Xray..."
     local version
-    version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
-    [[ -z "$version" ]] && version="v26.3.27"
+    # 优先用 redirect 方式获取最新版本号（不消耗 API 限额）
+    version=$(curl -sI https://github.com/XTLS/Xray-core/releases/latest | grep -i '^location:' | sed 's/.*\/tag\///' | tr -d '\r\n')
+    # 回退到 API 方式
+    if [[ -z "$version" || ! "$version" =~ ^v[0-9] ]]; then
+        version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+    fi
+    [[ -z "$version" || ! "$version" =~ ^v[0-9] ]] && version="v25.12.31"
     info "Xray 版本: $version"
 
     # Xray 使用 64/arm64-v8a 等命名
@@ -146,8 +151,13 @@ download_xray() {
 download_singbox() {
     step "下载 Sing-box..."
     local version
-    version=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
-    [[ -z "$version" ]] && version="1.13.8"
+    # 优先用 redirect 方式获取最新版本号（不消耗 API 限额）
+    version=$(curl -sI https://github.com/SagerNet/sing-box/releases/latest | grep -i '^location:' | sed 's/.*\/tag\/v//' | tr -d '\r\n')
+    # 回退到 API 方式
+    if [[ -z "$version" || ! "$version" =~ ^[0-9] ]]; then
+        version=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4 | sed 's/^v//')
+    fi
+    [[ -z "$version" || ! "$version" =~ ^[0-9] ]] && version="1.13.8"
     info "Sing-box 版本: $version"
     local url="https://github.com/SagerNet/sing-box/releases/download/v${version}/sing-box-${version}-linux-${ARCH}.tar.gz"
 
