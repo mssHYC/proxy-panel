@@ -1,0 +1,35 @@
+server:
+  port: 8080
+  tls: false
+
+database:
+  path: data/panel.db
+
+auth:
+  jwt_secret: "change-me-to-random-32-bytes"
+  admin_user: admin
+  admin_pass: "admin123"
+  token_expiry_hours: 24
+
+traffic:
+  collect_interval_sec: 60
+  server_limit_gb: 1000
+  warn_percent: 80
+  reset_cron: "0 0 1 * *"
+
+notify:
+  telegram:
+    enable: false
+    bot_token: ""
+    chat_id: ""
+  wechat:
+    enable: false
+    webhook_url: ""
+
+kernel:
+  xray_path: /usr/local/bin/xray
+  xray_config: /opt/proxy-panel/kernel/xray.json
+  xray_api_port: 10085
+  singbox_path: /usr/local/bin/sing-box
+  singbox_config: /opt/proxy-panel/kernel/singbox.json
+  singbox_api_port: 9090

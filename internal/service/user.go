@@ -13,27 +13,29 @@ import (
 
 // CreateUserReq 创建用户请求
 type CreateUserReq struct {
-	Username     string `json:"username" binding:"required"`
-	Email        string `json:"email"`
-	Protocol     string `json:"protocol" binding:"required"`
-	TrafficLimit int64  `json:"traffic_limit"`
-	SpeedLimit   int64  `json:"speed_limit"`
-	ResetDay     int    `json:"reset_day"`
-	ResetCron    string `json:"reset_cron"`
-	ExpiresAt    string `json:"expires_at"`
+	Username     string  `json:"username" binding:"required"`
+	Email        string  `json:"email"`
+	Protocol     string  `json:"protocol"`
+	NodeIDs      []int64 `json:"node_ids"`
+	TrafficLimit int64   `json:"traffic_limit"`
+	SpeedLimit   int64   `json:"speed_limit"`
+	ResetDay     int     `json:"reset_day"`
+	ResetCron    string  `json:"reset_cron"`
+	ExpiresAt    string  `json:"expires_at"`
 }
 
 // UpdateUserReq 更新用户请求（指针字段实现部分更新）
 type UpdateUserReq struct {
-	Username     *string `json:"username"`
-	Email        *string `json:"email"`
-	Protocol     *string `json:"protocol"`
-	TrafficLimit *int64  `json:"traffic_limit"`
-	SpeedLimit   *int64  `json:"speed_limit"`
-	ResetDay     *int    `json:"reset_day"`
-	ResetCron    *string `json:"reset_cron"`
-	Enable       *bool   `json:"enable"`
-	ExpiresAt    *string `json:"expires_at"`
+	Username     *string  `json:"username"`
+	Email        *string  `json:"email"`
+	Protocol     *string  `json:"protocol"`
+	NodeIDs      *[]int64 `json:"node_ids"`
+	TrafficLimit *int64   `json:"traffic_limit"`
+	SpeedLimit   *int64   `json:"speed_limit"`
+	ResetDay     *int     `json:"reset_day"`
+	ResetCron    *string  `json:"reset_cron"`
+	Enable       *bool    `json:"enable"`
+	ExpiresAt    *string  `json:"expires_at"`
 }
 
 // UserService 用户业务逻辑
@@ -44,6 +46,49 @@ type UserService struct {
 // NewUserService 创建用户服务
 func NewUserService(db *database.DB) *UserService {
 	return &UserService{db: db}
+}
+
+// getNodeIDs 获取用户关联的节点 ID 列表
+func (s *UserService) getNodeIDs(userID int64) ([]int64, error) {
+	rows, err := s.db.Query("SELECT node_id FROM user_nodes WHERE user_id = ?", userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// setNodeIDs 设置用户关联的节点（先删后插）
+func (s *UserService) setNodeIDs(userID int64, nodeIDs []int64) error {
+	if _, err := s.db.Exec("DELETE FROM user_nodes WHERE user_id = ?", userID); err != nil {
+		return err
+	}
+	for _, nid := range nodeIDs {
+		if _, err := s.db.Exec("INSERT INTO user_nodes (user_id, node_id) VALUES (?, ?)", userID, nid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// fillNodeIDs 为用户列表填充节点 ID
+func (s *UserService) fillNodeIDs(users []model.User) error {
+	for i := range users {
+		ids, err := s.getNodeIDs(users[i].ID)
+		if err != nil {
+			return err
+		}
+		users[i].NodeIDs = ids
+	}
+	return nil
 }
 
 // List 获取所有用户
@@ -65,7 +110,13 @@ func (s *UserService) List() ([]model.User, error) {
 		}
 		users = append(users, u)
 	}
-	return users, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.fillNodeIDs(users); err != nil {
+		return nil, fmt.Errorf("获取用户节点关联失败: %w", err)
+	}
+	return users, nil
 }
 
 // GetByID 根据 ID 获取用户
@@ -82,6 +133,8 @@ func (s *UserService) GetByID(id int64) (*model.User, error) {
 		}
 		return nil, fmt.Errorf("查询用户失败: %w", err)
 	}
+	ids, _ := s.getNodeIDs(u.ID)
+	u.NodeIDs = ids
 	return &u, nil
 }
 
@@ -99,6 +152,8 @@ func (s *UserService) GetByUUID(uid string) (*model.User, error) {
 		}
 		return nil, fmt.Errorf("查询用户失败: %w", err)
 	}
+	ids, _ := s.getNodeIDs(u.ID)
+	u.NodeIDs = ids
 	return &u, nil
 }
 
@@ -116,11 +171,16 @@ func (s *UserService) Create(req *CreateUserReq) (*model.User, error) {
 		expiresAt = &t
 	}
 
+	protocol := req.Protocol
+	if protocol == "" {
+		protocol = "vless"
+	}
+
 	result, err := s.db.Exec(`INSERT INTO users (uuid, username, email, protocol,
 		traffic_limit, speed_limit, reset_day, reset_cron, enable, expires_at,
 		created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
-		uid, req.Username, req.Email, req.Protocol,
+		uid, req.Username, req.Email, protocol,
 		req.TrafficLimit, req.SpeedLimit, req.ResetDay, req.ResetCron,
 		expiresAt, now, now)
 	if err != nil {
@@ -128,6 +188,14 @@ func (s *UserService) Create(req *CreateUserReq) (*model.User, error) {
 	}
 
 	id, _ := result.LastInsertId()
+
+	// 保存节点关联
+	if len(req.NodeIDs) > 0 {
+		if err := s.setNodeIDs(id, req.NodeIDs); err != nil {
+			return nil, fmt.Errorf("保存节点关联失败: %w", err)
+		}
+	}
+
 	return s.GetByID(id)
 }
 
@@ -210,6 +278,13 @@ func (s *UserService) Update(id int64, req *UpdateUserReq) (*model.User, error) 
 
 	if _, err := s.db.Exec(query, args...); err != nil {
 		return nil, fmt.Errorf("更新用户失败: %w", err)
+	}
+
+	// 更新节点关联
+	if req.NodeIDs != nil {
+		if err := s.setNodeIDs(id, *req.NodeIDs); err != nil {
+			return nil, fmt.Errorf("更新节点关联失败: %w", err)
+		}
 	}
 
 	return s.GetByID(id)

@@ -66,6 +66,13 @@ func (db *DB) migrate() error {
 			status TEXT DEFAULT 'sent',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS user_nodes (
+			user_id INTEGER NOT NULL,
+			node_id INTEGER NOT NULL,
+			PRIMARY KEY (user_id, node_id),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+			FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS settings (
 			key TEXT PRIMARY KEY,
 			value TEXT DEFAULT ''

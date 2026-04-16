@@ -22,4 +22,5 @@ type User struct {
 	WarnSent     bool       `json:"warn_sent"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
+	NodeIDs      []int64    `json:"node_ids"`
 }

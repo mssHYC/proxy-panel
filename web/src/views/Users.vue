@@ -13,11 +13,19 @@
     <el-table :data="users" v-loading="loading" stripe border class="w-full">
       <el-table-column prop="username" label="用户名" min-width="120" />
 
-      <el-table-column prop="protocol" label="协议" width="120">
+      <el-table-column label="节点" min-width="200">
         <template #default="{ row }">
-          <el-tag :type="protocolTagType(row.protocol)" size="small">
-            {{ row.protocol }}
-          </el-tag>
+          <template v-if="row.node_ids && row.node_ids.length">
+            <el-tag
+              v-for="nid in row.node_ids"
+              :key="nid"
+              size="small"
+              class="mr-1 mb-1"
+            >
+              {{ nodeNameMap[nid] || `节点#${nid}` }}
+            </el-tag>
+          </template>
+          <el-tag v-else size="small" type="info">全部节点</el-tag>
         </template>
       </el-table-column>
 
@@ -91,12 +99,21 @@
         <el-form-item label="邮箱" prop="email">
           <el-input v-model="form.email" placeholder="请输入邮箱" />
         </el-form-item>
-        <el-form-item label="协议" prop="protocol">
-          <el-select v-model="form.protocol" placeholder="请选择协议" class="w-full">
-            <el-option label="vless" value="vless" />
-            <el-option label="vmess" value="vmess" />
-            <el-option label="trojan" value="trojan" />
-            <el-option label="ss" value="ss" />
+        <el-form-item label="节点">
+          <el-select
+            v-model="form.node_ids"
+            multiple
+            placeholder="请选择节点 (不选则可访问全部)"
+            class="w-full"
+            collapse-tags
+            collapse-tags-tooltip
+          >
+            <el-option
+              v-for="node in allNodes"
+              :key="node.id"
+              :label="node.name"
+              :value="node.id"
+            />
           </el-select>
         </el-form-item>
         <el-form-item label="流量限额 GB">
@@ -136,6 +153,7 @@ import { ref, reactive, onMounted } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getUsers, createUser, updateUser, deleteUser, resetTraffic } from '../api/user'
+import { getNodes } from '../api/node'
 import { formatBytes, formatDate } from '../utils/format'
 import SubscriptionDialog from '../components/SubscriptionDialog.vue'
 
@@ -152,11 +170,19 @@ interface User {
   reset_day: number
   enable: boolean
   expire_at: string | null
+  node_ids: number[]
+}
+
+interface NodeItem {
+  id: number
+  name: string
 }
 
 // ---- 状态 ----
 const loading = ref(false)
 const users = ref<User[]>([])
+const allNodes = ref<NodeItem[]>([])
+const nodeNameMap = ref<Record<number, string>>({})
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editingId = ref<number | null>(null)
@@ -169,6 +195,7 @@ const defaultForm = () => ({
   username: '',
   email: '',
   protocol: 'vless',
+  node_ids: [] as number[],
   traffic_limit_gb: 0,
   speed_limit: 0,
   reset_day: 1,
@@ -178,7 +205,6 @@ const form = reactive(defaultForm())
 
 const rules: FormRules = {
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  protocol: [{ required: true, message: '请选择协议', trigger: 'change' }],
 }
 
 // 订阅弹窗
@@ -186,16 +212,6 @@ const subVisible = ref(false)
 const subUser = ref<{ uuid: string; username: string } | null>(null)
 
 // ---- 工具函数 ----
-function protocolTagType(protocol: string) {
-  const map: Record<string, string> = {
-    vless: '',
-    vmess: 'success',
-    trojan: 'warning',
-    ss: 'danger',
-  }
-  return map[protocol] || 'info'
-}
-
 function trafficPercent(row: User): number {
   if (!row.traffic_limit || row.traffic_limit === 0) return 0
   return Math.min(100, Math.round((row.traffic_used / row.traffic_limit) * 100))
@@ -208,6 +224,21 @@ function isExpiringSoon(date: string | null): boolean {
 }
 
 // ---- 数据加载 ----
+async function fetchNodes() {
+  try {
+    const res = await getNodes()
+    const list = res.data?.nodes ?? []
+    allNodes.value = list.map((n: any) => ({ id: n.id, name: n.name }))
+    const map: Record<number, string> = {}
+    for (const n of list) {
+      map[n.id] = n.name
+    }
+    nodeNameMap.value = map
+  } catch {
+    // 静默失败
+  }
+}
+
 async function fetchUsers() {
   loading.value = true
   try {
@@ -220,7 +251,10 @@ async function fetchUsers() {
   }
 }
 
-onMounted(fetchUsers)
+onMounted(async () => {
+  await fetchNodes()
+  await fetchUsers()
+})
 
 // ---- 新增 / 编辑 ----
 function resetForm() {
@@ -241,6 +275,7 @@ function openEdit(row: User) {
     username: row.username,
     email: row.email || '',
     protocol: row.protocol,
+    node_ids: row.node_ids ? [...row.node_ids] : [],
     traffic_limit_gb: row.traffic_limit ? +(row.traffic_limit / GB).toFixed(1) : 0,
     speed_limit: row.speed_limit || 0,
     reset_day: row.reset_day || 1,
@@ -254,6 +289,7 @@ function buildPayload() {
     username: form.username,
     email: form.email || undefined,
     protocol: form.protocol,
+    node_ids: form.node_ids.length > 0 ? form.node_ids : [],
     traffic_limit: form.traffic_limit_gb ? Math.round(form.traffic_limit_gb * GB) : 0,
     speed_limit: form.speed_limit,
     reset_day: form.reset_day,

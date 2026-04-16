@@ -233,6 +233,29 @@ func (s *NodeService) Count() (total int, enabled int, err error) {
 	return
 }
 
+// ListByUserID 获取用户关联的已启用节点（用于订阅生成）
+func (s *NodeService) ListByUserID(userID int64) ([]model.Node, error) {
+	rows, err := s.db.Query(`SELECT n.id, n.name, n.host, n.port, n.protocol, n.transport,
+		n.kernel_type, n.settings, n.enable, n.sort_order, n.created_at, n.updated_at
+		FROM nodes n
+		INNER JOIN user_nodes un ON un.node_id = n.id
+		WHERE un.user_id = ? AND n.enable = 1
+		ORDER BY n.sort_order ASC, n.id ASC`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("查询用户节点失败: %w", err)
+	}
+	defer rows.Close()
+	var nodes []model.Node
+	for rows.Next() {
+		var n model.Node
+		if err := scanNode(rows, &n); err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, n)
+	}
+	return nodes, rows.Err()
+}
+
 func scanNode(rows *sql.Rows, n *model.Node) error {
 	return rows.Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Protocol, &n.Transport,
 		&n.KernelType, &n.Settings, &n.Enable, &n.SortOrder, &n.CreatedAt, &n.UpdatedAt)

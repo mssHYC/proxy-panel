@@ -49,11 +49,18 @@ func (h *SubscriptionHandler) Subscribe(c *gin.Context) {
 		return
 	}
 
-	// 获取启用的节点
-	nodes, err := h.nodeSvc.ListEnabled()
+	// 获取用户关联的节点，无关联则返回全部启用节点
+	nodes, err := h.nodeSvc.ListByUserID(user.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取节点失败"})
 		return
+	}
+	if len(nodes) == 0 {
+		nodes, err = h.nodeSvc.ListEnabled()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "获取节点失败"})
+			return
+		}
 	}
 
 	// 构建 baseURL
