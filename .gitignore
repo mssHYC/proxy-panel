@@ -1,0 +1,16 @@
+# Go
+proxy-panel
+*.exe
+/data/
+
+# Frontend
+web/node_modules/
+web/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
