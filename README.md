@@ -168,11 +168,14 @@ proxy-panel restore FILE # 从备份恢复
 
 ### TLS 证书方案
 
-| 方案 | 适用场景 |
-|---|---|
-| Cloudflare Tunnel | 域名托管在 CF，零证书运维 |
-| acme.sh 自动签发 | 直连 TLS，Let's Encrypt 免费证书 |
-| 不使用 TLS | 纯 Reality 节点 + IP 直连面板 |
+| 方案 | 适用场景 | 要求 |
+|---|---|---|
+| HTTP 验证 (standalone) | 简单直连，无需 API Key | 80 端口空闲 + 域名 A 记录 |
+| Cloudflare DNS API | 支持通配符，兼容 CDN 橙色云朵 | CF 托管域名 + API Token |
+| DNSPod DNS API | 国内腾讯云用户 | DNSPod 托管域名 + API Token |
+| Aliyun DNS API | 阿里云用户 | 阿里云托管域名 + AccessKey |
+| 自定义证书 | 已有证书 (商业/其他工具申请) | .crt + .key 文件 |
+| 不使用 TLS | 纯 Reality 节点 + IP 直连面板 | 无 |
 
 ## 配置文件
 

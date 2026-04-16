@@ -189,20 +189,133 @@ interactive_config() {
     # TLS 方案选择
     echo ""
     echo "选择 TLS 证书方案:"
-    echo "  [1] Cloudflare 模式 (Tunnel + Origin Certificate)"
-    echo "  [2] acme.sh 自动签发 (Let's Encrypt)"
-    echo "  [3] 不使用 TLS (纯 IP 直连)"
-    read -p "请选择 [3]: " TLS_MODE
-    TLS_MODE=${TLS_MODE:-3}
+    echo "  [1] HTTP 验证申请 (standalone，需 80 端口空闲)"
+    echo "  [2] Cloudflare DNS API 申请 (支持通配符，兼容 CDN)"
+    echo "  [3] DNSPod (腾讯云) DNS API 申请"
+    echo "  [4] Aliyun (阿里云) DNS API 申请"
+    echo "  [5] 自定义证书 (上传已有证书)"
+    echo "  [6] 不使用 TLS (纯 IP 直连)"
+    read -p "请选择 [6]: " TLS_MODE
+    TLS_MODE=${TLS_MODE:-6}
 
     TLS_ENABLED="false"
     CERT_PATH=""
     KEY_PATH=""
     DOMAIN=""
 
+    # 安装 acme.sh (方案 1-4 共用)
+    install_acme() {
+        if [[ ! -f ~/.acme.sh/acme.sh ]]; then
+            info "安装 acme.sh..."
+            curl -s https://get.acme.sh | sh -s email=admin@"${DOMAIN}" 2>/dev/null || {
+                warn "acme.sh 安装失败，请检查网络"
+                return 1
+            }
+        fi
+        # 设置默认 CA 为 Let's Encrypt
+        ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt 2>/dev/null || true
+        return 0
+    }
+
+    # 安装证书到指定路径
+    install_cert() {
+        local ecc_flag=""
+        [[ "$1" == "ecc" ]] && ecc_flag="--ecc"
+        ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" $ecc_flag \
+            --fullchain-file "$CERT_PATH" \
+            --key-file "$KEY_PATH" \
+            --reloadcmd "systemctl restart ${SERVICE_NAME} 2>/dev/null; systemctl restart ${XRAY_SERVICE} 2>/dev/null" \
+            2>/dev/null || warn "证书安装失败"
+        chmod 600 "$CERT_PATH" "$KEY_PATH" 2>/dev/null || true
+        info "证书已安装到: $CERT_PATH"
+        info "续期将自动执行 (acme.sh cron)"
+    }
+
     case "$TLS_MODE" in
         1)
-            # Cloudflare Origin Certificate 模式
+            # HTTP standalone 模式
+            read -p "域名 (需已解析到本机): " DOMAIN
+            [[ -z "$DOMAIN" ]] && error "域名不能为空"
+            TLS_ENABLED="true"
+            CERT_PATH="${INSTALL_DIR}/certs/${DOMAIN}.crt"
+            KEY_PATH="${INSTALL_DIR}/certs/${DOMAIN}.key"
+            mkdir -p "${INSTALL_DIR}/certs"
+
+            install_acme || {
+                warn "跳过证书申请，安装完成后可手动执行"
+                break
+            }
+
+            info "正在申请证书 (HTTP standalone，需 80 端口空闲)..."
+            echo "  域名: $DOMAIN"
+            echo "  请确保: 1) 域名 A 记录已指向本机 IP  2) 80 端口未被占用"
+            echo ""
+
+            ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 || {
+                warn "证书申请失败！可能原因:"
+                warn "  - 域名未正确解析到本机 IP"
+                warn "  - 80 端口被占用 (nginx/apache)"
+                warn "安装完成后可手动执行:"
+                warn "  ~/.acme.sh/acme.sh --issue -d ${DOMAIN} --standalone"
+                break
+            }
+
+            install_cert "ecc"
+            info "✅ 证书申请成功"
+            ;;
+
+        2)
+            # Cloudflare DNS API 模式
+            read -p "域名 (支持通配符如 *.example.com): " DOMAIN
+            [[ -z "$DOMAIN" ]] && error "域名不能为空"
+
+            # 提取主域名用于证书路径
+            MAIN_DOMAIN=$(echo "$DOMAIN" | sed 's/^\*\.//')
+            TLS_ENABLED="true"
+            CERT_PATH="${INSTALL_DIR}/certs/${MAIN_DOMAIN}.crt"
+            KEY_PATH="${INSTALL_DIR}/certs/${MAIN_DOMAIN}.key"
+            mkdir -p "${INSTALL_DIR}/certs"
+
+            echo ""
+            echo "Cloudflare API Token 获取方式:"
+            echo "  Cloudflare Dashboard → My Profile → API Tokens → Create Token"
+            echo "  模板选 'Edit zone DNS'，Zone 选你的域名"
+            echo ""
+            read -p "Cloudflare API Token (Zone.DNS 权限): " CF_TOKEN
+            [[ -z "$CF_TOKEN" ]] && error "API Token 不能为空"
+
+            # 可选: Zone ID (自动检测或手动输入)
+            read -p "Cloudflare Zone ID (留空自动检测): " CF_ZONE_ID
+
+            install_acme || {
+                warn "跳过证书申请"
+                break
+            }
+
+            info "正在通过 Cloudflare DNS API 申请证书..."
+            export CF_Token="$CF_TOKEN"
+            [[ -n "$CF_ZONE_ID" ]] && export CF_Zone_ID="$CF_ZONE_ID"
+
+            if [[ "$DOMAIN" == \** ]]; then
+                # 通配符证书: *.example.com + example.com
+                ~/.acme.sh/acme.sh --issue -d "$MAIN_DOMAIN" -d "$DOMAIN" --dns dns_cf --keylength ec-256 || {
+                    warn "证书申请失败，请检查 API Token 权限和域名是否在 Cloudflare"
+                    break
+                }
+                DOMAIN="$MAIN_DOMAIN"
+            else
+                ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_cf --keylength ec-256 || {
+                    warn "证书申请失败，请检查 API Token 权限"
+                    break
+                }
+            fi
+
+            install_cert "ecc"
+            info "✅ 证书申请成功 (Cloudflare DNS)"
+            ;;
+
+        3)
+            # DNSPod (腾讯云) DNS API
             read -p "域名: " DOMAIN
             [[ -z "$DOMAIN" ]] && error "域名不能为空"
             TLS_ENABLED="true"
@@ -211,14 +324,87 @@ interactive_config() {
             mkdir -p "${INSTALL_DIR}/certs"
 
             echo ""
-            info "Cloudflare Origin Certificate 模式"
-            echo "  请在 Cloudflare Dashboard 生成 Origin Certificate，然后："
-            echo "  1. 将证书内容粘贴到: ${CERT_PATH}"
-            echo "  2. 将私钥内容粘贴到: ${KEY_PATH}"
+            echo "DNSPod API Token 获取方式:"
+            echo "  https://console.dnspod.cn/account/token/token"
+            echo "  创建 API 密钥，获取 ID 和 Token"
             echo ""
-            read -p "是否现在粘贴证书? [y/N]: " paste_cert
-            if [[ "$paste_cert" =~ ^[Yy]$ ]]; then
-                echo "请粘贴证书内容 (以 EOF 结束):"
+            read -p "DNSPod API ID: " DP_ID
+            read -p "DNSPod API Token: " DP_KEY
+            [[ -z "$DP_ID" || -z "$DP_KEY" ]] && error "API ID 和 Token 不能为空"
+
+            install_acme || {
+                warn "跳过证书申请"
+                break
+            }
+
+            info "正在通过 DNSPod DNS API 申请证书..."
+            export DP_Id="$DP_ID"
+            export DP_Key="$DP_KEY"
+
+            ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_dp --keylength ec-256 || {
+                warn "证书申请失败，请检查 API Token 和域名是否托管在 DNSPod"
+                break
+            }
+
+            install_cert "ecc"
+            info "✅ 证书申请成功 (DNSPod)"
+            ;;
+
+        4)
+            # Aliyun DNS API
+            read -p "域名: " DOMAIN
+            [[ -z "$DOMAIN" ]] && error "域名不能为空"
+            TLS_ENABLED="true"
+            CERT_PATH="${INSTALL_DIR}/certs/${DOMAIN}.crt"
+            KEY_PATH="${INSTALL_DIR}/certs/${DOMAIN}.key"
+            mkdir -p "${INSTALL_DIR}/certs"
+
+            echo ""
+            echo "阿里云 AccessKey 获取方式:"
+            echo "  https://ram.console.aliyun.com/manage/ak"
+            echo "  建议使用 RAM 子账号，仅授予 DNS 管理权限"
+            echo ""
+            read -p "阿里云 AccessKey ID: " ALI_KEY
+            read -p "阿里云 AccessKey Secret: " ALI_SECRET
+            [[ -z "$ALI_KEY" || -z "$ALI_SECRET" ]] && error "AccessKey 不能为空"
+
+            install_acme || {
+                warn "跳过证书申请"
+                break
+            }
+
+            info "正在通过阿里云 DNS API 申请证书..."
+            export Ali_Key="$ALI_KEY"
+            export Ali_Secret="$ALI_SECRET"
+
+            ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_ali --keylength ec-256 || {
+                warn "证书申请失败，请检查 AccessKey 和域名是否托管在阿里云"
+                break
+            }
+
+            install_cert "ecc"
+            info "✅ 证书申请成功 (阿里云 DNS)"
+            ;;
+
+        5)
+            # 自定义证书
+            read -p "域名 (用于标识): " DOMAIN
+            [[ -z "$DOMAIN" ]] && error "域名不能为空"
+            TLS_ENABLED="true"
+            mkdir -p "${INSTALL_DIR}/certs"
+
+            echo ""
+            echo "请选择证书来源:"
+            echo "  [a] 输入已有证书文件路径"
+            echo "  [b] 粘贴证书内容"
+            read -p "请选择 [a]: " CERT_SOURCE
+            CERT_SOURCE=${CERT_SOURCE:-a}
+
+            if [[ "$CERT_SOURCE" == "b" ]]; then
+                CERT_PATH="${INSTALL_DIR}/certs/${DOMAIN}.crt"
+                KEY_PATH="${INSTALL_DIR}/certs/${DOMAIN}.key"
+
+                echo "请粘贴证书内容 (PEM 格式，输入 EOF 结束):"
                 cert_content=""
                 while IFS= read -r line; do
                     [[ "$line" == "EOF" ]] && break
@@ -227,7 +413,7 @@ interactive_config() {
                 echo "$cert_content" > "$CERT_PATH"
                 chmod 600 "$CERT_PATH"
 
-                echo "请粘贴私钥内容 (以 EOF 结束):"
+                echo "请粘贴私钥内容 (PEM 格式，输入 EOF 结束):"
                 key_content=""
                 while IFS= read -r line; do
                     [[ "$line" == "EOF" ]] && break
@@ -235,39 +421,19 @@ interactive_config() {
                 done
                 echo "$key_content" > "$KEY_PATH"
                 chmod 600 "$KEY_PATH"
-                info "证书已保存"
+                info "✅ 证书已保存"
             else
-                warn "请在安装完成后手动放置证书文件"
-            fi
-            ;;
-        2)
-            # acme.sh 自动签发
-            read -p "域名: " DOMAIN
-            [[ -z "$DOMAIN" ]] && error "域名不能为空"
-            TLS_ENABLED="true"
-            CERT_PATH="${INSTALL_DIR}/certs/${DOMAIN}.crt"
-            KEY_PATH="${INSTALL_DIR}/certs/${DOMAIN}.key"
-            mkdir -p "${INSTALL_DIR}/certs"
-
-            info "安装 acme.sh..."
-            if ! command -v acme.sh &>/dev/null && [[ ! -f ~/.acme.sh/acme.sh ]]; then
-                curl -s https://get.acme.sh | sh -s email=admin@"${DOMAIN}" 2>/dev/null || warn "acme.sh 安装失败"
+                read -p "证书文件路径 (.crt/.pem): " CERT_PATH
+                read -p "私钥文件路径 (.key): " KEY_PATH
+                [[ ! -f "$CERT_PATH" ]] && error "证书文件不存在: $CERT_PATH"
+                [[ ! -f "$KEY_PATH" ]] && error "私钥文件不存在: $KEY_PATH"
+                info "✅ 使用已有证书: $CERT_PATH"
             fi
 
-            if [[ -f ~/.acme.sh/acme.sh ]]; then
-                info "正在签发证书..."
-                ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 || {
-                    warn "证书签发失败，请确保域名已解析且 80 端口未被占用"
-                    warn "安装完成后可手动执行: ~/.acme.sh/acme.sh --issue -d ${DOMAIN} --standalone"
-                }
-                ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" --ecc \
-                    --fullchain-file "$CERT_PATH" \
-                    --key-file "$KEY_PATH" \
-                    --reloadcmd "systemctl restart ${SERVICE_NAME}" 2>/dev/null || true
-                chmod 600 "$CERT_PATH" "$KEY_PATH" 2>/dev/null || true
-            fi
+            warn "注意: 自定义证书需要自行负责续期"
             ;;
-        3)
+
+        6)
             info "不使用 TLS，面板将以 HTTP 模式运行"
             ;;
         *)
