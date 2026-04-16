@@ -240,8 +240,18 @@ setup_tls() {
 
             info "正在申请证书 (HTTP standalone，需 80 端口空闲)..."
             echo "  域名: $DOMAIN"
-            echo "  请确保: 1) 域名 A 记录已指向本机 IP  2) 80 端口未被占用"
             echo ""
+
+            # 自动释放 80 端口
+            local pid80
+            pid80=$(ss -tlnp | grep ':80 ' | grep -oP 'pid=\K[0-9]+' | head -1)
+            if [[ -n "$pid80" ]]; then
+                local proc80
+                proc80=$(ps -p "$pid80" -o comm= 2>/dev/null || echo "unknown")
+                warn "80 端口被 ${proc80}(PID:${pid80}) 占用，临时停止..."
+                kill "$pid80" 2>/dev/null || true
+                sleep 1
+            fi
 
             ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 || {
                 warn "证书申请失败！可能原因:"
@@ -432,6 +442,17 @@ setup_tls() {
             error "无效的选项: $TLS_MODE"
             ;;
     esac
+
+    # 验证: 如果启用了 TLS 但证书文件不存在，回退到 HTTP 模式
+    if [[ "$TLS_ENABLED" == "true" && ( ! -f "$CERT_PATH" || ! -f "$KEY_PATH" ) ]]; then
+        warn "证书文件不存在，回退到 HTTP 模式"
+        warn "  期望证书: $CERT_PATH"
+        warn "  期望私钥: $KEY_PATH"
+        warn "安装完成后可通过 proxy-panel cert setup 重新配置证书"
+        TLS_ENABLED="false"
+        CERT_PATH=""
+        KEY_PATH=""
+    fi
 }
 
 # ============================================
@@ -529,8 +550,8 @@ cert_setup() {
     if [[ -f "$CONFIG_FILE" ]]; then
         sed -i "s|^  tls:.*|  tls: ${TLS_ENABLED}|" "$CONFIG_FILE"
         sed -i "s|^  cert:.*|  cert: \"${CERT_PATH}\"|" "$CONFIG_FILE"
-        # 匹配 cert 行之后紧跟的 key 行
         sed -i "/^  cert:/{ n; s|^  key:.*|  key: \"${KEY_PATH}\"|; }" "$CONFIG_FILE"
+        sed -i "s|^  domain:.*|  domain: \"${DOMAIN}\"|" "$CONFIG_FILE"
         info "config.yaml 已更新"
     fi
 
