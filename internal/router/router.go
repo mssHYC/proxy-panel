@@ -1,12 +1,16 @@
 package router
 
 import (
+	"io/fs"
+	"net/http"
+
 	"proxy-panel/internal/config"
 	"proxy-panel/internal/database"
 	"proxy-panel/internal/handler"
 	"proxy-panel/internal/kernel"
 	"proxy-panel/internal/service"
 	notify "proxy-panel/internal/service/notify"
+	"proxy-panel/web"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,12 +23,18 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 
 	r := gin.Default()
 
-	// 静态文件 (优先使用 web/dist，兼容部署目录 web/)
-	r.Static("/assets", "./web/dist/assets")
-	r.StaticFile("/favicon.svg", "./web/dist/favicon.svg")
-	r.StaticFile("/", "./web/dist/index.html")
+	// 嵌入的前端静态文件
+	distFS, _ := fs.Sub(web.DistFS, "dist")
+	fileServer := http.FileServer(http.FS(distFS))
+
+	// 静态资源路由
+	r.GET("/assets/*filepath", gin.WrapH(fileServer))
+	r.GET("/favicon.svg", gin.WrapH(fileServer))
+	r.GET("/icons.svg", gin.WrapH(fileServer))
+
+	// SPA 回退：非 API 路由都返回 index.html
 	r.NoRoute(func(c *gin.Context) {
-		c.File("./web/dist/index.html")
+		c.FileFromFS("index.html", http.FS(distFS))
 	})
 
 	// 初始化 Handlers
