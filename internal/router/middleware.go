@@ -1,6 +1,7 @@
 package router
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -21,6 +22,9 @@ func JWTAuth(secret string) gin.HandlerFunc {
 		}
 		tokenStr := strings.TrimPrefix(auth, "Bearer ")
 		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+			}
 			return []byte(secret), nil
 		})
 		if err != nil || !token.Valid {
@@ -54,20 +58,22 @@ func (rl *RateLimiter) LoginRateLimit() gin.HandlerFunc {
 		ip := c.ClientIP()
 		rl.mu.Lock()
 		now := time.Now()
-		valid := rl.attempts[ip][:0]
-		for _, t := range rl.attempts[ip] {
+		// 清理过期记录
+		existing := rl.attempts[ip]
+		var valid []time.Time
+		for _, t := range existing {
 			if now.Sub(t) < time.Minute {
 				valid = append(valid, t)
 			}
 		}
-		rl.attempts[ip] = valid
 		if len(valid) >= 5 {
+			rl.attempts[ip] = valid
 			rl.mu.Unlock()
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "登录请求过于频繁", "code": "ERR_RATE_LIMIT"})
 			c.Abort()
 			return
 		}
-		rl.attempts[ip] = append(rl.attempts[ip], now)
+		rl.attempts[ip] = append(valid, now)
 		rl.mu.Unlock()
 		c.Next()
 	}
@@ -88,20 +94,22 @@ func (srl *SubRateLimiter) Limit() gin.HandlerFunc {
 		uuid := c.Param("uuid")
 		srl.mu.Lock()
 		now := time.Now()
-		valid := srl.attempts[uuid][:0]
-		for _, t := range srl.attempts[uuid] {
+		// 清理过期记录
+		existing := srl.attempts[uuid]
+		var valid []time.Time
+		for _, t := range existing {
 			if now.Sub(t) < time.Minute {
 				valid = append(valid, t)
 			}
 		}
-		srl.attempts[uuid] = valid
 		if len(valid) >= 30 {
+			srl.attempts[uuid] = valid
 			srl.mu.Unlock()
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "请求过于频繁", "code": "ERR_RATE_LIMIT"})
 			c.Abort()
 			return
 		}
-		srl.attempts[uuid] = append(srl.attempts[uuid], now)
+		srl.attempts[uuid] = append(valid, now)
 		srl.mu.Unlock()
 		c.Next()
 	}

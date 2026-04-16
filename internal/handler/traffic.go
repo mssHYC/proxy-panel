@@ -32,7 +32,7 @@ func (h *TrafficHandler) GetServerTraffic(c *gin.Context) {
 // SetServerLimit 设置服务器流量限制
 func (h *TrafficHandler) SetServerLimit(c *gin.Context) {
 	var req struct {
-		LimitGB int64 `json:"limit_gb" binding:"required"`
+		LimitGB int64 `json:"limit_gb"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误: " + err.Error()})

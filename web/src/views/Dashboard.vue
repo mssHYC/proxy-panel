@@ -11,7 +11,7 @@
             </div>
             <div class="ml-4">
               <div class="text-sm text-gray-500">用户统计</div>
-              <div class="text-xl font-bold">{{ dashboard.users_enabled }}/{{ dashboard.users_total }} <span class="text-sm font-normal text-gray-400">活跃</span></div>
+              <div class="text-xl font-bold">{{ dashboard.users.enabled }}/{{ dashboard.users.total }} <span class="text-sm font-normal text-gray-400">活跃</span></div>
             </div>
           </div>
         </el-card>
@@ -26,7 +26,7 @@
             </div>
             <div class="ml-4">
               <div class="text-sm text-gray-500">节点统计</div>
-              <div class="text-xl font-bold">{{ dashboard.nodes_enabled }}/{{ dashboard.nodes_total }} <span class="text-sm font-normal text-gray-400">在线</span></div>
+              <div class="text-xl font-bold">{{ dashboard.nodes.enabled }}/{{ dashboard.nodes.total }} <span class="text-sm font-normal text-gray-400">在线</span></div>
             </div>
           </div>
         </el-card>
@@ -41,7 +41,7 @@
             </div>
             <div class="ml-4">
               <div class="text-sm text-gray-500">今日流量</div>
-              <div class="text-xl font-bold">{{ formatBytes(dashboard.today_upload + dashboard.today_download) }}</div>
+              <div class="text-xl font-bold">{{ formatBytes(dashboard.today_traffic.upload + dashboard.today_traffic.download) }}</div>
             </div>
           </div>
         </el-card>
@@ -75,8 +75,8 @@
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-3">
             <span class="font-medium w-20">Xray</span>
-            <el-tag :type="dashboard.kernels.xray ? 'success' : 'danger'">
-              {{ dashboard.kernels.xray ? '运行中' : '已停止' }}
+            <el-tag :type="dashboard.kernel_status.xray ? 'success' : 'danger'">
+              {{ dashboard.kernel_status.xray ? '运行中' : '已停止' }}
             </el-tag>
           </div>
           <el-button size="small" @click="restartKernel('xray')" :loading="restartingKernel === 'xray'">
@@ -86,11 +86,11 @@
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-3">
             <span class="font-medium w-20">Sing-box</span>
-            <el-tag :type="dashboard.kernels.singbox ? 'success' : 'danger'">
-              {{ dashboard.kernels.singbox ? '运行中' : '已停止' }}
+            <el-tag :type="dashboard.kernel_status['sing-box'] ? 'success' : 'danger'">
+              {{ dashboard.kernel_status['sing-box'] ? '运行中' : '已停止' }}
             </el-tag>
           </div>
-          <el-button size="small" @click="restartKernel('singbox')" :loading="restartingKernel === 'singbox'">
+          <el-button size="small" @click="restartKernel('sing-box')" :loading="restartingKernel === 'sing-box'">
             重启
           </el-button>
         </div>
@@ -119,14 +119,11 @@ const loading = ref(false)
 const restartingKernel = ref('')
 
 const dashboard = ref({
-  users_total: 0,
-  users_enabled: 0,
-  nodes_total: 0,
-  nodes_enabled: 0,
+  users: { total: 0, enabled: 0 },
+  nodes: { total: 0, enabled: 0 },
   server_traffic: { total_up: 0, total_down: 0, limit_bytes: 0 },
-  today_upload: 0,
-  today_download: 0,
-  kernels: { xray: false, singbox: false },
+  today_traffic: { upload: 0, download: 0, total: 0 },
+  kernel_status: { xray: false, 'sing-box': false },
 })
 
 const serverUsed = computed(() => {

@@ -1,15 +1,15 @@
 package handler
 
 import (
-	"crypto/sha256"
-	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"proxy-panel/internal/config"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type AuthHandler struct {
@@ -32,14 +32,28 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	passHash := fmt.Sprintf("%x", sha256.Sum256([]byte(req.Password)))
-	adminHash := fmt.Sprintf("%x", sha256.Sum256([]byte(h.cfg.Auth.AdminPass)))
-
-	if req.Username != h.cfg.Auth.AdminUser || passHash != adminHash {
+	if req.Username != h.cfg.Auth.AdminUser {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误", "code": "ERR_LOGIN_FAILED"})
 		return
 	}
 
+	// 支持 bcrypt hash 和明文两种方式（兼容旧配置）
+	storedPass := h.cfg.Auth.AdminPass
+	if strings.HasPrefix(storedPass, "$2") {
+		// bcrypt hash
+		if err := bcrypt.CompareHashAndPassword([]byte(storedPass), []byte(req.Password)); err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误", "code": "ERR_LOGIN_FAILED"})
+			return
+		}
+	} else {
+		// 明文比较（向后兼容，建议升级）
+		if storedPass != req.Password {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误", "code": "ERR_LOGIN_FAILED"})
+			return
+		}
+	}
+
+	// 生成 JWT
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"username": req.Username,
 		"exp":      time.Now().Add(time.Duration(h.cfg.Auth.TokenExpiry) * time.Hour).Unix(),

@@ -56,8 +56,8 @@
 
       <el-table-column label="到期时间" width="140">
         <template #default="{ row }">
-          <span :class="{ 'text-orange-500 font-medium': isExpiringSoon(row.expire_at) }">
-            {{ formatDate(row.expire_at) }}
+          <span :class="{ 'text-orange-500 font-medium': isExpiringSoon(row.expires_at) }">
+            {{ formatDate(row.expires_at) }}
           </span>
         </template>
       </el-table-column>
@@ -129,7 +129,7 @@
         </el-form-item>
         <el-form-item label="到期时间">
           <el-date-picker
-            v-model="form.expire_at"
+            v-model="form.expires_at"
             type="date"
             placeholder="选择到期时间"
             value-format="YYYY-MM-DD"
@@ -169,7 +169,7 @@ interface User {
   speed_limit: number
   reset_day: number
   enable: boolean
-  expire_at: string | null
+  expires_at: string | null
   node_ids: number[]
 }
 
@@ -199,7 +199,7 @@ const defaultForm = () => ({
   traffic_limit_gb: 0,
   speed_limit: 0,
   reset_day: 1,
-  expire_at: null as string | null,
+  expires_at: null as string | null,
 })
 const form = reactive(defaultForm())
 
@@ -279,7 +279,7 @@ function openEdit(row: User) {
     traffic_limit_gb: row.traffic_limit ? +(row.traffic_limit / GB).toFixed(1) : 0,
     speed_limit: row.speed_limit || 0,
     reset_day: row.reset_day || 1,
-    expire_at: row.expire_at,
+    expires_at: row.expires_at,
   })
   dialogVisible.value = true
 }
@@ -293,7 +293,7 @@ function buildPayload() {
     traffic_limit: form.traffic_limit_gb ? Math.round(form.traffic_limit_gb * GB) : 0,
     speed_limit: form.speed_limit,
     reset_day: form.reset_day,
-    expire_at: form.expire_at || undefined,
+    expires_at: form.expires_at || undefined,
   }
 }
 
