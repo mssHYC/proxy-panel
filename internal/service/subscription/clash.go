@@ -332,7 +332,7 @@ dns:
 `)
 	}
 
-	return b.String(), "text/yaml; charset=utf-8", nil
+	return b.String(), "text/plain; charset=utf-8", nil
 }
 
 func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {

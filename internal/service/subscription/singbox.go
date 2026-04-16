@@ -71,7 +71,7 @@ func (g *SingboxGenerator) Generate(nodes []model.Node, user *model.User, baseUR
 		return "", "", fmt.Errorf("生成 sing-box 配置失败: %w", err)
 	}
 
-	return string(data), "application/json; charset=utf-8", nil
+	return string(data), "text/plain; charset=utf-8", nil
 }
 
 // buildProxyGroups 构建所有代理组
