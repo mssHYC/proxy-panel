@@ -145,6 +145,37 @@
       </el-form>
     </el-card>
 
+    <!-- 自定义规则 -->
+    <el-card shadow="hover">
+      <template #header>
+        <div class="flex items-center justify-between">
+          <span class="font-bold">自定义分流规则</span>
+          <el-tag type="info" size="small">优先于默认规则执行</el-tag>
+        </div>
+      </template>
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        class="mb-4"
+        description="每行一条规则，支持 Clash 格式。自定义规则会插入到默认规则之前，优先匹配。Surge 和 Sing-box 订阅也会同步应用。"
+      />
+      <el-input
+        v-model="customRulesText"
+        type="textarea"
+        :rows="8"
+        placeholder="示例:
+DOMAIN-SUFFIX,example.com,全球代理
+DOMAIN-KEYWORD,openai,OpenAI
+IP-CIDR,1.2.3.0/24,本地直连,no-resolve
+GEOSITE,category-porn,REJECT"
+        style="font-family: monospace"
+      />
+      <div class="mt-2 text-xs text-gray-400">
+        可用策略组：手动切换 / 自动选择 / 全球代理 / 流媒体 / Telegram / Google / YouTube / Netflix / Spotify / HBO / Bing / OpenAI / ClaudeAI / Disney / GitHub / 国内媒体 / 本地直连 / 漏网之鱼 / DIRECT / REJECT
+      </div>
+    </el-card>
+
     <!-- 保存按钮 -->
     <div class="flex justify-end">
       <el-button type="primary" size="large" :loading="saving" @click="handleSave">
@@ -196,6 +227,7 @@ const settings = ref({
 
 const warnPercent = ref(80)
 const collectInterval = ref(60)
+const customRulesText = ref('')
 
 // 修改用户名
 const handleChangeUsername = async () => {
@@ -346,6 +378,7 @@ const fetchSettings = async () => {
     settings.value.wechat_webhook = map.wechat_webhook || ''
     warnPercent.value = parseInt(map.warn_percent) || 80
     collectInterval.value = parseInt(map.collect_interval) || 60
+    customRulesText.value = map.custom_rules || ''
   } catch (e) {
     console.error('获取设置失败', e)
   } finally {
@@ -362,6 +395,7 @@ const handleSave = async () => {
       wechat_webhook: settings.value.wechat_webhook,
       warn_percent: String(warnPercent.value),
       collect_interval: String(collectInterval.value),
+      custom_rules: customRulesText.value,
     }
     await updateSettings(data)
     ElMessage.success('设置保存成功')
