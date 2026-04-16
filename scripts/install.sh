@@ -22,7 +22,7 @@ BACKUP_DIR="${INSTALL_DIR}/backups"
 SERVICE_NAME="proxy-panel"
 XRAY_SERVICE="xray"
 SINGBOX_SERVICE="sing-box"
-GITHUB_REPO="your-org/proxy-panel"  # 替换为实际仓库地址
+GITHUB_REPO="mssHYC/proxy-panel"
 
 # ============================================
 # 辅助函数
@@ -900,13 +900,27 @@ print_summary() {
     echo "  数据目录: ${INSTALL_DIR}/data"
     echo ""
     echo "  常用命令:"
-    echo "    $0 status     - 查看状态"
-    echo "    $0 restart    - 重启服务"
-    echo "    $0 logs       - 查看日志"
-    echo "    $0 backup     - 备份数据"
-    echo "    $0 reset-pwd  - 重置密码"
+    echo "    proxy-panel status     - 查看状态"
+    echo "    proxy-panel restart    - 重启服务"
+    echo "    proxy-panel logs       - 查看日志"
+    echo "    proxy-panel backup     - 备份数据"
+    echo "    proxy-panel reset-pwd  - 重置密码"
     echo ""
     echo "============================================"
+}
+
+# ============================================
+# 安装 CLI 管理命令
+# ============================================
+
+install_cli() {
+    step "安装 proxy-panel 管理命令..."
+    # 将脚本自身复制到 /usr/local/bin/proxy-panel
+    local script_path
+    script_path=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")
+    cp "$script_path" /usr/local/bin/proxy-panel
+    chmod +x /usr/local/bin/proxy-panel
+    info "已安装 proxy-panel 命令，可直接使用: proxy-panel status / restart / logs 等"
 }
 
 # ============================================
@@ -943,6 +957,7 @@ do_install() {
     download_xray
     download_singbox
     download_panel
+    install_cli
     setup_systemd
     setup_firewall
     start_services
@@ -1297,7 +1312,7 @@ show_help() {
     echo ""
     echo "ProxyPanel 管理脚本"
     echo ""
-    echo "用法: $0 <命令> [参数]"
+    echo "用法: proxy-panel <命令> [参数]"
     echo ""
     echo "命令:"
     echo "  install     完整安装 ProxyPanel"
@@ -1334,11 +1349,11 @@ main() {
             show_help ;;
         "")
             show_help
-            echo -e "${YELLOW}提示: 首次安装请执行: $0 install${NC}"
+            echo -e "${YELLOW}提示: 首次安装请执行: proxy-panel install${NC}"
             echo ""
             ;;
         *)
-            error "未知命令: $1\n用法: $0 {install|update|uninstall|status|restart|logs|reset-pwd|backup|restore|cert|help}"
+            error "未知命令: $1\n用法: proxy-panel {install|update|uninstall|status|restart|logs|reset-pwd|backup|restore|cert|help}"
             ;;
     esac
 }
