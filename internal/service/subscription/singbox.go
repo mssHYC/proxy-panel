@@ -12,58 +12,56 @@ import (
 type SingboxGenerator struct{}
 
 func (g *SingboxGenerator) Generate(nodes []model.Node, user *model.User, baseURL string) (string, string, error) {
-	var outbounds []map[string]interface{}
-	var tags []string
+	var nodeOutbounds []map[string]interface{}
+	var nodeNames []string
 
 	// 生成每个节点的 outbound
 	for _, node := range nodes {
 		ob := g.buildOutbound(node, user)
 		if ob != nil {
-			outbounds = append(outbounds, ob)
-			tags = append(tags, node.Name)
+			nodeOutbounds = append(nodeOutbounds, ob)
+			nodeNames = append(nodeNames, node.Name)
 		}
 	}
 
-	// selector outbound
-	selectorOutbounds := make([]string, 0, len(tags)+1)
-	selectorOutbounds = append(selectorOutbounds, tags...)
-	selectorOutbounds = append(selectorOutbounds, "direct")
-	selector := map[string]interface{}{
-		"type":      "selector",
-		"tag":       "proxy",
-		"outbounds": selectorOutbounds,
-	}
+	// 构建代理组 outbounds
+	groupOutbounds := g.buildProxyGroups(nodeNames)
 
-	// urltest outbound
-	urltest := map[string]interface{}{
-		"type":      "urltest",
-		"tag":       "auto",
-		"outbounds": tags,
-		"url":       "http://www.gstatic.com/generate_204",
-		"interval":  "5m",
-	}
-
-	// 系统 outbound
+	// 系统 outbounds
 	directOb := map[string]interface{}{"type": "direct", "tag": "direct"}
 	blockOb := map[string]interface{}{"type": "block", "tag": "block"}
 	dnsOb := map[string]interface{}{"type": "dns", "tag": "dns-out"}
 
-	// 组装完整 outbounds：selector + urltest + 节点 + 系统
-	allOutbounds := []map[string]interface{}{selector, urltest}
-	allOutbounds = append(allOutbounds, outbounds...)
+	// 组装完整 outbounds：代理组 + 节点 + 系统
+	allOutbounds := make([]map[string]interface{}, 0, len(groupOutbounds)+len(nodeOutbounds)+3)
+	allOutbounds = append(allOutbounds, groupOutbounds...)
+	allOutbounds = append(allOutbounds, nodeOutbounds...)
 	allOutbounds = append(allOutbounds, directOb, blockOb, dnsOb)
 
-	// 路由规则
-	route := map[string]interface{}{
-		"rules": []map[string]interface{}{
-			{"protocol": "dns", "outbound": "dns-out"},
-			{"geoip": []string{"cn"}, "outbound": "direct"},
-			{"geosite": []string{"cn"}, "outbound": "direct"},
+	// DNS 配置
+	dns := map[string]interface{}{
+		"servers": []map[string]interface{}{
+			{"tag": "dns-remote", "address": "https://1.1.1.1/dns-query", "detour": "全球代理"},
+			{"tag": "dns-direct", "address": "https://223.5.5.5/dns-query", "detour": "direct"},
+			{"tag": "dns-block", "address": "rcode://success"},
 		},
-		"final": "proxy",
+		"rules": []map[string]interface{}{
+			{"geosite": []string{"cn"}, "server": "dns-direct"},
+			{"geosite": []string{"category-ads-all"}, "server": "dns-block", "disable_cache": true},
+		},
+	}
+
+	// 路由规则
+	routeRules := g.buildRouteRules()
+
+	route := map[string]interface{}{
+		"rules":                routeRules,
+		"final":                "漏网之鱼",
+		"auto_detect_interface": true,
 	}
 
 	config := map[string]interface{}{
+		"dns":       dns,
 		"outbounds": allOutbounds,
 		"route":     route,
 	}
@@ -74,6 +72,238 @@ func (g *SingboxGenerator) Generate(nodes []model.Node, user *model.User, baseUR
 	}
 
 	return string(data), "application/json; charset=utf-8", nil
+}
+
+// buildProxyGroups 构建所有代理组
+func (g *SingboxGenerator) buildProxyGroups(nodeNames []string) []map[string]interface{} {
+	groups := []map[string]interface{}{
+		// 手动切换
+		{
+			"type":      "selector",
+			"tag":       "手动切换",
+			"outbounds": append(copyNames(nodeNames)),
+		},
+		// 自动选择
+		{
+			"type":      "urltest",
+			"tag":       "自动选择",
+			"outbounds": append(copyNames(nodeNames)),
+			"url":       "http://www.gstatic.com/generate_204",
+			"interval":  "5m",
+		},
+		// 全球代理
+		{
+			"type":      "selector",
+			"tag":       "全球代理",
+			"outbounds": concat([]string{"手动切换", "自动选择"}, nodeNames),
+		},
+		// 流媒体
+		{
+			"type":      "selector",
+			"tag":       "流媒体",
+			"outbounds": concat([]string{"手动切换", "自动选择", "direct"}, nodeNames),
+		},
+		// Telegram
+		{
+			"type":      "selector",
+			"tag":       "Telegram",
+			"outbounds": concat([]string{"手动切换", "自动选择"}, nodeNames),
+		},
+		// Google
+		{
+			"type":      "selector",
+			"tag":       "Google",
+			"outbounds": concat3([]string{"手动切换", "自动选择"}, nodeNames, []string{"direct"}),
+		},
+		// YouTube
+		{
+			"type":      "selector",
+			"tag":       "YouTube",
+			"outbounds": concat([]string{"手动切换", "自动选择"}, nodeNames),
+		},
+		// Netflix
+		{
+			"type":      "selector",
+			"tag":       "Netflix",
+			"outbounds": concat([]string{"流媒体", "手动切换", "自动选择"}, nodeNames),
+		},
+		// Spotify
+		{
+			"type":      "selector",
+			"tag":       "Spotify",
+			"outbounds": concat3([]string{"流媒体", "手动切换", "自动选择"}, []string{"direct"}, nodeNames),
+		},
+		// HBO
+		{
+			"type":      "selector",
+			"tag":       "HBO",
+			"outbounds": concat([]string{"流媒体", "手动切换", "自动选择"}, nodeNames),
+		},
+		// Disney
+		{
+			"type":      "selector",
+			"tag":       "Disney",
+			"outbounds": concat([]string{"流媒体", "手动切换", "自动选择"}, nodeNames),
+		},
+		// Bing
+		{
+			"type":      "selector",
+			"tag":       "Bing",
+			"outbounds": concat([]string{"手动切换", "自动选择"}, nodeNames),
+		},
+		// OpenAI
+		{
+			"type":      "selector",
+			"tag":       "OpenAI",
+			"outbounds": concat([]string{"手动切换", "自动选择"}, nodeNames),
+		},
+		// ClaudeAI
+		{
+			"type":      "selector",
+			"tag":       "ClaudeAI",
+			"outbounds": concat([]string{"手动切换", "自动选择"}, nodeNames),
+		},
+		// GitHub
+		{
+			"type":      "selector",
+			"tag":       "GitHub",
+			"outbounds": concat3([]string{"手动切换", "自动选择"}, nodeNames, []string{"direct"}),
+		},
+		// 国内媒体
+		{
+			"type":      "selector",
+			"tag":       "国内媒体",
+			"outbounds": concat([]string{"direct"}, nodeNames),
+		},
+		// 本地直连
+		{
+			"type":      "selector",
+			"tag":       "本地直连",
+			"outbounds": concat([]string{"direct", "自动选择"}, nodeNames),
+		},
+		// 漏网之鱼
+		{
+			"type":      "selector",
+			"tag":       "漏网之鱼",
+			"outbounds": concat([]string{"direct", "手动切换", "自动选择"}, nodeNames),
+		},
+	}
+	return groups
+}
+
+// buildRouteRules 构建路由规则
+func (g *SingboxGenerator) buildRouteRules() []map[string]interface{} {
+	var rules []map[string]interface{}
+
+	// 自定义规则
+	customRules := GetCustomRules()
+	for _, rule := range customRules {
+		rule = strings.TrimSpace(rule)
+		if rule == "" {
+			continue
+		}
+		// 尝试解析自定义规则为 sing-box 格式
+		r := parseSingboxCustomRule(rule)
+		if r != nil {
+			rules = append(rules, r)
+		}
+	}
+
+	// DNS 劫持
+	rules = append(rules, map[string]interface{}{
+		"protocol": "dns",
+		"outbound": "dns-out",
+	})
+
+	// 默认规则
+	defaultRules := []struct {
+		geosite  []string
+		geoip    []string
+		outbound string
+	}{
+		{geosite: []string{"youtube"}, outbound: "YouTube"},
+		{geosite: []string{"google"}, outbound: "Google"},
+		{geosite: []string{"github"}, outbound: "GitHub"},
+		{geoip: []string{"telegram"}, outbound: "Telegram"},
+		{geosite: []string{"telegram"}, outbound: "Telegram"},
+		{geosite: []string{"spotify"}, outbound: "Spotify"},
+		{geosite: []string{"netflix"}, outbound: "Netflix"},
+		{geosite: []string{"hbo"}, outbound: "HBO"},
+		{geosite: []string{"bing"}, outbound: "Bing"},
+		{geosite: []string{"openai"}, outbound: "OpenAI"},
+		{geosite: []string{"disney"}, outbound: "Disney"},
+		{geosite: []string{"geolocation-!cn"}, outbound: "全球代理"},
+		{geoip: []string{"cn"}, outbound: "本地直连"},
+		{geosite: []string{"cn"}, outbound: "本地直连"},
+	}
+
+	for _, dr := range defaultRules {
+		r := map[string]interface{}{
+			"outbound": dr.outbound,
+		}
+		if len(dr.geosite) > 0 {
+			r["geosite"] = dr.geosite
+		}
+		if len(dr.geoip) > 0 {
+			r["geoip"] = dr.geoip
+		}
+		rules = append(rules, r)
+	}
+
+	return rules
+}
+
+// parseSingboxCustomRule 尝试将自定义规则转换为 sing-box 路由规则
+// 支持简单的 Clash/Surge 格式规则，如 DOMAIN,example.com,Proxy
+func parseSingboxCustomRule(rule string) map[string]interface{} {
+	parts := strings.SplitN(rule, ",", 3)
+	if len(parts) < 3 {
+		return nil
+	}
+	ruleType := strings.TrimSpace(parts[0])
+	value := strings.TrimSpace(parts[1])
+	outbound := strings.TrimSpace(parts[2])
+
+	switch strings.ToUpper(ruleType) {
+	case "DOMAIN":
+		return map[string]interface{}{"domain": []string{value}, "outbound": outbound}
+	case "DOMAIN-SUFFIX":
+		return map[string]interface{}{"domain_suffix": []string{value}, "outbound": outbound}
+	case "DOMAIN-KEYWORD":
+		return map[string]interface{}{"domain_keyword": []string{value}, "outbound": outbound}
+	case "IP-CIDR", "IP-CIDR6":
+		return map[string]interface{}{"ip_cidr": []string{value}, "outbound": outbound}
+	case "GEOIP":
+		return map[string]interface{}{"geoip": []string{strings.ToLower(value)}, "outbound": outbound}
+	case "GEOSITE":
+		return map[string]interface{}{"geosite": []string{strings.ToLower(value)}, "outbound": outbound}
+	default:
+		return nil
+	}
+}
+
+// copyNames 返回 names 的副本
+func copyNames(names []string) []string {
+	result := make([]string, len(names))
+	copy(result, names)
+	return result
+}
+
+// concat 合并 prefix 和 names
+func concat(prefix []string, names []string) []string {
+	result := make([]string, 0, len(prefix)+len(names))
+	result = append(result, prefix...)
+	result = append(result, names...)
+	return result
+}
+
+// concat3 合并三组字符串
+func concat3(a, b, c []string) []string {
+	result := make([]string, 0, len(a)+len(b)+len(c))
+	result = append(result, a...)
+	result = append(result, b...)
+	result = append(result, c...)
+	return result
 }
 
 func (g *SingboxGenerator) buildOutbound(node model.Node, user *model.User) map[string]interface{} {
@@ -97,11 +327,11 @@ func (g *SingboxGenerator) buildOutbound(node model.Node, user *model.User) map[
 
 func (g *SingboxGenerator) buildVLESS(node model.Node, user *model.User, s nodeSettings) map[string]interface{} {
 	ob := map[string]interface{}{
-		"type":       "vless",
-		"tag":        node.Name,
-		"server":     node.Host,
+		"type":        "vless",
+		"tag":         node.Name,
+		"server":      node.Host,
 		"server_port": node.Port,
-		"uuid":       user.UUID,
+		"uuid":        user.UUID,
 	}
 	if s.Flow != "" {
 		ob["flow"] = s.Flow
@@ -141,13 +371,13 @@ func (g *SingboxGenerator) buildVLESS(node model.Node, user *model.User, s nodeS
 
 func (g *SingboxGenerator) buildVMess(node model.Node, user *model.User, s nodeSettings) map[string]interface{} {
 	ob := map[string]interface{}{
-		"type":       "vmess",
-		"tag":        node.Name,
-		"server":     node.Host,
+		"type":        "vmess",
+		"tag":         node.Name,
+		"server":      node.Host,
 		"server_port": node.Port,
-		"uuid":       user.UUID,
-		"alter_id":   0,
-		"security":   "auto",
+		"uuid":        user.UUID,
+		"alter_id":    0,
+		"security":    "auto",
 	}
 
 	if s.TLS {
@@ -166,11 +396,11 @@ func (g *SingboxGenerator) buildVMess(node model.Node, user *model.User, s nodeS
 
 func (g *SingboxGenerator) buildTrojan(node model.Node, user *model.User, s nodeSettings) map[string]interface{} {
 	ob := map[string]interface{}{
-		"type":       "trojan",
-		"tag":        node.Name,
-		"server":     node.Host,
+		"type":        "trojan",
+		"tag":         node.Name,
+		"server":      node.Host,
 		"server_port": node.Port,
-		"password":   user.UUID,
+		"password":    user.UUID,
 	}
 
 	tls := map[string]interface{}{
@@ -198,12 +428,12 @@ func (g *SingboxGenerator) buildShadowsocks(node model.Node, user *model.User, s
 		password = user.UUID
 	}
 	return map[string]interface{}{
-		"type":       "shadowsocks",
-		"tag":        node.Name,
-		"server":     node.Host,
+		"type":        "shadowsocks",
+		"tag":         node.Name,
+		"server":      node.Host,
 		"server_port": node.Port,
-		"method":     method,
-		"password":   password,
+		"method":      method,
+		"password":    password,
 	}
 }
 
@@ -213,11 +443,11 @@ func (g *SingboxGenerator) buildHysteria2(node model.Node, user *model.User, s n
 		password = user.UUID
 	}
 	ob := map[string]interface{}{
-		"type":       "hysteria2",
-		"tag":        node.Name,
-		"server":     node.Host,
+		"type":        "hysteria2",
+		"tag":         node.Name,
+		"server":      node.Host,
 		"server_port": node.Port,
-		"password":   password,
+		"password":    password,
 	}
 
 	tls := map[string]interface{}{
