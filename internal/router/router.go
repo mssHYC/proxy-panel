@@ -31,8 +31,9 @@ func Setup(cfg *config.Config, db *database.DB) *gin.Engine {
 	api := r.Group("/api")
 	{
 		api.POST("/auth/login", rateLimiter.LoginRateLimit(), authHandler.Login)
-		// 订阅端点 (后续 task 注册)
-		_ = subLimiter
+		// 订阅端点
+		subHandler := handler.NewSubscriptionHandler(userSvc, nodeSvc)
+		api.GET("/sub/:uuid", subLimiter.Limit(), subHandler.Subscribe)
 		// 需要认证的端点
 		auth := api.Group("", JWTAuth(cfg.Auth.JWTSecret))
 		{
