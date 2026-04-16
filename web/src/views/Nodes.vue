@@ -335,9 +335,13 @@ const fingerprints = ['chrome', 'firefox', 'safari', 'edge', 'ios', 'android', '
 
 // 填充系统证书路径
 function fillSystemCert() {
-  const domain = form.sni || 'example.com'
-  form.cert_path = `/opt/proxy-panel/certs/${domain}.crt`
-  form.key_path = `/opt/proxy-panel/certs/${domain}.key`
+  if (!form.sni) {
+    ElMessage.warning('请先填写 SNI 域名')
+    return
+  }
+  form.cert_path = `/opt/proxy-panel/certs/${form.sni}.crt`
+  form.key_path = `/opt/proxy-panel/certs/${form.sni}.key`
+  ElMessage.success('已填充证书路径')
 }
 
 // ---- 计算属性 ----
