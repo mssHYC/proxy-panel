@@ -125,3 +125,14 @@ func (h *UserHandler) ResetTraffic(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"message": "流量已重置"})
 }
+
+// ResetUUID 重置用户 UUID
+func (h *UserHandler) ResetUUID(c *gin.Context) {
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	newUUID, err := h.svc.ResetUUID(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "code": "ERR_INTERNAL"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"uuid": newUUID, "message": "UUID 已重置"})
+}

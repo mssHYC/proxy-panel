@@ -110,7 +110,16 @@ func (s *Scheduler) Start() {
 		})
 	}
 
-	// 4. 用户过期检查（每天 08:00）
+	// 4. 流量日志清理（每天 03:00）
+	s.cron.AddFunc("0 3 * * *", func() {
+		if err := s.trafficSvc.CleanupLogs(); err != nil {
+			log.Printf("[调度器] 流量日志清理失败: %v", err)
+		} else {
+			log.Println("[调度器] 流量日志清理完成")
+		}
+	})
+
+	// 5. 用户过期检查（每天 08:00）
 	s.cron.AddFunc("0 8 * * *", func() {
 		now := time.Now()
 

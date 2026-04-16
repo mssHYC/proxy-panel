@@ -222,6 +222,28 @@ func (s *TrafficService) GetHistory(days int) ([]map[string]interface{}, error) 
 	return result, rows.Err()
 }
 
+// CleanupLogs 清理过期流量日志 (7天内保留原始, 7-90天按日聚合, 90天以上删除)
+func (s *TrafficService) CleanupLogs() error {
+	// 删除 90 天以上的日志
+	_, err := s.db.Exec("DELETE FROM traffic_logs WHERE timestamp < datetime('now', '-90 days')")
+	if err != nil {
+		return fmt.Errorf("清理90天以上日志失败: %w", err)
+	}
+	// 删除 7-90 天内的非聚合日志（保留每天第一条作为聚合代表）
+	_, err = s.db.Exec(`DELETE FROM traffic_logs WHERE timestamp < datetime('now', '-7 days')
+		AND timestamp >= datetime('now', '-90 days')
+		AND id NOT IN (
+			SELECT MIN(id) FROM traffic_logs
+			WHERE timestamp < datetime('now', '-7 days')
+			AND timestamp >= datetime('now', '-90 days')
+			GROUP BY user_id, DATE(timestamp)
+		)`)
+	if err != nil {
+		return fmt.Errorf("聚合7-90天日志失败: %w", err)
+	}
+	return nil
+}
+
 // formatBytes 格式化字节数为可读字符串
 func formatBytes(b int64) string {
 	const (

@@ -60,6 +60,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 			auth.PUT("/users/:id", userHandler.Update)
 			auth.DELETE("/users/:id", userHandler.Delete)
 			auth.POST("/users/:id/reset-traffic", userHandler.ResetTraffic)
+			auth.POST("/users/:id/reset-uuid", userHandler.ResetUUID)
 
 			// 节点管理
 			auth.GET("/nodes", nodeHandler.List)
