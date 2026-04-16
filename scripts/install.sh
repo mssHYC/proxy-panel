@@ -253,7 +253,7 @@ setup_tls() {
                 sleep 1
             fi
 
-            ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 || {
+            ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --standalone --keylength ec-256 --force || {
                 warn "证书申请失败！可能原因:"
                 warn "  - 域名未正确解析到本机 IP"
                 warn "  - 80 端口被占用 (nginx/apache)"
@@ -300,13 +300,13 @@ setup_tls() {
 
             if [[ "$DOMAIN" == \** ]]; then
                 # 通配符证书: *.example.com + example.com
-                ~/.acme.sh/acme.sh --issue -d "$MAIN_DOMAIN" -d "$DOMAIN" --dns dns_cf --keylength ec-256 || {
+                ~/.acme.sh/acme.sh --issue -d "$MAIN_DOMAIN" -d "$DOMAIN" --dns dns_cf --keylength ec-256 --force || {
                     warn "证书申请失败，请检查 API Token 权限和域名是否在 Cloudflare"
                     return 0
                 }
                 DOMAIN="$MAIN_DOMAIN"
             else
-                ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_cf --keylength ec-256 || {
+                ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_cf --keylength ec-256 --force || {
                     warn "证书申请失败，请检查 API Token 权限"
                     return 0
                 }
@@ -343,7 +343,7 @@ setup_tls() {
             export DP_Id="$DP_ID"
             export DP_Key="$DP_KEY"
 
-            ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_dp --keylength ec-256 || {
+            ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_dp --keylength ec-256 --force || {
                 warn "证书申请失败，请检查 API Token 和域名是否托管在 DNSPod"
                 return 0
             }
@@ -379,7 +379,7 @@ setup_tls() {
             export Ali_Key="$ALI_KEY"
             export Ali_Secret="$ALI_SECRET"
 
-            ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_ali --keylength ec-256 || {
+            ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_ali --keylength ec-256 --force || {
                 warn "证书申请失败，请检查 AccessKey 和域名是否托管在阿里云"
                 return 0
             }

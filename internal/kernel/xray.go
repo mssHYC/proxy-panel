@@ -399,8 +399,13 @@ func (e *XrayEngine) buildStreamSettings(node NodeConfig) map[string]interface{}
 		}
 		stream["tlsSettings"] = tlsSettings
 	case "reality":
+		dest := getSettingStrAny(node.Settings, "", "dest")
+		// Xray 要求 dest 包含端口，如 "www.tesla.com:443"
+		if dest != "" && !strings.Contains(dest, ":") {
+			dest = dest + ":443"
+		}
 		stream["realitySettings"] = map[string]interface{}{
-			"dest":        getSettingStrAny(node.Settings, "", "dest"),
+			"dest":        dest,
 			"serverNames": getSettingSliceAny(node.Settings, "server_names", "serverNames"),
 			"privateKey":  getSettingStrAny(node.Settings, "", "private_key", "privateKey"),
 			"shortIds":    getSettingSliceAny(node.Settings, "short_ids", "shortIds"),
