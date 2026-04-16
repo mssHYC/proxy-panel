@@ -30,9 +30,9 @@ func main() {
 
 	// 初始化内核 Manager
 	mgr := kernel.NewManager()
-	xrayEngine := kernel.NewXrayEngine(cfg.Kernel.XrayConfig, cfg.Kernel.XrayAPIPort)
+	xrayEngine := kernel.NewXrayEngine(cfg.Kernel.XrayPath, cfg.Kernel.XrayConfig, cfg.Kernel.XrayAPIPort)
 	mgr.Register(xrayEngine)
-	singboxEngine := kernel.NewSingboxEngine(cfg.Kernel.SingboxConfig)
+	singboxEngine := kernel.NewSingboxEngine(cfg.Kernel.SingboxPath, cfg.Kernel.SingboxConfig)
 	mgr.Register(singboxEngine)
 
 	// 初始化 Services

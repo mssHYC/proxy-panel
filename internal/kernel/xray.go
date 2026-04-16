@@ -11,34 +11,71 @@ import (
 
 // XrayEngine Xray 内核引擎
 type XrayEngine struct {
+	binaryPath string
 	configPath string
 	apiPort    int
+	cmd        *exec.Cmd
 }
 
 // NewXrayEngine 创建 Xray 引擎实例
-func NewXrayEngine(configPath string, apiPort int) *XrayEngine {
-	return &XrayEngine{configPath: configPath, apiPort: apiPort}
+func NewXrayEngine(binaryPath, configPath string, apiPort int) *XrayEngine {
+	return &XrayEngine{binaryPath: binaryPath, configPath: configPath, apiPort: apiPort}
 }
 
 func (e *XrayEngine) Name() string {
 	return "xray"
 }
 
+// hasSystemctl 检测是否有 systemctl (Linux)
+func hasSystemctl() bool {
+	_, err := exec.LookPath("systemctl")
+	return err == nil
+}
+
 func (e *XrayEngine) Start() error {
-	return exec.Command("systemctl", "start", "xray").Run()
+	if hasSystemctl() {
+		return exec.Command("systemctl", "start", "xray").Run()
+	}
+	// 本地开发模式：直接启动进程
+	if e.IsRunning() {
+		return nil
+	}
+	binary, err := exec.LookPath(e.binaryPath)
+	if err != nil {
+		return fmt.Errorf("未找到 xray 二进制: %s", e.binaryPath)
+	}
+	e.cmd = exec.Command(binary, "run", "-config", e.configPath)
+	e.cmd.Stdout = os.Stdout
+	e.cmd.Stderr = os.Stderr
+	return e.cmd.Start()
 }
 
 func (e *XrayEngine) Stop() error {
-	return exec.Command("systemctl", "stop", "xray").Run()
+	if hasSystemctl() {
+		return exec.Command("systemctl", "stop", "xray").Run()
+	}
+	if e.cmd != nil && e.cmd.Process != nil {
+		err := e.cmd.Process.Kill()
+		e.cmd = nil
+		return err
+	}
+	return nil
 }
 
 func (e *XrayEngine) Restart() error {
-	return exec.Command("systemctl", "restart", "xray").Run()
+	if hasSystemctl() {
+		return exec.Command("systemctl", "restart", "xray").Run()
+	}
+	e.Stop()
+	return e.Start()
 }
 
 func (e *XrayEngine) IsRunning() bool {
-	err := exec.Command("systemctl", "is-active", "--quiet", "xray").Run()
-	return err == nil
+	if hasSystemctl() {
+		err := exec.Command("systemctl", "is-active", "--quiet", "xray").Run()
+		return err == nil
+	}
+	return e.cmd != nil && e.cmd.Process != nil && e.cmd.ProcessState == nil
 }
 
 // xrayStatEntry xray api statsquery 返回的单条统计

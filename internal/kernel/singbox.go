@@ -2,18 +2,21 @@ package kernel
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 )
 
 // SingboxEngine sing-box 内核引擎 (v1.0 基础框架，v1.1 完善)
 type SingboxEngine struct {
+	binaryPath string
 	configPath string
+	cmd        *exec.Cmd
 }
 
 // NewSingboxEngine 创建 sing-box 引擎实例
-func NewSingboxEngine(configPath string) *SingboxEngine {
-	return &SingboxEngine{configPath: configPath}
+func NewSingboxEngine(binaryPath, configPath string) *SingboxEngine {
+	return &SingboxEngine{binaryPath: binaryPath, configPath: configPath}
 }
 
 func (e *SingboxEngine) Name() string {
@@ -21,20 +24,48 @@ func (e *SingboxEngine) Name() string {
 }
 
 func (e *SingboxEngine) Start() error {
-	return exec.Command("systemctl", "start", "sing-box").Run()
+	if hasSystemctl() {
+		return exec.Command("systemctl", "start", "sing-box").Run()
+	}
+	if e.IsRunning() {
+		return nil
+	}
+	binary, err := exec.LookPath(e.binaryPath)
+	if err != nil {
+		return fmt.Errorf("未找到 sing-box 二进制: %s", e.binaryPath)
+	}
+	e.cmd = exec.Command(binary, "run", "-c", e.configPath)
+	e.cmd.Stdout = os.Stdout
+	e.cmd.Stderr = os.Stderr
+	return e.cmd.Start()
 }
 
 func (e *SingboxEngine) Stop() error {
-	return exec.Command("systemctl", "stop", "sing-box").Run()
+	if hasSystemctl() {
+		return exec.Command("systemctl", "stop", "sing-box").Run()
+	}
+	if e.cmd != nil && e.cmd.Process != nil {
+		err := e.cmd.Process.Kill()
+		e.cmd = nil
+		return err
+	}
+	return nil
 }
 
 func (e *SingboxEngine) Restart() error {
-	return exec.Command("systemctl", "restart", "sing-box").Run()
+	if hasSystemctl() {
+		return exec.Command("systemctl", "restart", "sing-box").Run()
+	}
+	e.Stop()
+	return e.Start()
 }
 
 func (e *SingboxEngine) IsRunning() bool {
-	err := exec.Command("systemctl", "is-active", "--quiet", "sing-box").Run()
-	return err == nil
+	if hasSystemctl() {
+		err := exec.Command("systemctl", "is-active", "--quiet", "sing-box").Run()
+		return err == nil
+	}
+	return e.cmd != nil && e.cmd.Process != nil && e.cmd.ProcessState == nil
 }
 
 // GetTrafficStats v1.0 返回空 map，v1.1 实现
