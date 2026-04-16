@@ -17,3 +17,5 @@ web/dist/
 .PRD.md
 .TECH_DESIGN.md
 docs/
+
+.claude/
