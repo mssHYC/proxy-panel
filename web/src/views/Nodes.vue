@@ -189,10 +189,30 @@
               </el-select>
             </el-form-item>
             <el-form-item label="证书文件路径">
-              <el-input v-model="form.cert_path" placeholder="如: /opt/proxy-panel/certs/domain.crt" />
+              <div class="flex gap-2 w-full">
+                <el-input v-model="form.cert_path" placeholder="如: /opt/proxy-panel/certs/domain.crt" />
+                <el-dropdown trigger="click" @command="fillCertPath">
+                  <el-button>引用<el-icon class="ml-1"><ArrowDown /></el-icon></el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item v-for="c in systemCerts" :key="c.label" :command="c.cert">{{ c.label }}</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
             </el-form-item>
             <el-form-item label="私钥文件路径">
-              <el-input v-model="form.key_path" placeholder="如: /opt/proxy-panel/certs/domain.key" />
+              <div class="flex gap-2 w-full">
+                <el-input v-model="form.key_path" placeholder="如: /opt/proxy-panel/certs/domain.key" />
+                <el-dropdown trigger="click" @command="fillKeyPath">
+                  <el-button>引用<el-icon class="ml-1"><ArrowDown /></el-icon></el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item v-for="c in systemCerts" :key="c.label" :command="c.key">{{ c.label }}</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
             </el-form-item>
             <el-form-item label="跳过证书验证">
               <el-switch v-model="form.allow_insecure" />
@@ -238,10 +258,30 @@
             <el-input v-model="form.sni" placeholder="可选" />
           </el-form-item>
           <el-form-item label="证书文件路径">
-            <el-input v-model="form.cert_path" placeholder="自签证书路径，如: /opt/proxy-panel/certs/hy2.crt" />
+            <div class="flex gap-2 w-full">
+              <el-input v-model="form.cert_path" placeholder="如: /opt/proxy-panel/certs/hy2.crt" />
+              <el-dropdown trigger="click" @command="fillCertPath">
+                <el-button>引用<el-icon class="ml-1"><ArrowDown /></el-icon></el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item v-for="c in systemCerts" :key="c.label" :command="c.cert">{{ c.label }}</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
           </el-form-item>
           <el-form-item label="私钥文件路径">
-            <el-input v-model="form.key_path" placeholder="如: /opt/proxy-panel/certs/hy2.key" />
+            <div class="flex gap-2 w-full">
+              <el-input v-model="form.key_path" placeholder="如: /opt/proxy-panel/certs/hy2.key" />
+              <el-dropdown trigger="click" @command="fillKeyPath">
+                <el-button>引用<el-icon class="ml-1"><ArrowDown /></el-icon></el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item v-for="c in systemCerts" :key="c.label" :command="c.key">{{ c.label }}</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </div>
           </el-form-item>
           <el-form-item label="混淆类型">
             <el-select v-model="form.hy2_obfs_type" style="width:100%" clearable>
@@ -320,6 +360,20 @@ const ssMethods = [
 ]
 
 const fingerprints = ['chrome', 'firefox', 'safari', 'edge', 'ios', 'android', 'random', 'randomized']
+
+// 系统预设证书路径
+const systemCerts = [
+  { label: 'acme.sh 签发证书', cert: '/opt/proxy-panel/certs/${domain}.crt', key: '/opt/proxy-panel/certs/${domain}.key' },
+  { label: 'Cloudflare Origin', cert: '/opt/proxy-panel/certs/origin.crt', key: '/opt/proxy-panel/certs/origin.key' },
+  { label: 'Hysteria2 自签证书', cert: '/opt/proxy-panel/certs/hy2.crt', key: '/opt/proxy-panel/certs/hy2.key' },
+]
+
+function fillCertPath(path: string) {
+  form.cert_path = path.replace('${domain}', form.sni || 'example.com')
+}
+function fillKeyPath(path: string) {
+  form.key_path = path.replace('${domain}', form.sni || 'example.com')
+}
 
 // ---- 计算属性 ----
 const availableTransports = computed(() => protocolTransportMap[form.protocol] || [])
