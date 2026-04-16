@@ -14,7 +14,8 @@ import (
 // Setup 初始化路由，注册所有端点
 func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	userSvc *service.UserService, nodeSvc *service.NodeService,
-	trafficSvc *service.TrafficService, notifySvc *notify.NotifyService) *gin.Engine {
+	trafficSvc *service.TrafficService, notifySvc *notify.NotifyService,
+	authSvc *service.AuthService) *gin.Engine {
 
 	r := gin.Default()
 
@@ -27,7 +28,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	})
 
 	// 初始化 Handlers
-	authHandler := handler.NewAuthHandler(cfg)
+	authHandler := handler.NewAuthHandler(cfg, authSvc)
 	userHandler := handler.NewUserHandler(userSvc)
 	nodeHandler := handler.NewNodeHandler(nodeSvc)
 	dashboardHandler := handler.NewDashboardHandler(userSvc, nodeSvc, trafficSvc, mgr, db)
@@ -45,6 +46,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	{
 		// 公开端点
 		api.POST("/auth/login", rateLimiter.LoginRateLimit(), authHandler.Login)
+		api.POST("/auth/2fa/verify", rateLimiter.LoginRateLimit(), authHandler.Verify2FA)
 		api.GET("/sub/:uuid", subLimiter.Limit(), subHandler.Subscribe)
 
 		// 需要认证的端点
@@ -81,6 +83,14 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 			// 系统设置
 			auth.GET("/settings", settingHandler.Get)
 			auth.PUT("/settings", settingHandler.Update)
+
+			// 账号管理
+			auth.PUT("/auth/password", authHandler.ChangePassword)
+			auth.PUT("/auth/username", authHandler.ChangeUsername)
+			auth.GET("/auth/2fa/status", authHandler.Get2FAStatus)
+			auth.POST("/auth/2fa/setup", authHandler.Setup2FA)
+			auth.POST("/auth/2fa/enable", authHandler.Enable2FA)
+			auth.POST("/auth/2fa/disable", authHandler.Disable2FA)
 
 			// 通知测试
 			auth.POST("/notify/test", notifyHandler.Test)

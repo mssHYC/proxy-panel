@@ -36,6 +36,7 @@ func main() {
 	mgr.Register(singboxEngine)
 
 	// 初始化 Services
+	authSvc := service.NewAuthService(db, cfg)
 	userSvc := service.NewUserService(db)
 	nodeSvc := service.NewNodeService(db)
 	trafficSvc := service.NewTrafficService(db, mgr)
@@ -54,7 +55,7 @@ func main() {
 	defer scheduler.Stop()
 
 	// 设置路由
-	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc)
+	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	log.Printf("ProxyPanel 启动成功，监听 %s", addr)
