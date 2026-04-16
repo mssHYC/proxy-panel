@@ -119,8 +119,20 @@ download_panel() {
 
 download_xray() {
     step "下载 Xray..."
-    local version="v25.1.30"  # 锁定版本
-    local url="https://github.com/XTLS/Xray-core/releases/download/${version}/Xray-linux-${ARCH}.zip"
+    local version
+    version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+    [[ -z "$version" ]] && version="v26.3.27"
+    info "Xray 版本: $version"
+
+    # Xray 使用 64/arm64-v8a 等命名
+    local xray_arch
+    case "$ARCH" in
+        amd64) xray_arch="64" ;;
+        arm64) xray_arch="arm64-v8a" ;;
+        armv7) xray_arch="arm32-v7a" ;;
+        *)     xray_arch="$ARCH" ;;
+    esac
+    local url="https://github.com/XTLS/Xray-core/releases/download/${version}/Xray-linux-${xray_arch}.zip"
 
     mkdir -p /usr/local/bin
     wget -q --show-progress -O /tmp/xray.zip "$url" || error "下载 Xray 失败"
@@ -133,7 +145,10 @@ download_xray() {
 
 download_singbox() {
     step "下载 Sing-box..."
-    local version="1.11.8"
+    local version
+    version=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')
+    [[ -z "$version" ]] && version="1.13.8"
+    info "Sing-box 版本: $version"
     local url="https://github.com/SagerNet/sing-box/releases/download/v${version}/sing-box-${version}-linux-${ARCH}.tar.gz"
 
     wget -q --show-progress -O /tmp/singbox.tar.gz "$url" || {
