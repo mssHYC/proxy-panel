@@ -69,14 +69,16 @@ func (h *SubscriptionHandler) Subscribe(c *gin.Context) {
 	// 构建 baseURL
 	baseURL := fmt.Sprintf("%s://%s", scheme(c), c.Request.Host)
 
-	// 加载自定义规则
-	var customRulesStr string
+	// 加载自定义规则和模式
+	var customRulesStr, customRulesMode string
 	h.db.QueryRow("SELECT value FROM settings WHERE key = 'custom_rules'").Scan(&customRulesStr)
+	h.db.QueryRow("SELECT value FROM settings WHERE key = 'custom_rules_mode'").Scan(&customRulesMode)
 	if customRulesStr != "" {
 		subscription.SetCustomRules(strings.Split(customRulesStr, "\n"))
 	} else {
 		subscription.SetCustomRules(nil)
 	}
+	subscription.SetCustomRulesMode(customRulesMode)
 
 	// 生成订阅内容
 	gen := subscription.GetGenerator(format)

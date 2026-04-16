@@ -81,35 +81,44 @@ func (g *SurgeGenerator) Generate(nodes []model.Node, user *model.User, baseURL 
 	// [Rule]
 	b.WriteString("[Rule]\n")
 
-	// 自定义规则
-	rules := GetCustomRules()
-	if len(rules) > 0 {
-		b.WriteString("# 自定义规则\n")
-		for _, rule := range rules {
+	if IsOverrideMode() {
+		// 完全使用自定义规则
+		for _, rule := range GetCustomRules() {
 			rule = strings.TrimSpace(rule)
-			if rule != "" {
+			if rule != "" && !strings.HasPrefix(rule, "#") {
 				b.WriteString(rule + "\n")
 			}
 		}
+	} else {
+		// 自定义规则优先
+		rules := GetCustomRules()
+		if len(rules) > 0 {
+			b.WriteString("# 自定义规则\n")
+			for _, rule := range rules {
+				rule = strings.TrimSpace(rule)
+				if rule != "" {
+					b.WriteString(rule + "\n")
+				}
+			}
+		}
+		// 默认规则
+		b.WriteString("# 默认规则\n")
+		b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/YouTube/YouTube.list,YouTube\n")
+		b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Google/Google.list,Google\n")
+		b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/GitHub/GitHub.list,GitHub\n")
+		b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Telegram/Telegram.list,Telegram\n")
+		b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Spotify/Spotify.list,Spotify\n")
+		b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Netflix/Netflix.list,Netflix\n")
+		b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/HBO/HBO.list,HBO\n")
+		b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Bing/Bing.list,Bing\n")
+		b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/OpenAI/OpenAI.list,OpenAI\n")
+		b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Claude/Claude.list,ClaudeAI\n")
+		b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Disney/Disney.list,Disney\n")
+		b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Global/Global_All_No_Resolve.list,全球代理\n")
+		b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/ChinaMax/ChinaMax_No_Resolve.list,本地直连\n")
+		b.WriteString("GEOIP,CN,本地直连\n")
+		b.WriteString("FINAL,漏网之鱼\n")
 	}
-
-	// 默认规则
-	b.WriteString("# 默认规则\n")
-	b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/YouTube/YouTube.list,YouTube\n")
-	b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Google/Google.list,Google\n")
-	b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/GitHub/GitHub.list,GitHub\n")
-	b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Telegram/Telegram.list,Telegram\n")
-	b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Spotify/Spotify.list,Spotify\n")
-	b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Netflix/Netflix.list,Netflix\n")
-	b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/HBO/HBO.list,HBO\n")
-	b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Bing/Bing.list,Bing\n")
-	b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/OpenAI/OpenAI.list,OpenAI\n")
-	b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Claude/Claude.list,ClaudeAI\n")
-	b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Disney/Disney.list,Disney\n")
-	b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/Global/Global_All_No_Resolve.list,全球代理\n")
-	b.WriteString("RULE-SET,https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Surge/ChinaMax/ChinaMax_No_Resolve.list,本地直连\n")
-	b.WriteString("GEOIP,CN,本地直连\n")
-	b.WriteString("FINAL,漏网之鱼\n")
 
 	return b.String(), "text/plain; charset=utf-8", nil
 }

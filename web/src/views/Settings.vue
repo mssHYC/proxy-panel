@@ -153,17 +153,34 @@
           <el-tag type="info" size="small">优先于默认规则执行</el-tag>
         </div>
       </template>
+      <el-form label-width="100px" class="mb-4">
+        <el-form-item label="规则模式">
+          <el-radio-group v-model="customRulesMode">
+            <el-radio value="prepend">追加模式<span class="text-xs text-gray-400 ml-1">（自定义规则 + 默认规则）</span></el-radio>
+            <el-radio value="override">完全自定义<span class="text-xs text-gray-400 ml-1">（仅使用下方规则，忽略默认规则）</span></el-radio>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
       <el-alert
+        v-if="customRulesMode === 'override'"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="mb-4"
+        description="完全自定义模式：默认的分流规则和 rule-provider 将不会生成，所有分流逻辑完全由下方规则控制。"
+      />
+      <el-alert
+        v-else
         type="info"
         :closable="false"
         show-icon
         class="mb-4"
-        description="每行一条规则，支持 Clash 格式。自定义规则会插入到默认规则之前，优先匹配。Surge 和 Sing-box 订阅也会同步应用。"
+        description="追加模式：下方的自定义规则会插入到默认规则之前优先匹配，Clash / Surge / Sing-box 订阅同步生效。"
       />
       <el-input
         v-model="customRulesText"
         type="textarea"
-        :rows="8"
+        :rows="10"
         placeholder="示例:
 DOMAIN-SUFFIX,example.com,全球代理
 DOMAIN-KEYWORD,openai,OpenAI
@@ -228,6 +245,7 @@ const settings = ref({
 const warnPercent = ref(80)
 const collectInterval = ref(60)
 const customRulesText = ref('')
+const customRulesMode = ref('prepend')
 
 // 修改用户名
 const handleChangeUsername = async () => {
@@ -379,6 +397,7 @@ const fetchSettings = async () => {
     warnPercent.value = parseInt(map.warn_percent) || 80
     collectInterval.value = parseInt(map.collect_interval) || 60
     customRulesText.value = map.custom_rules || ''
+    customRulesMode.value = map.custom_rules_mode || 'prepend'
   } catch (e) {
     console.error('获取设置失败', e)
   } finally {
@@ -396,6 +415,7 @@ const handleSave = async () => {
       warn_percent: String(warnPercent.value),
       collect_interval: String(collectInterval.value),
       custom_rules: customRulesText.value,
+      custom_rules_mode: customRulesMode.value,
     }
     await updateSettings(data)
     ElMessage.success('设置保存成功')

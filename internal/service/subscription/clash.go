@@ -165,7 +165,8 @@ dns:
 	}
 	b.WriteString("\n")
 
-	// === rule-providers ===
+	// === rule-providers (override 模式下跳过) ===
+	if !IsOverrideMode() {
 	b.WriteString(`rule-providers:
   lan:
     type: http
@@ -289,18 +290,27 @@ dns:
     path: ./Rules/ChinaMaxIPNoIPv6.yaml
 
 `)
+	} // end if !IsOverrideMode() for rule-providers
 
 	// === rules ===
 	b.WriteString("rules:\n")
-	// 自定义规则优先
-	for _, rule := range customRules {
-		rule = strings.TrimSpace(rule)
-		if rule != "" && !strings.HasPrefix(rule, "#") {
-			b.WriteString(fmt.Sprintf("  - %s\n", rule))
+	if IsOverrideMode() {
+		// 完全使用自定义规则
+		for _, rule := range customRules {
+			rule = strings.TrimSpace(rule)
+			if rule != "" && !strings.HasPrefix(rule, "#") {
+				b.WriteString(fmt.Sprintf("  - %s\n", rule))
+			}
 		}
-	}
-	// 默认规则
-	b.WriteString(`  - RULE-SET,YouTube,YouTube,no-resolve
+	} else {
+		// 自定义规则优先，然后是默认规则
+		for _, rule := range customRules {
+			rule = strings.TrimSpace(rule)
+			if rule != "" && !strings.HasPrefix(rule, "#") {
+				b.WriteString(fmt.Sprintf("  - %s\n", rule))
+			}
+		}
+		b.WriteString(`  - RULE-SET,YouTube,YouTube,no-resolve
   - RULE-SET,Google,Google,no-resolve
   - RULE-SET,GitHub,GitHub
   - RULE-SET,telegramcidr,Telegram,no-resolve
@@ -320,6 +330,7 @@ dns:
   - GEOIP,CN,本地直连
   - MATCH,漏网之鱼
 `)
+	}
 
 	return b.String(), "text/yaml; charset=utf-8", nil
 }

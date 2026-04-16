@@ -215,39 +215,41 @@ func (g *SingboxGenerator) buildRouteRules() []map[string]interface{} {
 		"outbound": "dns-out",
 	})
 
-	// 默认规则
-	defaultRules := []struct {
-		geosite  []string
-		geoip    []string
-		outbound string
-	}{
-		{geosite: []string{"youtube"}, outbound: "YouTube"},
-		{geosite: []string{"google"}, outbound: "Google"},
-		{geosite: []string{"github"}, outbound: "GitHub"},
-		{geoip: []string{"telegram"}, outbound: "Telegram"},
-		{geosite: []string{"telegram"}, outbound: "Telegram"},
-		{geosite: []string{"spotify"}, outbound: "Spotify"},
-		{geosite: []string{"netflix"}, outbound: "Netflix"},
-		{geosite: []string{"hbo"}, outbound: "HBO"},
-		{geosite: []string{"bing"}, outbound: "Bing"},
-		{geosite: []string{"openai"}, outbound: "OpenAI"},
-		{geosite: []string{"disney"}, outbound: "Disney"},
-		{geosite: []string{"geolocation-!cn"}, outbound: "全球代理"},
-		{geoip: []string{"cn"}, outbound: "本地直连"},
-		{geosite: []string{"cn"}, outbound: "本地直连"},
-	}
+	// override 模式下跳过默认规则
+	if !IsOverrideMode() {
+		defaultRules := []struct {
+			geosite  []string
+			geoip    []string
+			outbound string
+		}{
+			{geosite: []string{"youtube"}, outbound: "YouTube"},
+			{geosite: []string{"google"}, outbound: "Google"},
+			{geosite: []string{"github"}, outbound: "GitHub"},
+			{geoip: []string{"telegram"}, outbound: "Telegram"},
+			{geosite: []string{"telegram"}, outbound: "Telegram"},
+			{geosite: []string{"spotify"}, outbound: "Spotify"},
+			{geosite: []string{"netflix"}, outbound: "Netflix"},
+			{geosite: []string{"hbo"}, outbound: "HBO"},
+			{geosite: []string{"bing"}, outbound: "Bing"},
+			{geosite: []string{"openai"}, outbound: "OpenAI"},
+			{geosite: []string{"disney"}, outbound: "Disney"},
+			{geosite: []string{"geolocation-!cn"}, outbound: "全球代理"},
+			{geoip: []string{"cn"}, outbound: "本地直连"},
+			{geosite: []string{"cn"}, outbound: "本地直连"},
+		}
 
-	for _, dr := range defaultRules {
-		r := map[string]interface{}{
-			"outbound": dr.outbound,
+		for _, dr := range defaultRules {
+			r := map[string]interface{}{
+				"outbound": dr.outbound,
+			}
+			if len(dr.geosite) > 0 {
+				r["geosite"] = dr.geosite
+			}
+			if len(dr.geoip) > 0 {
+				r["geoip"] = dr.geoip
+			}
+			rules = append(rules, r)
 		}
-		if len(dr.geosite) > 0 {
-			r["geosite"] = dr.geosite
-		}
-		if len(dr.geoip) > 0 {
-			r["geoip"] = dr.geoip
-		}
-		rules = append(rules, r)
 	}
 
 	return rules
