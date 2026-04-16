@@ -18,11 +18,12 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 
 	r := gin.Default()
 
-	// 静态文件
-	r.Static("/assets", "./web/assets")
-	r.StaticFile("/", "./web/index.html")
+	// 静态文件 (优先使用 web/dist，兼容部署目录 web/)
+	r.Static("/assets", "./web/dist/assets")
+	r.StaticFile("/favicon.svg", "./web/dist/favicon.svg")
+	r.StaticFile("/", "./web/dist/index.html")
 	r.NoRoute(func(c *gin.Context) {
-		c.File("./web/index.html")
+		c.File("./web/dist/index.html")
 	})
 
 	// 初始化 Handlers
