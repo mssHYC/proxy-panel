@@ -34,7 +34,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	dashboardHandler := handler.NewDashboardHandler(userSvc, nodeSvc, trafficSvc, mgr, db)
 	kernelHandler := handler.NewKernelHandler(mgr)
 	trafficHandler := handler.NewTrafficHandler(trafficSvc)
-	settingHandler := handler.NewSettingHandler(db)
+	settingHandler := handler.NewSettingHandler(db, cfg)
 	notifyHandler := handler.NewNotifyHandler(notifySvc)
 	subHandler := handler.NewSubscriptionHandler(userSvc, nodeSvc, db)
 

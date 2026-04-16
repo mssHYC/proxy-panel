@@ -2,6 +2,8 @@ package handler
 
 import (
 	"net/http"
+
+	"proxy-panel/internal/config"
 	"proxy-panel/internal/database"
 
 	"github.com/gin-gonic/gin"
@@ -9,12 +11,13 @@ import (
 
 // SettingHandler 系统设置处理器
 type SettingHandler struct {
-	db *database.DB
+	db  *database.DB
+	cfg *config.Config
 }
 
 // NewSettingHandler 创建设置处理器
-func NewSettingHandler(db *database.DB) *SettingHandler {
-	return &SettingHandler{db: db}
+func NewSettingHandler(db *database.DB, cfg *config.Config) *SettingHandler {
+	return &SettingHandler{db: db, cfg: cfg}
 }
 
 // Get 获取所有设置
@@ -31,6 +34,9 @@ func (h *SettingHandler) Get(c *gin.Context) {
 		rows.Scan(&key, &value)
 		settings[key] = value
 	}
+	// 附带系统证书路径 (来自 config.yaml，install.sh 安装时生成)
+	settings["system_cert_path"] = h.cfg.Server.Cert
+	settings["system_key_path"] = h.cfg.Server.Key
 	c.JSON(http.StatusOK, settings)
 }
 

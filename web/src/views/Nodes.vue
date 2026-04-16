@@ -283,6 +283,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { getNodes, createNode, updateNode, deleteNode } from '../api/node'
+import { getSettings } from '../api/setting'
 
 // ---- 状态 ----
 const loading = ref(false)
@@ -333,15 +334,27 @@ const ssMethods = [
 
 const fingerprints = ['chrome', 'firefox', 'safari', 'edge', 'ios', 'android', 'random', 'randomized']
 
-// 填充系统证书路径
+// 系统证书路径 (从 settings API 加载，来自 install.sh 安装时生成的 config.yaml)
+const systemCertPath = ref('')
+const systemKeyPath = ref('')
+
+async function loadSystemCertPaths() {
+  try {
+    const { data } = await getSettings()
+    const map: Record<string, string> = typeof data === 'object' && !Array.isArray(data) ? data : {}
+    systemCertPath.value = map.system_cert_path || ''
+    systemKeyPath.value = map.system_key_path || ''
+  } catch { /* ignore */ }
+}
+
 function fillSystemCert() {
-  if (!form.sni) {
-    ElMessage.warning('请先填写 SNI 域名')
+  if (!systemCertPath.value || !systemKeyPath.value) {
+    ElMessage.warning('系统未配置 TLS 证书，请在 config.yaml 或安装脚本中设置')
     return
   }
-  form.cert_path = `/opt/proxy-panel/certs/${form.sni}.crt`
-  form.key_path = `/opt/proxy-panel/certs/${form.sni}.key`
-  ElMessage.success('已填充证书路径')
+  form.cert_path = systemCertPath.value
+  form.key_path = systemKeyPath.value
+  ElMessage.success('已填充系统证书路径')
 }
 
 // ---- 计算属性 ----
@@ -584,5 +597,8 @@ const handleDelete = async (id: number) => {
   catch (e: any) { ElMessage.error(e.response?.data?.error || '删除失败') }
 }
 
-onMounted(fetchNodes)
+onMounted(() => {
+  fetchNodes()
+  loadSystemCertPaths()
+})
 </script>
