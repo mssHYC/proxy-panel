@@ -28,7 +28,7 @@
 ### 一键部署 (Linux VPS)
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/mssHYC/proxy-panel/main/scripts/install.sh)
+curl -fsSL https://raw.githubusercontent.com/mssHYC/proxy-panel/main/scripts/install.sh | bash
 ```
 
 脚本会自动完成：系统检测 → 依赖安装 → 下载内核 → 交互配置 → 启动服务。
