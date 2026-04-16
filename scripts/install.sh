@@ -534,9 +534,9 @@ cert_setup() {
         info "config.yaml 已更新"
     fi
 
-    # 重启服务
-    info "重启面板..."
-    systemctl restart ${SERVICE_NAME} 2>/dev/null || true
+    # 重启所有服务使证书生效
+    stop_all_services
+    start_services
     info "✅ 证书设置完成"
 }
 
@@ -873,6 +873,18 @@ setup_firewall() {
 }
 
 # ============================================
+# 停止所有服务
+# ============================================
+
+stop_all_services() {
+    step "停止所有服务..."
+    systemctl stop ${SERVICE_NAME} 2>/dev/null || true
+    systemctl stop ${XRAY_SERVICE} 2>/dev/null || true
+    systemctl stop ${SINGBOX_SERVICE} 2>/dev/null || true
+    info "所有服务已停止"
+}
+
+# ============================================
 # 启动服务
 # ============================================
 
@@ -952,6 +964,7 @@ do_install() {
     if [[ -f "${INSTALL_DIR}/proxy-panel" ]]; then
         warn "检测到已安装 ProxyPanel"
         if confirm "是否覆盖安装? (配置和数据将保留)"; then
+            stop_all_services
             info "开始覆盖安装..."
         else
             info "取消安装"
@@ -991,21 +1004,19 @@ do_update() {
     info "升级前自动备份..."
     do_backup
 
-    # 停止面板服务
-    systemctl stop ${SERVICE_NAME} 2>/dev/null || true
+    # 停止所有服务
+    stop_all_services
 
     # 下载新版本
     download_panel
 
     # 可选: 更新 Xray
     if confirm "是否同时更新 Xray?"; then
-        systemctl stop ${XRAY_SERVICE} 2>/dev/null || true
         download_xray
     fi
 
     # 可选: 更新 Sing-box
     if confirm "是否同时更新 Sing-box?"; then
-        systemctl stop ${SINGBOX_SERVICE} 2>/dev/null || true
         download_singbox
     fi
 
