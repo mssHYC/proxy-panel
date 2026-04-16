@@ -45,10 +45,13 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
 	})
 
+	// 初始化内核同步服务
+	syncSvc := service.NewKernelSyncService(db, mgr)
+
 	// 初始化 Handlers
 	authHandler := handler.NewAuthHandler(cfg, authSvc)
-	userHandler := handler.NewUserHandler(userSvc)
-	nodeHandler := handler.NewNodeHandler(nodeSvc)
+	userHandler := handler.NewUserHandler(userSvc, syncSvc)
+	nodeHandler := handler.NewNodeHandler(nodeSvc, syncSvc)
 	dashboardHandler := handler.NewDashboardHandler(userSvc, nodeSvc, trafficSvc, mgr, db)
 	kernelHandler := handler.NewKernelHandler(mgr)
 	trafficHandler := handler.NewTrafficHandler(trafficSvc)

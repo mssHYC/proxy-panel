@@ -54,6 +54,12 @@ func main() {
 	scheduler.Start()
 	defer scheduler.Stop()
 
+	// 启动时同步内核配置（确保 Xray/Sing-box 配置与数据库一致）
+	syncSvc := service.NewKernelSyncService(db, mgr)
+	if err := syncSvc.Sync(); err != nil {
+		log.Printf("启动时同步内核配置失败: %v", err)
+	}
+
 	// 设置路由
 	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc)
 

@@ -11,12 +11,13 @@ import (
 
 // UserHandler 用户管理处理器
 type UserHandler struct {
-	svc *service.UserService
+	svc     *service.UserService
+	syncSvc *service.KernelSyncService
 }
 
 // NewUserHandler 创建用户处理器
-func NewUserHandler(svc *service.UserService) *UserHandler {
-	return &UserHandler{svc: svc}
+func NewUserHandler(svc *service.UserService, syncSvc *service.KernelSyncService) *UserHandler {
+	return &UserHandler{svc: svc, syncSvc: syncSvc}
 }
 
 // List 获取用户列表
@@ -64,6 +65,7 @@ func (h *UserHandler) Create(c *gin.Context) {
 		return
 	}
 
+	go h.syncSvc.Sync()
 	c.JSON(http.StatusCreated, user)
 }
 
@@ -91,6 +93,7 @@ func (h *UserHandler) Update(c *gin.Context) {
 		return
 	}
 
+	go h.syncSvc.Sync()
 	c.JSON(http.StatusOK, user)
 }
 
@@ -107,6 +110,7 @@ func (h *UserHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	go h.syncSvc.Sync()
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }
 
@@ -134,5 +138,6 @@ func (h *UserHandler) ResetUUID(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "code": "ERR_INTERNAL"})
 		return
 	}
+	go h.syncSvc.Sync()
 	c.JSON(http.StatusOK, gin.H{"uuid": newUUID, "message": "UUID 已重置"})
 }

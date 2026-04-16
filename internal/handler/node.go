@@ -16,12 +16,13 @@ import (
 
 // NodeHandler 节点管理处理器
 type NodeHandler struct {
-	svc *service.NodeService
+	svc     *service.NodeService
+	syncSvc *service.KernelSyncService
 }
 
 // NewNodeHandler 创建节点处理器
-func NewNodeHandler(svc *service.NodeService) *NodeHandler {
-	return &NodeHandler{svc: svc}
+func NewNodeHandler(svc *service.NodeService, syncSvc *service.KernelSyncService) *NodeHandler {
+	return &NodeHandler{svc: svc, syncSvc: syncSvc}
 }
 
 // List 获取节点列表
@@ -69,6 +70,9 @@ func (h *NodeHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// 同步内核配置
+	go h.syncSvc.Sync()
+
 	c.JSON(http.StatusCreated, node)
 }
 
@@ -95,6 +99,9 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "节点不存在"})
 		return
 	}
+
+	// 同步内核配置
+	go h.syncSvc.Sync()
 
 	c.JSON(http.StatusOK, node)
 }
@@ -147,6 +154,9 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+
+	// 同步内核配置
+	go h.syncSvc.Sync()
 
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }
