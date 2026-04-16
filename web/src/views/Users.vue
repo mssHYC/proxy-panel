@@ -212,13 +212,7 @@ async function fetchUsers() {
   loading.value = true
   try {
     const res = await getUsers()
-    users.value = res.data ?? res.data?.data ?? []
-    // 兼容不同返回格式
-    if (Array.isArray(res.data)) {
-      users.value = res.data
-    } else if (res.data?.data && Array.isArray(res.data.data)) {
-      users.value = res.data.data
-    }
+    users.value = res.data?.users ?? []
   } catch {
     ElMessage.error('加载用户列表失败')
   } finally {
