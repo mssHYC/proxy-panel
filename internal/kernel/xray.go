@@ -412,7 +412,7 @@ func (e *XrayEngine) buildStreamSettings(node NodeConfig) map[string]interface{}
 
 // WriteConfig 将配置写入文件
 func (e *XrayEngine) WriteConfig(data []byte) error {
-	return os.WriteFile(e.configPath, data, 0644)
+	return os.WriteFile(e.configPath, data, 0600)
 }
 
 // getSettingStr 从 Settings 中安全获取字符串值

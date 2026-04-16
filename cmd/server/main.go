@@ -58,7 +58,14 @@ func main() {
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	log.Printf("ProxyPanel 启动成功，监听 %s", addr)
-	if err := r.Run(addr); err != nil {
-		log.Fatalf("服务器启动失败: %v", err)
+	if cfg.Server.TLS && cfg.Server.Cert != "" && cfg.Server.Key != "" {
+		log.Printf("TLS 已启用，证书: %s", cfg.Server.Cert)
+		if err := r.RunTLS(addr, cfg.Server.Cert, cfg.Server.Key); err != nil {
+			log.Fatalf("服务器启动失败: %v", err)
+		}
+	} else {
+		if err := r.Run(addr); err != nil {
+			log.Fatalf("服务器启动失败: %v", err)
+		}
 	}
 }

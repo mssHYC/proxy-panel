@@ -90,5 +90,5 @@ func (e *SingboxEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) (
 
 // WriteConfig 将配置写入文件
 func (e *SingboxEngine) WriteConfig(data []byte) error {
-	return os.WriteFile(e.configPath, data, 0644)
+	return os.WriteFile(e.configPath, data, 0600)
 }

@@ -52,14 +52,14 @@ func NewUserService(db *database.DB) *UserService {
 func (s *UserService) getNodeIDs(userID int64) ([]int64, error) {
 	rows, err := s.db.Query("SELECT node_id FROM user_nodes WHERE user_id = ?", userID)
 	if err != nil {
-		return nil, err
+		return []int64{}, err
 	}
 	defer rows.Close()
-	var ids []int64
+	ids := make([]int64, 0) // 空切片序列化为 [] 而非 null
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
-			return nil, err
+			return ids, err
 		}
 		ids = append(ids, id)
 	}

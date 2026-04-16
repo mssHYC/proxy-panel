@@ -17,7 +17,7 @@ type DB struct {
 // Open 打开 SQLite 数据库并启用 WAL 模式
 func Open(path string) (*DB, error) {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("创建数据目录失败: %w", err)
 	}
 
@@ -28,6 +28,10 @@ func Open(path string) (*DB, error) {
 
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("数据库连接失败: %w", err)
+	}
+
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		return nil, fmt.Errorf("启用外键约束失败: %w", err)
 	}
 
 	d := &DB{db}
