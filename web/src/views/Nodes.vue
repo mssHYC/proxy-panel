@@ -273,6 +273,14 @@
           <el-form-item v-if="form.hy2_obfs_type" label="混淆密码">
             <el-input v-model="form.hy2_obfs_password" placeholder="混淆密码" />
           </el-form-item>
+          <el-form-item label="最大上行 (Mbps)">
+            <el-input-number v-model="form.hy2_max_up_mbps" :min="0" :max="20" controls-position="right" />
+            <span class="ml-2 text-xs text-gray-400">0 = 不限速；节点总带宽上限，多用户共享</span>
+          </el-form-item>
+          <el-form-item label="最大下行 (Mbps)">
+            <el-input-number v-model="form.hy2_max_down_mbps" :min="0" :max="20" controls-position="right" />
+            <span class="ml-2 text-xs text-gray-400">0 = 不限速</span>
+          </el-form-item>
           <el-form-item label="跳过证书验证">
             <el-switch v-model="form.allow_insecure" />
             <span class="ml-2 text-xs text-gray-400">客户端侧</span>
@@ -428,6 +436,8 @@ const defaultForm = () => ({
   // Hysteria2
   hy2_obfs_type: '',
   hy2_obfs_password: '',
+  hy2_max_up_mbps: 10,
+  hy2_max_down_mbps: 10,
 })
 const form = reactive(defaultForm())
 
@@ -502,6 +512,8 @@ function formToSettings(): string {
     if (form.cert_path) s.cert_path = form.cert_path
     if (form.key_path) s.key_path = form.key_path
     if (form.hy2_obfs_type) { s.obfs = form.hy2_obfs_type; s.obfs_password = form.hy2_obfs_password }
+    s.max_up_mbps = Number(form.hy2_max_up_mbps) || 0
+    s.max_down_mbps = Number(form.hy2_max_down_mbps) || 0
     if (form.allow_insecure) s.skip_cert_verify = true
   }
 
@@ -547,6 +559,8 @@ function settingsToForm(settingsStr: string) {
   form.ss_method = s.method || 'aes-256-gcm'
   form.hy2_obfs_type = s.obfs || ''
   form.hy2_obfs_password = s.obfs_password || ''
+  form.hy2_max_up_mbps = typeof s.max_up_mbps === 'number' ? s.max_up_mbps : 10
+  form.hy2_max_down_mbps = typeof s.max_down_mbps === 'number' ? s.max_down_mbps : 10
 }
 
 // ---- 表格辅助 ----
