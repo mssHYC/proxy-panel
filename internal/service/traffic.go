@@ -29,6 +29,10 @@ func (s *TrafficService) Collect() error {
 	}
 
 	now := time.Now()
+	// modernc.org/sqlite 直接写入 time.Time 时会带上 Go 的 monotonic 尾巴
+	// （形如 "2026-04-17 02:04:08 +0000 UTC m=+59.590863369"），SQLite 的
+	// DATE()/strftime() 无法解析，趋势图会拿不到数据。统一格式化成标准字符串。
+	tsStr := now.UTC().Format("2006-01-02 15:04:05")
 	for email, traffic := range stats {
 		if traffic.Upload == 0 && traffic.Download == 0 {
 			continue
@@ -49,7 +53,7 @@ func (s *TrafficService) Collect() error {
 			traffic_down = traffic_down + ?,
 			updated_at = ?
 			WHERE id = ?`,
-			traffic.Upload+traffic.Download, traffic.Upload, traffic.Download, now, userID)
+			traffic.Upload+traffic.Download, traffic.Upload, traffic.Download, tsStr, userID)
 		if err != nil {
 			log.Printf("更新用户流量失败 id=%d: %v", userID, err)
 			continue
@@ -57,7 +61,7 @@ func (s *TrafficService) Collect() error {
 
 		// 插入流量日志
 		_, err = s.db.Exec(`INSERT INTO traffic_logs (user_id, node_id, upload, download, timestamp)
-			VALUES (?, 0, ?, ?, ?)`, userID, traffic.Upload, traffic.Download, now)
+			VALUES (?, 0, ?, ?, ?)`, userID, traffic.Upload, traffic.Download, tsStr)
 		if err != nil {
 			log.Printf("插入流量日志失败 id=%d: %v", userID, err)
 		}
