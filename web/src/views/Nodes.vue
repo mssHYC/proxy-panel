@@ -279,7 +279,7 @@
           </el-form-item>
           <el-form-item label="最大下行 (Mbps)">
             <el-input-number v-model="form.hy2_max_down_mbps" :min="0" :max="20" controls-position="right" />
-            <span class="ml-2 text-xs text-gray-400">0 = 不限速</span>
+            <span class="ml-2 text-xs text-gray-400">0 = 不限速；节点总带宽上限，多用户共享</span>
           </el-form-item>
           <el-form-item label="跳过证书验证">
             <el-switch v-model="form.allow_insecure" />
@@ -559,8 +559,10 @@ function settingsToForm(settingsStr: string) {
   form.ss_method = s.method || 'aes-256-gcm'
   form.hy2_obfs_type = s.obfs || ''
   form.hy2_obfs_password = s.obfs_password || ''
-  form.hy2_max_up_mbps = typeof s.max_up_mbps === 'number' ? s.max_up_mbps : 10
-  form.hy2_max_down_mbps = typeof s.max_down_mbps === 'number' ? s.max_down_mbps : 10
+  const upFromSettings = Number(s.max_up_mbps)
+  form.hy2_max_up_mbps = Number.isFinite(upFromSettings) ? upFromSettings : 10
+  const downFromSettings = Number(s.max_down_mbps)
+  form.hy2_max_down_mbps = Number.isFinite(downFromSettings) ? downFromSettings : 10
 }
 
 // ---- 表格辅助 ----
