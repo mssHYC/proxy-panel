@@ -348,8 +348,8 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 		if s.Flow != "" {
 			b.WriteString(fmt.Sprintf("    flow: %s\n", s.Flow))
 		}
-		if node.Transport != "" && node.Transport != "tcp" {
-			b.WriteString(fmt.Sprintf("    network: %s\n", node.Transport))
+		if n := clashNetworkName(node.Transport); n != "" && n != "tcp" {
+			b.WriteString(fmt.Sprintf("    network: %s\n", n))
 		}
 		// Reality 配置
 		if s.Security == "reality" {
@@ -379,8 +379,8 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 		b.WriteString(fmt.Sprintf("    uuid: %s\n", user.UUID))
 		b.WriteString("    alterId: 0\n")
 		b.WriteString("    cipher: auto\n")
-		if node.Transport != "" && node.Transport != "tcp" {
-			b.WriteString(fmt.Sprintf("    network: %s\n", node.Transport))
+		if n := clashNetworkName(node.Transport); n != "" && n != "tcp" {
+			b.WriteString(fmt.Sprintf("    network: %s\n", n))
 		}
 		if s.TLS {
 			b.WriteString("    tls: true\n")
@@ -402,8 +402,8 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 		if s.AllowInsecure {
 			b.WriteString("    skip-cert-verify: true\n")
 		}
-		if node.Transport != "" && node.Transport != "tcp" {
-			b.WriteString(fmt.Sprintf("    network: %s\n", node.Transport))
+		if n := clashNetworkName(node.Transport); n != "" && n != "tcp" {
+			b.WriteString(fmt.Sprintf("    network: %s\n", n))
 		}
 		g.writeTransportOpts(&b, node, s)
 
@@ -450,6 +450,16 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 	return b.String()
 }
 
+// clashNetworkName 将内部 transport 映射为 Clash YAML 的 network 字段值。
+// 原生 `network: httpupgrade` 较新，Clash Verge 等客户端支持不完整，
+// 统一输出为 `network: ws` + `ws-opts.v2ray-http-upgrade: true` 的兼容写法。
+func clashNetworkName(transport string) string {
+	if transport == "httpupgrade" {
+		return "ws"
+	}
+	return transport
+}
+
 // writeTransportOpts 写入传输层配置 (ws/grpc/httpupgrade)
 func (g *ClashGenerator) writeTransportOpts(b *strings.Builder, node model.Node, s nodeSettings) {
 	switch node.Transport {
@@ -468,13 +478,15 @@ func (g *ClashGenerator) writeTransportOpts(b *strings.Builder, node model.Node,
 			b.WriteString(fmt.Sprintf("      grpc-service-name: %s\n", s.ServiceName))
 		}
 	case "httpupgrade":
-		// mihomo 的 httpupgrade 复用 ws-opts 字段承载 path 与 Host 头
+		// 兼容写法：ws + v2ray-http-upgrade: true。mihomo/Clash Verge 的 ws-opts
+		// 同一结构承载 path/Host，再加 v2ray-http-upgrade 字段切换为 HTTPUpgrade 语义。
 		b.WriteString("    ws-opts:\n")
 		path := s.Path
 		if path == "" {
 			path = "/"
 		}
 		b.WriteString(fmt.Sprintf("      path: %s\n", path))
+		b.WriteString("      v2ray-http-upgrade: true\n")
 		host := s.Host
 		if host == "" {
 			host = node.Host
