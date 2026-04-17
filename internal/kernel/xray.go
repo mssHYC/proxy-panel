@@ -470,3 +470,30 @@ func getSettingSliceAny(m map[string]interface{}, keys ...string) []string {
 	}
 	return nil
 }
+
+// getSettingInt 从 Settings 中安全获取整数值，兼容 JSON 解析产生的 float64/int/string
+func getSettingInt(m map[string]interface{}, key string, defaultVal int) int {
+	if m == nil {
+		return defaultVal
+	}
+	v, ok := m[key]
+	if !ok {
+		return defaultVal
+	}
+	switch val := v.(type) {
+	case int:
+		return val
+	case int64:
+		return int(val)
+	case float64:
+		return int(val)
+	case string:
+		if val == "" {
+			return defaultVal
+		}
+		if n, err := strconv.Atoi(val); err == nil {
+			return n
+		}
+	}
+	return defaultVal
+}
