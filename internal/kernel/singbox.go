@@ -260,6 +260,15 @@ func (e *SingboxEngine) buildInbound(node NodeConfig, users []UserConfig) map[st
 			"users":       userList,
 		}
 
+		// 带宽上限：节点级 max_up_mbps/max_down_mbps → sing-box inbound up_mbps/down_mbps
+		// （单用户场景的用户级 speed_limit 融合逻辑在 Task 3 里追加）
+		if upMbps := getSettingInt(s, "max_up_mbps", 0); upMbps > 0 {
+			inbound["up_mbps"] = upMbps
+		}
+		if downMbps := getSettingInt(s, "max_down_mbps", 0); downMbps > 0 {
+			inbound["down_mbps"] = downMbps
+		}
+
 		// TLS 配置
 		certPath := getSettingStr(s, "cert_path", "")
 		keyPath := getSettingStr(s, "key_path", "")
