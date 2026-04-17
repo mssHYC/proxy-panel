@@ -440,16 +440,13 @@ func (g *SingboxGenerator) buildShadowsocks(node model.Node, user *model.User, s
 }
 
 func (g *SingboxGenerator) buildHysteria2(node model.Node, user *model.User, s nodeSettings) map[string]interface{} {
-	password := s.Password
-	if password == "" {
-		password = user.UUID
-	}
+	// sing-box 服务端固定以 user.UUID 作为 hy2 password，订阅必须与之一致
 	ob := map[string]interface{}{
 		"type":        "hysteria2",
 		"tag":         node.Name,
 		"server":      node.Host,
 		"server_port": node.Port,
-		"password":    password,
+		"password":    user.UUID,
 	}
 
 	tls := map[string]interface{}{

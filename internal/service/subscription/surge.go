@@ -29,14 +29,21 @@ func (g *SurgeGenerator) Generate(nodes []model.Node, user *model.User, baseURL 
 	var proxyNames []string
 	for _, node := range nodes {
 		line := g.buildProxyLine(node, user)
-		if line != "" {
-			b.WriteString(line + "\n")
+		if line == "" {
+			continue
+		}
+		b.WriteString(line + "\n")
+		// 注释行（如 VLESS 不被 Surge 原生支持）不算可用节点，避免 Proxy Group 引用不存在的 Proxy
+		if !strings.HasPrefix(strings.TrimSpace(line), "#") {
 			proxyNames = append(proxyNames, node.Name)
 		}
 	}
 	b.WriteString("\n")
 
 	allNames := strings.Join(proxyNames, ", ")
+	if allNames == "" {
+		allNames = "DIRECT"
+	}
 
 	// [Proxy Group]
 	b.WriteString("[Proxy Group]\n")
@@ -170,12 +177,9 @@ func (g *SurgeGenerator) buildProxyLine(node model.Node, user *model.User) strin
 		return fmt.Sprintf("%s = ss, %s, %s, encrypt-method=%s, password=%s", node.Name, node.Host, port, method, password)
 
 	case "hysteria2":
-		password := s.Password
-		if password == "" {
-			password = user.UUID
-		}
+		// sing-box 服务端固定以 user.UUID 作为 hy2 password，订阅必须与之一致
 		parts := []string{
-			fmt.Sprintf("%s = hysteria2, %s, %s, password=%s", node.Name, node.Host, port, password),
+			fmt.Sprintf("%s = hysteria2, %s, %s, password=%s", node.Name, node.Host, port, user.UUID),
 		}
 		if s.SNI != "" {
 			parts = append(parts, fmt.Sprintf("sni=%s", s.SNI))

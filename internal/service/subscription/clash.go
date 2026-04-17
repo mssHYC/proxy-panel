@@ -424,15 +424,12 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 		b.WriteString(fmt.Sprintf("    password: %s\n", password))
 
 	case "hysteria2":
-		password := s.Password
-		if password == "" {
-			password = user.UUID
-		}
+		// sing-box 服务端固定以 user.UUID 作为 hy2 password，订阅必须与之一致
 		b.WriteString(fmt.Sprintf("  - name: %s\n", node.Name))
 		b.WriteString("    type: hysteria2\n")
 		b.WriteString(fmt.Sprintf("    server: %s\n", node.Host))
 		b.WriteString(fmt.Sprintf("    port: %d\n", node.Port))
-		b.WriteString(fmt.Sprintf("    password: %s\n", password))
+		b.WriteString(fmt.Sprintf("    password: %s\n", user.UUID))
 		if s.SNI != "" {
 			b.WriteString(fmt.Sprintf("    sni: %s\n", s.SNI))
 		}

@@ -180,10 +180,8 @@ func buildSSURI(node model.Node, user *model.User, s nodeSettings) string {
 }
 
 func buildHysteria2URI(node model.Node, user *model.User, s nodeSettings) string {
-	password := s.Password
-	if password == "" {
-		password = user.UUID
-	}
+	// sing-box 服务端固定以 user.UUID 作为 hy2 password，订阅必须与之一致
+	password := user.UUID
 	params := url.Values{}
 	if s.SNI != "" {
 		params.Set("sni", s.SNI)
