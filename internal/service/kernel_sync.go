@@ -38,6 +38,7 @@ func (s *KernelSyncService) Sync() error {
 
 	for _, n := range nodes {
 		nc := kernel.NodeConfig{
+			ID:        n.id,
 			Tag:       fmt.Sprintf("node-%d", n.id),
 			Port:      n.port,
 			Protocol:  n.protocol,
@@ -120,21 +121,65 @@ func (s *KernelSyncService) loadNodes() ([]nodeRow, error) {
 	return nodes, rows.Err()
 }
 
+// loadUsers 加载所有启用用户，并按 user_nodes 关联填充每个用户的 NodeIDs。
+//
+// 内核的 buildInbound 会据此只把用户注入到他关联的节点 inbound，严格对齐订阅
+// 侧的 ListByUserID(user_nodes JOIN) 可见性，避免跨协议节点 clients 为 null。
 func (s *KernelSyncService) loadUsers() ([]kernel.UserConfig, error) {
-	rows, err := s.db.Query(`SELECT uuid, username, protocol, speed_limit
+	rows, err := s.db.Query(`SELECT id, uuid, username, protocol, speed_limit
 		FROM users WHERE enable = 1`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var users []kernel.UserConfig
+	type userWithID struct {
+		id   int64
+		conf kernel.UserConfig
+	}
+	var list []userWithID
 	for rows.Next() {
+		var uid int64
 		var u kernel.UserConfig
-		if err := rows.Scan(&u.UUID, &u.Email, &u.Protocol, &u.SpeedLimit); err != nil {
+		if err := rows.Scan(&uid, &u.UUID, &u.Email, &u.Protocol, &u.SpeedLimit); err != nil {
 			return nil, err
 		}
+		list = append(list, userWithID{id: uid, conf: u})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 一次性拉全部 user_nodes 映射，避免 N+1
+	nodeMap, err := s.loadUserNodeMap()
+	if err != nil {
+		return nil, err
+	}
+
+	users := make([]kernel.UserConfig, 0, len(list))
+	for _, item := range list {
+		u := item.conf
+		u.NodeIDs = nodeMap[item.id]
 		users = append(users, u)
 	}
-	return users, rows.Err()
+	return users, nil
+}
+
+// loadUserNodeMap 读出 user_nodes 关联表，返回 user_id → []node_id 的映射
+func (s *KernelSyncService) loadUserNodeMap() (map[int64][]int64, error) {
+	rows, err := s.db.Query(`SELECT user_id, node_id FROM user_nodes`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	m := make(map[int64][]int64)
+	for rows.Next() {
+		var uid, nid int64
+		if err := rows.Scan(&uid, &nid); err != nil {
+			return nil, err
+		}
+		m[uid] = append(m[uid], nid)
+	}
+	return m, rows.Err()
 }

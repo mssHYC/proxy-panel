@@ -287,10 +287,13 @@ func (e *XrayEngine) buildInbound(node NodeConfig, users []UserConfig) map[strin
 		"protocol": node.Protocol,
 	}
 
-	// 构建用户列表
+	// 构建用户列表：只注入通过 user_nodes 关联到本节点的用户。
+	// 历史版本按 u.Protocol == node.Protocol 过滤，但 users 表 protocol 是单值，
+	// 导致用户只能出现在一种协议节点上，其他协议节点 clients=null → 客户端超时。
+	// 改为按节点关联过滤，与订阅侧 ListByUserID 可见性保持一致。
 	var clientList []interface{}
 	for _, u := range users {
-		if u.Protocol != node.Protocol {
+		if !userLinkedToNode(u, node.ID) {
 			continue
 		}
 		client := map[string]interface{}{

@@ -244,12 +244,19 @@ func (e *SingboxEngine) buildInbound(node NodeConfig, users []UserConfig) map[st
 
 	switch node.Protocol {
 	case "hysteria2":
+		// 只注入通过 user_nodes 关联到本节点的用户（与订阅侧 ListByUserID 对齐），
+		// 避免未关联用户的 UUID 也被列进 inbound.users 造成跨节点误用。
 		userList := make([]map[string]interface{}, 0)
+		linkedUsers := make([]UserConfig, 0, len(users))
 		for _, u := range users {
+			if !userLinkedToNode(u, node.ID) {
+				continue
+			}
 			userList = append(userList, map[string]interface{}{
 				"name":     u.Email,
 				"password": u.UUID,
 			})
+			linkedUsers = append(linkedUsers, u)
 		}
 
 		inbound := map[string]interface{}{
@@ -261,11 +268,13 @@ func (e *SingboxEngine) buildInbound(node NodeConfig, users []UserConfig) map[st
 		}
 
 		// 带宽上限：节点级 max_up_mbps/max_down_mbps → sing-box inbound up_mbps/down_mbps
-		// 单用户独享时与用户 speed_limit 取更严格值（sing-box hy2 无 per-user 带宽字段）
+		// 单用户独享时与用户 speed_limit 取更严格值（sing-box hy2 无 per-user 带宽字段）。
+		// 判定依据必须是"真正能用该节点的用户"即 linkedUsers，而非系统全量 users —
+		// 否则多用户系统里别人即便没关联该节点，也会把这里判成多用户从而丢掉 speed_limit。
 		upMbps := getSettingInt(s, "max_up_mbps", 0)
 		downMbps := getSettingInt(s, "max_down_mbps", 0)
-		if len(users) == 1 && users[0].SpeedLimit > 0 {
-			userLim := int(users[0].SpeedLimit)
+		if len(linkedUsers) == 1 && linkedUsers[0].SpeedLimit > 0 {
+			userLim := int(linkedUsers[0].SpeedLimit)
 			if upMbps == 0 || userLim < upMbps {
 				upMbps = userLim
 			}

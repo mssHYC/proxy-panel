@@ -8,6 +8,7 @@ type UserTraffic struct {
 
 // NodeConfig 节点配置
 type NodeConfig struct {
+	ID        int64
 	Tag       string
 	Port      int
 	Protocol  string
@@ -16,11 +17,30 @@ type NodeConfig struct {
 }
 
 // UserConfig 用户配置
+//
+// NodeIDs 为该用户通过 user_nodes 关联的节点 ID 列表。内核生成 inbound.clients 时
+// 只注入 NodeIDs 包含当前节点的用户 —— 这保证了"订阅里能看到的节点"与"服务端认识的
+// 节点"严格一致，避免跨协议节点 clients 为 null 导致客户端 TLS 握手后挂死超时。
 type UserConfig struct {
 	UUID       string
 	Email      string
 	Protocol   string
 	SpeedLimit int64
+	NodeIDs    []int64
+}
+
+// userLinkedToNode 判断用户是否关联了给定节点。
+// nodeID == 0 视为测试桩/未设置关联，此时回退到"接纳全部用户"以保持旧用例可跑。
+func userLinkedToNode(u UserConfig, nodeID int64) bool {
+	if nodeID == 0 {
+		return true
+	}
+	for _, id := range u.NodeIDs {
+		if id == nodeID {
+			return true
+		}
+	}
+	return false
 }
 
 // Engine 内核引擎接口，抽象 Xray / Sing-box 等代理内核的统一操作
