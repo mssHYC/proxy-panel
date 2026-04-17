@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,16 +32,21 @@ type SingboxEngine struct {
 	connMu     sync.Mutex
 	connSnap   map[string]connSnapshot
 	httpClient *http.Client
+	// inboundUser 记录 inbound tag 到唯一用户的映射，用于 sing-box 1.13 clash_api
+	// 不提供 inboundUser 字段时的回退归属（仅当该 inbound 仅登记 1 个用户时写入）
+	inboundUserMu sync.Mutex
+	inboundUser   map[string]string
 }
 
 // NewSingboxEngine 创建 sing-box 引擎实例
 func NewSingboxEngine(binaryPath, configPath string, apiPort int) *SingboxEngine {
 	return &SingboxEngine{
-		binaryPath: binaryPath,
-		configPath: configPath,
-		apiPort:    apiPort,
-		connSnap:   make(map[string]connSnapshot),
-		httpClient: &http.Client{Timeout: 5 * time.Second},
+		binaryPath:  binaryPath,
+		configPath:  configPath,
+		apiPort:     apiPort,
+		connSnap:    make(map[string]connSnapshot),
+		httpClient:  &http.Client{Timeout: 5 * time.Second},
+		inboundUser: make(map[string]string),
 	}
 }
 
@@ -139,6 +145,15 @@ func (e *SingboxEngine) GetTrafficStats() (map[string]*UserTraffic, error) {
 	seen := make(map[string]struct{}, len(snap.Connections))
 	for _, c := range snap.Connections {
 		user := c.Metadata.InboundUser
+		// sing-box 1.13 的 clash_api 不再暴露 inboundUser；回退按 inbound tag 归属
+		// type 格式形如 "hysteria2/node-3"，切片后半部分即 inbound tag
+		if user == "" {
+			if _, tag, ok := strings.Cut(c.Metadata.Type, "/"); ok && tag != "" {
+				e.inboundUserMu.Lock()
+				user = e.inboundUser[tag]
+				e.inboundUserMu.Unlock()
+			}
+		}
 		if user == "" {
 			continue
 		}
@@ -188,13 +203,21 @@ func (e *SingboxEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) (
 	}
 
 	inbounds := make([]interface{}, 0)
+	// 收集 inbound tag -> 唯一用户映射，供采集时回退归属
+	inboundUserMap := make(map[string]string)
 	for _, node := range nodes {
 		inbound := e.buildInbound(node, users)
 		if inbound == nil {
 			continue
 		}
 		inbounds = append(inbounds, inbound)
+		if len(users) == 1 {
+			inboundUserMap[node.Tag] = users[0].Email
+		}
 	}
+	e.inboundUserMu.Lock()
+	e.inboundUser = inboundUserMap
+	e.inboundUserMu.Unlock()
 
 	cfg["inbounds"] = inbounds
 	cfg["outbounds"] = []interface{}{
