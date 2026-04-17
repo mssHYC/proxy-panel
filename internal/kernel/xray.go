@@ -372,6 +372,15 @@ func (e *XrayEngine) buildStreamSettings(node NodeConfig) map[string]interface{}
 		stream["grpcSettings"] = map[string]interface{}{
 			"serviceName": getSettingStr(node.Settings, "serviceName", ""),
 		}
+	case "httpupgrade":
+		// Xray-core 1.8.3+ 支持 httpupgrade，字段名 httpupgradeSettings
+		huSettings := map[string]interface{}{
+			"path": getSettingStr(node.Settings, "path", "/"),
+		}
+		if host := getSettingStr(node.Settings, "host", ""); host != "" {
+			huSettings["host"] = host
+		}
+		stream["httpupgradeSettings"] = huSettings
 	}
 
 	// TLS / Reality
