@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync/atomic"
 )
 
 // SingboxEngine sing-box 内核引擎 (v1.0 基础框架，v1.1 完善)
@@ -14,6 +15,9 @@ type SingboxEngine struct {
 	configPath string
 	apiPort    int
 	cmd        *exec.Cmd
+	// statsEnabled 标记最近一次生成的配置是否启用了 v2ray_api；
+	// 未启用时跳过采集，避免反复 dial 失败刷屏
+	statsEnabled atomic.Bool
 }
 
 // NewSingboxEngine 创建 sing-box 引擎实例
@@ -74,7 +78,8 @@ func (e *SingboxEngine) IsRunning() bool {
 // 需要配置启用 experimental.v2ray_api.stats.users；协议与 xray StatsService 兼容，
 // 因此复用 xray CLI 的 statsquery 直连 sing-box api 端口
 func (e *SingboxEngine) GetTrafficStats() (map[string]*UserTraffic, error) {
-	if e.apiPort == 0 {
+	// 没启用 v2ray_api（通常是没有 hy2 节点）直接跳过，避免每次采集都 dial 9090 失败
+	if e.apiPort == 0 || !e.statsEnabled.Load() {
 		return make(map[string]*UserTraffic), nil
 	}
 	server := fmt.Sprintf("127.0.0.1:%d", e.apiPort)
@@ -131,7 +136,8 @@ func (e *SingboxEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) (
 	}
 
 	// 启用 v2ray_api 以便 panel 通过 statsquery 采集流量
-	if e.apiPort > 0 && len(statsUsers) > 0 {
+	enableStats := e.apiPort > 0 && len(statsUsers) > 0
+	if enableStats {
 		cfg["experimental"] = map[string]interface{}{
 			"v2ray_api": map[string]interface{}{
 				"listen": fmt.Sprintf("127.0.0.1:%d", e.apiPort),
@@ -142,6 +148,7 @@ func (e *SingboxEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) (
 			},
 		}
 	}
+	e.statsEnabled.Store(enableStats)
 
 	return json.MarshalIndent(cfg, "", "  ")
 }

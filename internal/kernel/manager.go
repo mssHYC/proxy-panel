@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"log"
 	"sync"
 )
 
@@ -47,7 +48,7 @@ func (m *Manager) Status() map[string]bool {
 	return result
 }
 
-// GetTrafficStats 合并所有运行中引擎的流量统计
+// GetTrafficStats 合并所有运行中引擎的流量统计。单个引擎失败不阻断其他引擎。
 func (m *Manager) GetTrafficStats() (map[string]*UserTraffic, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -58,7 +59,8 @@ func (m *Manager) GetTrafficStats() (map[string]*UserTraffic, error) {
 		}
 		stats, err := eng.GetTrafficStats()
 		if err != nil {
-			return nil, fmt.Errorf("获取 %s 流量失败: %w", eng.Name(), err)
+			log.Printf("[内核管理器] %s 流量采集失败: %v", eng.Name(), err)
+			continue
 		}
 		for email, traffic := range stats {
 			if existing, ok := merged[email]; ok {
