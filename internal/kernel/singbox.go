@@ -4,25 +4,44 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
+	"sync"
 	"sync/atomic"
+	"time"
 )
 
-// SingboxEngine sing-box 内核引擎 (v1.0 基础框架，v1.1 完善)
+// connSnapshot 记录单条连接上次采集到的累计字节数
+type connSnapshot struct {
+	upload   int64
+	download int64
+}
+
+// SingboxEngine sing-box 内核引擎
 type SingboxEngine struct {
 	binaryPath string
 	configPath string
 	apiPort    int
 	cmd        *exec.Cmd
-	// statsEnabled 标记最近一次生成的配置是否启用了 v2ray_api；
-	// 未启用时跳过采集，避免反复 dial 失败刷屏
+	// statsEnabled 标记最近一次生成的配置是否启用了 clash_api；
+	// 未启用时跳过采集，避免反复请求失败刷屏
 	statsEnabled atomic.Bool
+	// connSnap 缓存上一次 /connections 快照，用于计算各连接的字节数增量
+	connMu     sync.Mutex
+	connSnap   map[string]connSnapshot
+	httpClient *http.Client
 }
 
 // NewSingboxEngine 创建 sing-box 引擎实例
 func NewSingboxEngine(binaryPath, configPath string, apiPort int) *SingboxEngine {
-	return &SingboxEngine{binaryPath: binaryPath, configPath: configPath, apiPort: apiPort}
+	return &SingboxEngine{
+		binaryPath: binaryPath,
+		configPath: configPath,
+		apiPort:    apiPort,
+		connSnap:   make(map[string]connSnapshot),
+		httpClient: &http.Client{Timeout: 5 * time.Second},
+	}
 }
 
 func (e *SingboxEngine) Name() string {
@@ -74,21 +93,80 @@ func (e *SingboxEngine) IsRunning() bool {
 	return e.cmd != nil && e.cmd.Process != nil && e.cmd.ProcessState == nil
 }
 
-// GetTrafficStats 通过 sing-box 的 v2ray_api 读取用户流量统计
-// 需要配置启用 experimental.v2ray_api.stats.users；协议与 xray StatsService 兼容，
-// 因此复用 xray CLI 的 statsquery 直连 sing-box api 端口
+// clashSnapshot 对应 sing-box clash_api /connections 的返回结构
+type clashSnapshot struct {
+	Connections []clashConnection `json:"connections"`
+}
+
+type clashConnection struct {
+	ID       string        `json:"id"`
+	Metadata clashMetadata `json:"metadata"`
+	Upload   int64         `json:"upload"`
+	Download int64         `json:"download"`
+}
+
+type clashMetadata struct {
+	InboundUser string `json:"inboundUser"`
+	Type        string `json:"type"`
+}
+
+// GetTrafficStats 通过 sing-box 的 clash_api /connections 接口按用户聚合流量
+// sing-box 官方二进制通常不带 with_v2ray_api tag，因此改用带 with_clash_api 的通用方案。
+// 注意：短连接在关闭瞬间会从 /connections 列表消失，最后一次增量可能丢失；
+// 对于 hy2 这种长连接为主的协议影响较小。
 func (e *SingboxEngine) GetTrafficStats() (map[string]*UserTraffic, error) {
-	// 没启用 v2ray_api（通常是没有 hy2 节点）直接跳过，避免每次采集都 dial 9090 失败
 	if e.apiPort == 0 || !e.statsEnabled.Load() {
 		return make(map[string]*UserTraffic), nil
 	}
-	server := fmt.Sprintf("127.0.0.1:%d", e.apiPort)
-	out, err := exec.Command("xray", "api", "statsquery",
-		"--server="+server, "-pattern", "user>>>", "-reset").CombinedOutput()
+	url := fmt.Sprintf("http://127.0.0.1:%d/connections", e.apiPort)
+	resp, err := e.httpClient.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("sing-box statsquery 失败: %w, output: %s", err, string(out))
+		return nil, fmt.Errorf("sing-box clash_api 请求失败: %w", err)
 	}
-	return parseXrayStats(out), nil
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("sing-box clash_api 状态码 %d", resp.StatusCode)
+	}
+	var snap clashSnapshot
+	if err := json.NewDecoder(resp.Body).Decode(&snap); err != nil {
+		return nil, fmt.Errorf("解析 clash_api 响应失败: %w", err)
+	}
+
+	result := make(map[string]*UserTraffic)
+	e.connMu.Lock()
+	defer e.connMu.Unlock()
+
+	seen := make(map[string]struct{}, len(snap.Connections))
+	for _, c := range snap.Connections {
+		user := c.Metadata.InboundUser
+		if user == "" {
+			continue
+		}
+		seen[c.ID] = struct{}{}
+		prev := e.connSnap[c.ID]
+		deltaUp := c.Upload - prev.upload
+		deltaDown := c.Download - prev.download
+		// 防御：sing-box 重启或计数异常时把增量当全量处理
+		if deltaUp < 0 {
+			deltaUp = c.Upload
+		}
+		if deltaDown < 0 {
+			deltaDown = c.Download
+		}
+		if _, ok := result[user]; !ok {
+			result[user] = &UserTraffic{}
+		}
+		result[user].Upload += deltaUp
+		result[user].Download += deltaDown
+		e.connSnap[c.ID] = connSnapshot{upload: c.Upload, download: c.Download}
+	}
+	// 清理已关闭的连接
+	for id := range e.connSnap {
+		if _, ok := seen[id]; !ok {
+			delete(e.connSnap, id)
+		}
+	}
+	return result, nil
 }
 
 // AddUser sing-box 不支持热加载用户
@@ -110,23 +188,12 @@ func (e *SingboxEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) (
 	}
 
 	inbounds := make([]interface{}, 0)
-	// 收集进入 sing-box inbound 的用户名，用于 stats.users 登记
-	statsUsers := make([]string, 0)
-	seen := make(map[string]bool)
-
 	for _, node := range nodes {
 		inbound := e.buildInbound(node, users)
 		if inbound == nil {
 			continue
 		}
 		inbounds = append(inbounds, inbound)
-		for _, u := range users {
-			if u.Protocol != node.Protocol || seen[u.Email] {
-				continue
-			}
-			statsUsers = append(statsUsers, u.Email)
-			seen[u.Email] = true
-		}
 	}
 
 	cfg["inbounds"] = inbounds
@@ -135,16 +202,12 @@ func (e *SingboxEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) (
 		map[string]interface{}{"type": "block", "tag": "block"},
 	}
 
-	// 启用 v2ray_api 以便 panel 通过 statsquery 采集流量
-	enableStats := e.apiPort > 0 && len(statsUsers) > 0
+	// 启用 clash_api：只要有 inbound 就开启，panel 通过 /connections 按用户采集流量
+	enableStats := e.apiPort > 0 && len(inbounds) > 0
 	if enableStats {
 		cfg["experimental"] = map[string]interface{}{
-			"v2ray_api": map[string]interface{}{
-				"listen": fmt.Sprintf("127.0.0.1:%d", e.apiPort),
-				"stats": map[string]interface{}{
-					"enabled": true,
-					"users":   statsUsers,
-				},
+			"clash_api": map[string]interface{}{
+				"external_controller": fmt.Sprintf("127.0.0.1:%d", e.apiPort),
 			},
 		}
 	}
