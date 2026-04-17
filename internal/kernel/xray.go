@@ -389,14 +389,15 @@ func (e *XrayEngine) buildStreamSettings(node NodeConfig) map[string]interface{}
 
 	switch security {
 	case "tls":
+		// 前端存 snake_case (sni / cert_path / key_path)，同时兼容 camelCase
 		tlsSettings := map[string]interface{}{
-			"serverName": getSettingStr(node.Settings, "serverName", ""),
+			"serverName": getSettingStrAny(node.Settings, "", "sni", "serverName"),
 		}
-		if certPath := getSettingStr(node.Settings, "certPath", ""); certPath != "" {
+		if certPath := getSettingStrAny(node.Settings, "", "cert_path", "certPath"); certPath != "" {
 			tlsSettings["certificates"] = []interface{}{
 				map[string]interface{}{
 					"certificateFile": certPath,
-					"keyFile":         getSettingStr(node.Settings, "keyPath", ""),
+					"keyFile":         getSettingStrAny(node.Settings, "", "key_path", "keyPath"),
 				},
 			}
 		}
