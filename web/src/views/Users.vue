@@ -121,8 +121,10 @@
           <span class="ml-2 text-xs text-gray-400">0 = 无限制</span>
         </el-form-item>
         <el-form-item label="限速 Mbps">
-          <el-input-number v-model="form.speed_limit" :min="0" controls-position="right" />
-          <span class="ml-2 text-xs text-gray-400">0 = 无限制</span>
+          <el-tooltip placement="top" content="仅在该用户独享某 hy2 节点时严格生效；多用户共用同一节点时退化为节点级总带宽限制。">
+            <el-input-number v-model="form.speed_limit" :min="0" controls-position="right" />
+          </el-tooltip>
+          <span class="ml-2 text-xs text-gray-400">0 = 无限制（仅对 hy2 协议，且仅单用户场景）</span>
         </el-form-item>
         <el-form-item label="重置日">
           <el-input-number v-model="form.reset_day" :min="1" :max="31" controls-position="right" />
