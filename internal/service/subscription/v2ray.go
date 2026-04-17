@@ -87,13 +87,17 @@ func buildVLESSURI(node model.Node, user *model.User, s nodeSettings) string {
 	if s.Flow != "" {
 		params.Set("flow", s.Flow)
 	}
-	if node.Transport == "ws" {
-		if s.Path != "" {
-			params.Set("path", s.Path)
+	if node.Transport == "ws" || node.Transport == "httpupgrade" {
+		path := s.Path
+		if path == "" {
+			path = "/"
 		}
-		if s.Host != "" {
-			params.Set("host", s.Host)
+		params.Set("path", path)
+		host := s.Host
+		if host == "" {
+			host = node.Host
 		}
+		params.Set("host", host)
 	}
 	if node.Transport == "grpc" && s.ServiceName != "" {
 		params.Set("serviceName", s.ServiceName)
@@ -127,13 +131,17 @@ func buildVMessURI(node model.Node, user *model.User, s nodeSettings) string {
 		vmessObj["tls"] = ""
 	}
 
-	if node.Transport == "ws" {
-		if s.Path != "" {
-			vmessObj["path"] = s.Path
+	if node.Transport == "ws" || node.Transport == "httpupgrade" {
+		path := s.Path
+		if path == "" {
+			path = "/"
 		}
-		if s.Host != "" {
-			vmessObj["host"] = s.Host
+		vmessObj["path"] = path
+		host := s.Host
+		if host == "" {
+			host = node.Host
 		}
+		vmessObj["host"] = host
 	}
 
 	data, _ := json.Marshal(vmessObj)

@@ -450,7 +450,7 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 	return b.String()
 }
 
-// writeTransportOpts 写入传输层配置 (ws/grpc)
+// writeTransportOpts 写入传输层配置 (ws/grpc/httpupgrade)
 func (g *ClashGenerator) writeTransportOpts(b *strings.Builder, node model.Node, s nodeSettings) {
 	switch node.Transport {
 	case "ws":
@@ -467,5 +467,19 @@ func (g *ClashGenerator) writeTransportOpts(b *strings.Builder, node model.Node,
 			b.WriteString("    grpc-opts:\n")
 			b.WriteString(fmt.Sprintf("      grpc-service-name: %s\n", s.ServiceName))
 		}
+	case "httpupgrade":
+		// mihomo 的 httpupgrade 复用 ws-opts 字段承载 path 与 Host 头
+		b.WriteString("    ws-opts:\n")
+		path := s.Path
+		if path == "" {
+			path = "/"
+		}
+		b.WriteString(fmt.Sprintf("      path: %s\n", path))
+		host := s.Host
+		if host == "" {
+			host = node.Host
+		}
+		b.WriteString("      headers:\n")
+		b.WriteString(fmt.Sprintf("        Host: %s\n", host))
 	}
 }
