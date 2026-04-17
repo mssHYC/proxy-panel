@@ -30,9 +30,10 @@
             </template>
           </el-input>
 
-          <!-- 简易 QR 码展示区域 -->
-          <div class="flex justify-center">
+          <!-- 二维码 -->
+          <div class="flex flex-col items-center gap-2">
             <canvas :ref="(el) => setCanvasRef(fmt.value, el as HTMLCanvasElement | null)" />
+            <div class="text-xs text-gray-400">手机客户端扫码导入</div>
           </div>
         </div>
       </el-tab-pane>
@@ -43,6 +44,7 @@
 <script setup lang="ts">
 import { ref, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
+import QRCode from 'qrcode'
 
 interface UserInfo {
   uuid: string
@@ -95,54 +97,18 @@ async function copyUrl(format: string) {
   }
 }
 
-// ---- 简易 QR 码：使用 canvas 绘制 ----
 const canvasRefs: Record<string, HTMLCanvasElement | null> = {}
 
 function setCanvasRef(format: string, el: HTMLCanvasElement | null) {
   canvasRefs[format] = el
 }
 
-/**
- * 极简 QR 码生成器（基于数据矩阵可视化）
- * 由于项目没有 qrcode 库，此处将 URL 文本以像素化方式呈现，
- * 并提示用户直接复制链接使用。
- */
-function drawUrlText(canvas: HTMLCanvasElement, url: string) {
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return
-
-  const padding = 16
-  const fontSize = 11
-  const lineHeight = 16
-  const maxWidth = 320
-
-  canvas.width = maxWidth + padding * 2
-  ctx.font = `${fontSize}px monospace`
-
-  // 自动换行
-  const lines: string[] = []
-  let current = ''
-  for (const ch of url) {
-    const test = current + ch
-    if (ctx.measureText(test).width > maxWidth) {
-      lines.push(current)
-      current = ch
-    } else {
-      current = test
-    }
+async function renderQR(canvas: HTMLCanvasElement, url: string) {
+  try {
+    await QRCode.toCanvas(canvas, url, { width: 220, margin: 2 })
+  } catch (e) {
+    console.error('QR 码生成失败', e)
   }
-  if (current) lines.push(current)
-
-  canvas.height = lines.length * lineHeight + padding * 2
-
-  // 重绘背景
-  ctx.fillStyle = '#f5f7fa'
-  ctx.fillRect(0, 0, canvas.width, canvas.height)
-  ctx.font = `${fontSize}px monospace`
-  ctx.fillStyle = '#303133'
-  lines.forEach((line, i) => {
-    ctx.fillText(line, padding, padding + (i + 1) * lineHeight)
-  })
 }
 
 watch(
@@ -155,7 +121,7 @@ watch(
       for (const fmt of formats) {
         const canvas = canvasRefs[fmt.value]
         if (canvas) {
-          drawUrlText(canvas, getSubUrl(fmt.value))
+          renderQR(canvas, getSubUrl(fmt.value))
         }
       }
     }, 200)
@@ -170,7 +136,7 @@ watch(activeTab, async () => {
   setTimeout(() => {
     const canvas = canvasRefs[activeTab.value]
     if (canvas) {
-      drawUrlText(canvas, getSubUrl(activeTab.value))
+      renderQR(canvas, getSubUrl(activeTab.value))
     }
   }, 100)
 })
