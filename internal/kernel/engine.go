@@ -19,8 +19,11 @@ type NodeConfig struct {
 // UserConfig 用户配置
 //
 // NodeIDs 为该用户通过 user_nodes 关联的节点 ID 列表。内核生成 inbound.clients 时
-// 只注入 NodeIDs 包含当前节点的用户 —— 这保证了"订阅里能看到的节点"与"服务端认识的
-// 节点"严格一致，避免跨协议节点 clients 为 null 导致客户端 TLS 握手后挂死超时。
+// 按 NodeIDs 过滤用户（见 userLinkedToNode）：
+//   - NodeIDs 非空：只把该用户注入到关联的节点 inbound
+//   - NodeIDs 为空：回退到"可用全部节点"，与订阅 handler 的 ListByUserID→
+//     ListEnabled 兜底语义对齐，避免老部署（从未勾选节点）升级后所有 inbound
+//     的 clients 全空导致所有协议超时。
 type UserConfig struct {
 	UUID       string
 	Email      string
@@ -30,9 +33,17 @@ type UserConfig struct {
 }
 
 // userLinkedToNode 判断用户是否关联了给定节点。
-// nodeID == 0 视为测试桩/未设置关联，此时回退到"接纳全部用户"以保持旧用例可跑。
+//
+// 对齐订阅侧 subscription.Subscribe 的降级语义：ListByUserID 查到空时会回退到
+// ListEnabled 返回全部启用节点。inbound 侧必须跟上这个兜底 —— 即 NodeIDs 为空
+// 代表"该用户未设置节点白名单，可用全部节点"，否则只接受显式关联的节点。
+//
+// nodeID == 0 视为测试桩（没有明确节点身份），也按"兜底 true"处理以保持旧用例可跑。
 func userLinkedToNode(u UserConfig, nodeID int64) bool {
 	if nodeID == 0 {
+		return true
+	}
+	if len(u.NodeIDs) == 0 {
 		return true
 	}
 	for _, id := range u.NodeIDs {

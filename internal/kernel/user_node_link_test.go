@@ -83,22 +83,57 @@ func TestXrayBuildInbound_UnlinkedUserExcluded(t *testing.T) {
 	}
 }
 
-// nodeID == 0 的测试桩（不设 ID 的老测试用例）应兜底为"接纳全部用户"，
-// 保证已有 singbox/xray 旧测试无需逐个加 NodeIDs 也能继续通过。
-func TestUserLinkedToNode_ZeroIDFallback(t *testing.T) {
-	u := UserConfig{UUID: "x"} // NodeIDs 空
-	if !userLinkedToNode(u, 0) {
+// 兜底语义：
+//   - nodeID == 0：测试桩，无节点身份 → true（保持旧测试可跑）
+//   - NodeIDs 为空：用户未设置节点白名单 → true（对齐订阅侧 ListByUserID→
+//     ListEnabled 的降级语义；否则老部署升级后所有协议都超时）
+//   - NodeIDs 非空：精确匹配
+func TestUserLinkedToNode_Semantics(t *testing.T) {
+	empty := UserConfig{UUID: "x"}
+	if !userLinkedToNode(empty, 0) {
 		t.Errorf("nodeID==0 应兜底 true")
 	}
-	if userLinkedToNode(u, 5) {
-		t.Errorf("nodeID!=0 且 NodeIDs 空，应为 false")
+	if !userLinkedToNode(empty, 5) {
+		t.Errorf("NodeIDs 空应兜底 true（对齐订阅降级语义）")
 	}
-	u.NodeIDs = []int64{1, 5, 9}
-	if !userLinkedToNode(u, 5) {
+
+	linked := UserConfig{UUID: "x", NodeIDs: []int64{1, 5, 9}}
+	if !userLinkedToNode(linked, 5) {
 		t.Errorf("NodeIDs 含 5 应为 true")
 	}
-	if userLinkedToNode(u, 7) {
+	if userLinkedToNode(linked, 7) {
 		t.Errorf("NodeIDs 不含 7 应为 false")
+	}
+}
+
+// 回归：v1.1.15 引入的"NodeIDs 空 → false"导致老部署（user_nodes 表空）升级后
+// 所有 inbound 的 clients 全空、所有协议超时，包括 hy2。
+// 兜底修正后，NodeIDs 空的用户必须进入所有协议 inbound 的 users 列表。
+func TestEmptyNodeIDs_FallbackInjectsIntoAllInbounds(t *testing.T) {
+	users := []UserConfig{
+		{UUID: "u1", Email: "alice", Protocol: "vless"}, // NodeIDs 空
+	}
+
+	ex := &XrayEngine{}
+	xrayNodes := []NodeConfig{
+		{ID: 6, Tag: "node-6", Port: 8458, Protocol: "vmess"},
+		{ID: 7, Tag: "node-7", Port: 6756, Protocol: "trojan"},
+		{ID: 8, Tag: "node-8", Port: 443, Protocol: "vless"},
+	}
+	for _, n := range xrayNodes {
+		ib := ex.buildInbound(n, users)
+		clients, _ := ib["settings"].(map[string]interface{})["clients"].([]interface{})
+		if len(clients) != 1 {
+			t.Errorf("xray %s(%s) clients 应含 1 人（NodeIDs 空兜底），got %d", n.Tag, n.Protocol, len(clients))
+		}
+	}
+
+	sx := NewSingboxEngine("", "", 0)
+	hy2 := NodeConfig{ID: 12, Tag: "node-12", Port: 3468, Protocol: "hysteria2", Settings: map[string]interface{}{}}
+	ib := sx.buildInbound(hy2, users)
+	list, _ := ib["users"].([]map[string]interface{})
+	if len(list) != 1 {
+		t.Errorf("hy2 users 列表应含 1 人（NodeIDs 空兜底），got %d", len(list))
 	}
 }
 
