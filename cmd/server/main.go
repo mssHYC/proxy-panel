@@ -49,16 +49,16 @@ func main() {
 		}
 	}
 
-	// 初始化调度器
-	scheduler := service.NewScheduler(cfg, trafficSvc, notifySvc, db)
-	scheduler.Start()
-	defer scheduler.Stop()
-
 	// 启动时同步内核配置（确保 Xray/Sing-box 配置与数据库一致）
 	syncSvc := service.NewKernelSyncService(db, mgr)
 	if err := syncSvc.Sync(); err != nil {
 		log.Printf("启动时同步内核配置失败: %v", err)
 	}
+
+	// 初始化调度器（流量超限/用户过期时通过 syncSvc 立即剔除用户并重启内核）
+	scheduler := service.NewScheduler(cfg, trafficSvc, notifySvc, db, syncSvc)
+	scheduler.Start()
+	defer scheduler.Stop()
 
 	// 设置路由
 	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc)

@@ -19,16 +19,18 @@ type Scheduler struct {
 	trafficSvc *TrafficService
 	notifySvc  *notify.NotifyService
 	db         *database.DB
+	syncSvc    *KernelSyncService
 }
 
 // NewScheduler 创建调度器
-func NewScheduler(cfg *config.Config, trafficSvc *TrafficService, notifySvc *notify.NotifyService, db *database.DB) *Scheduler {
+func NewScheduler(cfg *config.Config, trafficSvc *TrafficService, notifySvc *notify.NotifyService, db *database.DB, syncSvc *KernelSyncService) *Scheduler {
 	return &Scheduler{
 		cron:       cron.New(),
 		cfg:        cfg,
 		trafficSvc: trafficSvc,
 		notifySvc:  notifySvc,
 		db:         db,
+		syncSvc:    syncSvc,
 	}
 }
 
@@ -65,6 +67,12 @@ func (s *Scheduler) Start() {
 				u.Username,
 				formatBytes(u.TrafficUsed), formatBytes(u.TrafficLimit))
 			s.notifySvc.SendAll(msg)
+		}
+		// 有用户被禁用时立即同步内核配置并重启，切断被禁用户的现有连接
+		if len(exhausted) > 0 && s.syncSvc != nil {
+			if err := s.syncSvc.Sync(); err != nil {
+				log.Printf("[调度器] 禁用用户后同步内核失败: %v", err)
+			}
 		}
 
 		// 检查服务器流量阈值
@@ -134,6 +142,12 @@ func (s *Scheduler) Start() {
 				msg := fmt.Sprintf("🚫 已自动禁用 %d 个过期用户", count)
 				log.Printf("[调度器] %s", msg)
 				s.notifySvc.SendAll(msg)
+				// 有用户被禁时同步内核配置并重启，切断被禁用户的现有连接
+				if s.syncSvc != nil {
+					if err := s.syncSvc.Sync(); err != nil {
+						log.Printf("[调度器] 禁用过期用户后同步内核失败: %v", err)
+					}
+				}
 			}
 		}
 
