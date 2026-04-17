@@ -12,12 +12,13 @@ import (
 type SingboxEngine struct {
 	binaryPath string
 	configPath string
+	apiPort    int
 	cmd        *exec.Cmd
 }
 
 // NewSingboxEngine 创建 sing-box 引擎实例
-func NewSingboxEngine(binaryPath, configPath string) *SingboxEngine {
-	return &SingboxEngine{binaryPath: binaryPath, configPath: configPath}
+func NewSingboxEngine(binaryPath, configPath string, apiPort int) *SingboxEngine {
+	return &SingboxEngine{binaryPath: binaryPath, configPath: configPath, apiPort: apiPort}
 }
 
 func (e *SingboxEngine) Name() string {
@@ -69,9 +70,20 @@ func (e *SingboxEngine) IsRunning() bool {
 	return e.cmd != nil && e.cmd.Process != nil && e.cmd.ProcessState == nil
 }
 
-// GetTrafficStats v1.0 返回空 map，v1.1 实现
+// GetTrafficStats 通过 sing-box 的 v2ray_api 读取用户流量统计
+// 需要配置启用 experimental.v2ray_api.stats.users；协议与 xray StatsService 兼容，
+// 因此复用 xray CLI 的 statsquery 直连 sing-box api 端口
 func (e *SingboxEngine) GetTrafficStats() (map[string]*UserTraffic, error) {
-	return make(map[string]*UserTraffic), nil
+	if e.apiPort == 0 {
+		return make(map[string]*UserTraffic), nil
+	}
+	server := fmt.Sprintf("127.0.0.1:%d", e.apiPort)
+	out, err := exec.Command("xray", "api", "statsquery",
+		"--server="+server, "-pattern", "user>>>", "-reset").CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("sing-box statsquery 失败: %w, output: %s", err, string(out))
+	}
+	return parseXrayStats(out), nil
 }
 
 // AddUser sing-box 不支持热加载用户
@@ -93,11 +105,22 @@ func (e *SingboxEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) (
 	}
 
 	inbounds := make([]interface{}, 0)
+	// 收集进入 sing-box inbound 的用户名，用于 stats.users 登记
+	statsUsers := make([]string, 0)
+	seen := make(map[string]bool)
 
 	for _, node := range nodes {
 		inbound := e.buildInbound(node, users)
-		if inbound != nil {
-			inbounds = append(inbounds, inbound)
+		if inbound == nil {
+			continue
+		}
+		inbounds = append(inbounds, inbound)
+		for _, u := range users {
+			if u.Protocol != node.Protocol || seen[u.Email] {
+				continue
+			}
+			statsUsers = append(statsUsers, u.Email)
+			seen[u.Email] = true
 		}
 	}
 
@@ -105,6 +128,19 @@ func (e *SingboxEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) (
 	cfg["outbounds"] = []interface{}{
 		map[string]interface{}{"type": "direct", "tag": "direct"},
 		map[string]interface{}{"type": "block", "tag": "block"},
+	}
+
+	// 启用 v2ray_api 以便 panel 通过 statsquery 采集流量
+	if e.apiPort > 0 && len(statsUsers) > 0 {
+		cfg["experimental"] = map[string]interface{}{
+			"v2ray_api": map[string]interface{}{
+				"listen": fmt.Sprintf("127.0.0.1:%d", e.apiPort),
+				"stats": map[string]interface{}{
+					"enabled": true,
+					"users":   statsUsers,
+				},
+			},
+		}
 	}
 
 	return json.MarshalIndent(cfg, "", "  ")

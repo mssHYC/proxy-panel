@@ -32,7 +32,7 @@ func main() {
 	mgr := kernel.NewManager()
 	xrayEngine := kernel.NewXrayEngine(cfg.Kernel.XrayPath, cfg.Kernel.XrayConfig, cfg.Kernel.XrayAPIPort)
 	mgr.Register(xrayEngine)
-	singboxEngine := kernel.NewSingboxEngine(cfg.Kernel.SingboxPath, cfg.Kernel.SingboxConfig)
+	singboxEngine := kernel.NewSingboxEngine(cfg.Kernel.SingboxPath, cfg.Kernel.SingboxConfig, cfg.Kernel.SingboxAPIPort)
 	mgr.Register(singboxEngine)
 
 	// 初始化 Services

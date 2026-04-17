@@ -34,11 +34,11 @@ func (s *TrafficService) Collect() error {
 			continue
 		}
 
-		// email 实际上对应 uuid
+		// 内核配置里 client.email 使用 username，这里按 username 反查用户
 		var userID int64
-		err := s.db.QueryRow("SELECT id FROM users WHERE uuid = ?", email).Scan(&userID)
+		err := s.db.QueryRow("SELECT id FROM users WHERE username = ?", email).Scan(&userID)
 		if err != nil {
-			log.Printf("查找用户失败 uuid=%s: %v", email, err)
+			log.Printf("查找用户失败 username=%s: %v", email, err)
 			continue
 		}
 

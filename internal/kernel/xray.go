@@ -92,71 +92,65 @@ type xrayStatsResponse struct {
 // GetTrafficStats 通过 xray api 获取用户流量统计
 func (e *XrayEngine) GetTrafficStats() (map[string]*UserTraffic, error) {
 	server := fmt.Sprintf("127.0.0.1:%d", e.apiPort)
+	// -reset 让 Xray 返回增量并把内部计数器清零，否则每次采集都是累计值会重复累加
 	out, err := exec.Command("xray", "api", "statsquery",
-		"--server="+server, "-pattern", "user>>>").CombinedOutput()
+		"--server="+server, "-pattern", "user>>>", "-reset").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("xray statsquery 失败: %w, output: %s", err, string(out))
 	}
+	return parseXrayStats(out), nil
+}
 
+// parseXrayStats 解析 xray api statsquery 输出（兼容 JSON 与 protobuf 文本）
+func parseXrayStats(out []byte) map[string]*UserTraffic {
 	result := make(map[string]*UserTraffic)
 	raw := strings.TrimSpace(string(out))
 	if raw == "" {
-		return result, nil
+		return result
 	}
 
-	// 尝试 JSON 格式解析
+	// 优先尝试 JSON 格式
 	var resp xrayStatsResponse
-	if err := json.Unmarshal([]byte(raw), &resp); err == nil {
+	if err := json.Unmarshal([]byte(raw), &resp); err == nil && len(resp.Stat) > 0 {
 		for _, s := range resp.Stat {
-			e.parseStat(result, s.Name, s.Value)
+			parseStatEntry(result, s.Name, s.Value)
 		}
-		return result, nil
+		return result
 	}
 
-	// 回退到文本格式解析（每行格式: name: "user>>>email>>>traffic>>>uplink" value: 12345）
+	// 回退：protobuf 文本格式 name 与 value 分两行，例如：
+	//   stat: <
+	//     name: "user>>>alice>>>traffic>>>uplink"
+	//     value: 12345
+	//   >
+	var curName string
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "name:") {
-			// 提取 name 和 value
-			name := extractQuoted(line)
-			// 下一部分可能在同行或下行，这里简化处理同行场景
-			parts := strings.SplitN(line, "value:", 2)
-			if len(parts) == 2 {
-				valStr := strings.TrimSpace(parts[1])
-				if val, err := strconv.ParseInt(valStr, 10, 64); err == nil {
-					e.parseStat(result, name, val)
-				}
+		switch {
+		case strings.HasPrefix(line, "name:"):
+			curName = extractQuoted(line)
+		case strings.HasPrefix(line, "value:") && curName != "":
+			valStr := strings.TrimSpace(strings.TrimPrefix(line, "value:"))
+			if val, err := strconv.ParseInt(valStr, 10, 64); err == nil {
+				parseStatEntry(result, curName, val)
 			}
-		} else if strings.HasPrefix(line, "stat:") {
-			continue
-		} else if strings.Contains(line, "user>>>") {
-			// 兼容更多文本格式
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				name := strings.Trim(fields[0], "\"")
-				if val, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
-					e.parseStat(result, name, val)
-				}
-			}
+			curName = ""
 		}
 	}
-	return result, nil
+	return result
 }
 
-// parseStat 解析 "user>>>{email}>>>traffic>>>{uplink|downlink}" 格式
-func (e *XrayEngine) parseStat(result map[string]*UserTraffic, name string, value int64) {
-	// 格式: user>>>{email}>>>traffic>>>{uplink|downlink}
+// parseStatEntry 解析 "user>>>{email}>>>traffic>>>{uplink|downlink}" 格式并累加
+func parseStatEntry(result map[string]*UserTraffic, name string, value int64) {
 	parts := strings.Split(name, ">>>")
 	if len(parts) != 4 || parts[0] != "user" || parts[2] != "traffic" {
 		return
 	}
 	email := parts[1]
-	direction := parts[3]
-
 	if _, ok := result[email]; !ok {
 		result[email] = &UserTraffic{}
 	}
-	switch direction {
+	switch parts[3] {
 	case "uplink":
 		result[email].Upload += value
 	case "downlink":
