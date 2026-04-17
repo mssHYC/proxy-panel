@@ -20,6 +20,8 @@
             placeholder="用户名"
             size="large"
             :prefix-icon="User"
+            name="username"
+            autocomplete="username"
           />
         </el-form-item>
         <el-form-item prop="password">
@@ -30,6 +32,8 @@
             size="large"
             show-password
             :prefix-icon="Lock"
+            name="password"
+            autocomplete="current-password"
             @keyup.enter="handleLogin"
           />
         </el-form-item>
@@ -55,6 +59,9 @@
           size="large"
           maxlength="6"
           class="totp-input"
+          name="otp"
+          autocomplete="one-time-code"
+          inputmode="numeric"
           @keyup.enter="handleVerify2FA"
         />
         <el-button
