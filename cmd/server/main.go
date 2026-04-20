@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"proxy-panel/internal/kernel"
 	"proxy-panel/internal/router"
 	"proxy-panel/internal/service"
+	"proxy-panel/internal/service/firewall"
 	notify "proxy-panel/internal/service/notify"
 )
 
@@ -43,9 +45,13 @@ func main() {
 	// 初始化 Services
 	authSvc := service.NewAuthService(db, cfg)
 	userSvc := service.NewUserService(db)
-	nodeSvc := service.NewNodeService(db, nil) // firewall 在 Task 9 注入
 	trafficSvc := service.NewTrafficService(db, mgr)
 	notifySvc := notify.NewNotifyService(cfg, db)
+	fwSvc, err := firewall.NewService(cfg.Firewall, notifySvc)
+	if err != nil {
+		log.Printf("防火墙服务初始化失败，已降级为关闭状态: %v", err)
+	}
+	nodeSvc := service.NewNodeService(db, fwSvc)
 
 	// 设置服务器流量限额
 	if cfg.Traffic.ServerLimitGB > 0 {
@@ -62,6 +68,24 @@ func main() {
 
 	// 初始化调度器（流量超限/用户过期时通过 syncSvc 立即剔除用户并重启内核）
 	scheduler := service.NewScheduler(cfg, trafficSvc, notifySvc, db, syncSvc)
+
+	// 启动时对存量 enable 节点做一次单向 ensure（幂等）
+	if fwSvc.Enabled() {
+		go func() {
+			nodes, err := nodeSvc.ListEnabled()
+			if err != nil {
+				log.Printf("[防火墙] 启动对齐：读取节点失败: %v", err)
+				return
+			}
+			ports := make([]int, 0, len(nodes))
+			for _, n := range nodes {
+				ports = append(ports, n.Port)
+			}
+			fwSvc.EnsureAll(context.Background(), ports)
+			log.Printf("[防火墙] 启动对齐完成，处理 %d 个节点端口", len(ports))
+		}()
+	}
+
 	scheduler.Start()
 	defer scheduler.Stop()
 
