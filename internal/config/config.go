@@ -93,7 +93,7 @@ func Load(path string) (*Config, error) {
 		Server:   ServerConfig{Port: 8080},
 		Database: DatabaseConfig{Path: "data/panel.db"},
 		Auth:     AuthConfig{TokenExpiry: 24},
-		Traffic:  TrafficConfig{CollectInterval: 60, WarnPercent: 80},
+		Traffic:  TrafficConfig{CollectInterval: 60, WarnPercent: 80, ResetCron: "0 0 1 * *"},
 		Kernel:   KernelConfig{XrayAPIPort: 10085, SingboxAPIPort: 9090},
 	}
 	if err := yaml.Unmarshal(data, cfg); err != nil {

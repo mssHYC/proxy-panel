@@ -81,13 +81,13 @@ func (g *SingboxGenerator) buildProxyGroups(nodeNames []string) []map[string]int
 		{
 			"type":      "selector",
 			"tag":       "手动切换",
-			"outbounds": append(copyNames(nodeNames)),
+			"outbounds": copyNames(nodeNames),
 		},
 		// 自动选择
 		{
 			"type":      "urltest",
 			"tag":       "自动选择",
-			"outbounds": append(copyNames(nodeNames)),
+			"outbounds": copyNames(nodeNames),
 			"url":       "http://www.gstatic.com/generate_204",
 			"interval":  "5m",
 		},

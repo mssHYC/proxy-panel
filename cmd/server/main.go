@@ -48,6 +48,12 @@ func main() {
 		os.Exit(0)
 	}
 
+	// 启动时用 settings 表覆盖 yaml 中的调度相关配置（reset_cron/collect_interval/warn_percent）
+	// 这样后台"告警设置"修改后的值在进程重启后也能生效
+	if err := service.ApplySettingsToConfig(db, cfg); err != nil {
+		log.Printf("加载 settings 覆盖失败，继续使用 yaml 默认值: %v", err)
+	}
+
 	// 初始化内核 Manager
 	mgr := kernel.NewManager()
 	xrayEngine := kernel.NewXrayEngine(cfg.Kernel.XrayPath, cfg.Kernel.XrayConfig, cfg.Kernel.XrayAPIPort)
@@ -103,7 +109,7 @@ func main() {
 	defer scheduler.Stop()
 
 	// 设置路由
-	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc)
+	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc, scheduler)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	if cfg.Server.Domain != "" {

@@ -19,7 +19,7 @@ import (
 func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	userSvc *service.UserService, nodeSvc *service.NodeService,
 	trafficSvc *service.TrafficService, notifySvc *notify.NotifyService,
-	authSvc *service.AuthService) *gin.Engine {
+	authSvc *service.AuthService, scheduler *service.Scheduler) *gin.Engine {
 
 	r := gin.Default()
 
@@ -59,7 +59,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	dashboardHandler := handler.NewDashboardHandler(userSvc, nodeSvc, trafficSvc, mgr, db)
 	kernelHandler := handler.NewKernelHandler(mgr)
 	trafficHandler := handler.NewTrafficHandler(trafficSvc)
-	settingHandler := handler.NewSettingHandler(db, cfg)
+	settingHandler := handler.NewSettingHandler(db, cfg, scheduler)
 	notifyHandler := handler.NewNotifyHandler(notifySvc)
 	subHandler := handler.NewSubscriptionHandler(userSvc, nodeSvc, db)
 
