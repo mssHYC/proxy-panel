@@ -1,3 +1,6 @@
+// Package firewall provides an abstraction for firewall backends (ufw / firewalld)
+// and a Service that orchestrates port allow/revoke operations with graceful
+// degradation when the backend command fails.
 package firewall
 
 import (
@@ -13,8 +16,9 @@ type Backend interface {
 	Revoke(ctx context.Context, port int) error // 同时关闭 tcp+udp，必须幂等
 }
 
-// selectBackend 根据配置 backend 字段返回对应实现
-// Task 2: 临时 stub，Task 3 会替换为真实 switch
+// selectBackend returns the Backend implementation for the given name.
+// This is currently a stub that returns an error for every name; real ufw /
+// firewalld cases are wired in by follow-up changes.
 func selectBackend(name string) (Backend, error) {
 	return nil, fmt.Errorf("backend %q 暂未实现", name)
 }

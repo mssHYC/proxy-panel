@@ -11,7 +11,9 @@ import (
 
 var backendTimeout = 5 * time.Second
 
-// Notifier 防火墙失败告警回调，由 internal/service/notify.NotifyService 适配
+// Notifier receives firewall failure messages. Implementations must be safe for
+// concurrent calls — Service invokes SendAll from any goroutine (including the
+// goroutines spawned by NodeService for async port sync).
 type Notifier interface {
 	SendAll(message string)
 }
