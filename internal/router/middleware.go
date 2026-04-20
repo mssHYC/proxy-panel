@@ -54,6 +54,12 @@ func JWTAuth(secret string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		// 强制要求 access token 类型,防止 2fa_pending 等其他用途的 token 被误用
+		if t, _ := claims["type"].(string); t != "access" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌无效", "code": "ERR_INVALID_TOKEN"})
+			c.Abort()
+			return
+		}
 		c.Set("username", claims["username"])
 		c.Next()
 	}

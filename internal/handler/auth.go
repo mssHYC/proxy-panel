@@ -184,6 +184,7 @@ func (h *AuthHandler) Disable2FA(c *gin.Context) {
 func (h *AuthHandler) generateToken(username string) string {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"username": username,
+		"type":     "access",
 		"exp":      time.Now().Add(time.Duration(h.cfg.Auth.TokenExpiry) * time.Hour).Unix(),
 	})
 	tokenStr, _ := token.SignedString([]byte(h.cfg.Auth.JWTSecret))
