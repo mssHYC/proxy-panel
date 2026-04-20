@@ -1,9 +1,16 @@
 package config
 
 import (
+	"fmt"
 	"os"
 
 	"gopkg.in/yaml.v3"
+)
+
+// 与 config.example.yaml 一致的占位值；运行时若保留这些默认值，说明尚未完成基础初始化
+const (
+	defaultAdminPass = "admin123"
+	defaultJWTSecret = "change-me-to-random-32-bytes"
 )
 
 type Config struct {
@@ -22,6 +29,9 @@ type ServerConfig struct {
 	Cert   string `yaml:"cert"`
 	Key    string `yaml:"key"`
 	Domain string `yaml:"domain"`
+	// 反代部署时的可信上游列表；未配置时禁用 X-Forwarded-For 解析（仅信任直连 RemoteAddr）
+	// 例如：["127.0.0.1", "10.0.0.0/8"]
+	TrustedProxies []string `yaml:"trusted_proxies"`
 }
 
 type DatabaseConfig struct {
@@ -90,4 +100,19 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// Validate 校验关键安全字段是否已脱离示例默认值
+// 任一默认凭证/密钥命中即拒绝启动，避免生产裸奔
+func (c *Config) Validate() error {
+	if c.Auth.JWTSecret == "" || c.Auth.JWTSecret == defaultJWTSecret {
+		return fmt.Errorf("auth.jwt_secret 仍为默认占位值，请修改 config.yaml 设为 32+ 字节的随机字符串后重启")
+	}
+	if len(c.Auth.JWTSecret) < 16 {
+		return fmt.Errorf("auth.jwt_secret 长度过短（%d 字节），建议至少 32 字节", len(c.Auth.JWTSecret))
+	}
+	if c.Auth.AdminPass == "" || c.Auth.AdminPass == defaultAdminPass {
+		return fmt.Errorf("auth.admin_pass 仍为默认占位值 %q，请修改 config.yaml 设置强密码后重启", defaultAdminPass)
+	}
+	return nil
 }

@@ -1,6 +1,10 @@
 server:
   port: 8080
   tls: false
+  # 反代部署时填入上游 IP / CIDR；未配置则不信任任何代理（登录限流按直连 IP 计数）
+  # trusted_proxies:
+  #   - 127.0.0.1
+  #   - 10.0.0.0/8
 
 database:
   path: data/panel.db

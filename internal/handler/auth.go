@@ -33,14 +33,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// 验证用户名
-	if req.Username != h.authSvc.GetUsername() {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误", "code": "ERR_LOGIN_FAILED"})
-		return
-	}
-
-	// 验证密码
-	if !h.authSvc.VerifyPassword(req.Password) {
+	// 一次性校验用户名 + 密码，恒时比较，消除时序侧信道
+	if !h.authSvc.VerifyCredentials(req.Username, req.Password) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误", "code": "ERR_LOGIN_FAILED"})
 		return
 	}
@@ -182,10 +176,15 @@ func (h *AuthHandler) Disable2FA(c *gin.Context) {
 }
 
 func (h *AuthHandler) generateToken(username string) string {
+	now := time.Now()
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"username": username,
 		"type":     "access",
-		"exp":      time.Now().Add(time.Duration(h.cfg.Auth.TokenExpiry) * time.Hour).Unix(),
+		// ver 与 AuthService.GetTokenVersion() 绑定；改密/改用户名/开关 2FA 时版本递增
+		// 中间件发现 ver 不等于当前版本即视为 token 已吊销
+		"ver": h.authSvc.GetTokenVersion(),
+		"iat": now.Unix(),
+		"exp": now.Add(time.Duration(h.cfg.Auth.TokenExpiry) * time.Hour).Unix(),
 	})
 	tokenStr, _ := token.SignedString([]byte(h.cfg.Auth.JWTSecret))
 	return tokenStr

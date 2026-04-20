@@ -28,7 +28,9 @@ func DomainGuard(domain string) gin.HandlerFunc {
 }
 
 // JWTAuth - JWT 认证中间件
-func JWTAuth(secret string) gin.HandlerFunc {
+// currentVersion 由 AuthService.GetTokenVersion 提供；token 的 ver claim 与之不一致即判定已吊销
+// 改密/改用户名/开关 2FA 会使版本递增，历史 token 立即失效
+func JWTAuth(secret string, currentVersion func() int) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		auth := c.GetHeader("Authorization")
 		if auth == "" || !strings.HasPrefix(auth, "Bearer ") {
@@ -54,16 +56,28 @@ func JWTAuth(secret string) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		// 强制要求 access token 类型,防止 2fa_pending 等其他用途的 token 被误用
+		// 强制要求 access token 类型，防止 2fa_pending 等其他用途的 token 被误用
 		if t, _ := claims["type"].(string); t != "access" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌无效", "code": "ERR_INVALID_TOKEN"})
 			c.Abort()
 			return
 		}
+		// 版本校验：改密/改用户名/开关 2FA 会递增 token_version，使历史 token 立即失效
+		if currentVersion != nil {
+			ver, _ := claims["ver"].(float64) // JWT 数字默认被解析为 float64
+			if int(ver) != currentVersion() {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "令牌已失效，请重新登录", "code": "ERR_TOKEN_REVOKED"})
+				c.Abort()
+				return
+			}
+		}
 		c.Set("username", claims["username"])
 		c.Next()
 	}
 }
+
+// limiterCleanupInterval - 限流器空 key 后台清理周期
+const limiterCleanupInterval = 5 * time.Minute
 
 // RateLimiter - 登录限流 (5次/分钟/IP)
 type RateLimiter struct {
@@ -72,7 +86,33 @@ type RateLimiter struct {
 }
 
 func NewRateLimiter() *RateLimiter {
-	return &RateLimiter{attempts: make(map[string][]time.Time)}
+	rl := &RateLimiter{attempts: make(map[string][]time.Time)}
+	go rl.janitor()
+	return rl
+}
+
+// janitor 周期性清理 attempts 中的过期/空 entry，避免长期运行时 map 无界增长
+func (rl *RateLimiter) janitor() {
+	ticker := time.NewTicker(limiterCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		rl.mu.Lock()
+		now := time.Now()
+		for k, v := range rl.attempts {
+			var valid []time.Time
+			for _, t := range v {
+				if now.Sub(t) < time.Minute {
+					valid = append(valid, t)
+				}
+			}
+			if len(valid) == 0 {
+				delete(rl.attempts, k)
+			} else {
+				rl.attempts[k] = valid
+			}
+		}
+		rl.mu.Unlock()
+	}
 }
 
 func (rl *RateLimiter) LoginRateLimit() gin.HandlerFunc {
@@ -101,23 +141,50 @@ func (rl *RateLimiter) LoginRateLimit() gin.HandlerFunc {
 	}
 }
 
-// SubRateLimiter - 订阅限流 (30次/分钟/UUID)
+// SubRateLimiter - 订阅限流 (30次/分钟)，限流 key = uuid + IP
+// 仅用 uuid 作为 key 时，攻击者拿到泄漏的订阅链接可精准 DoS 指定用户；
+// 叠加 IP 维度后，攻击者即使刷爆自己的 IP 配额也无法阻断合法客户端
 type SubRateLimiter struct {
 	mu       sync.Mutex
 	attempts map[string][]time.Time
 }
 
 func NewSubRateLimiter() *SubRateLimiter {
-	return &SubRateLimiter{attempts: make(map[string][]time.Time)}
+	srl := &SubRateLimiter{attempts: make(map[string][]time.Time)}
+	go srl.janitor()
+	return srl
+}
+
+func (srl *SubRateLimiter) janitor() {
+	ticker := time.NewTicker(limiterCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		srl.mu.Lock()
+		now := time.Now()
+		for k, v := range srl.attempts {
+			var valid []time.Time
+			for _, t := range v {
+				if now.Sub(t) < time.Minute {
+					valid = append(valid, t)
+				}
+			}
+			if len(valid) == 0 {
+				delete(srl.attempts, k)
+			} else {
+				srl.attempts[k] = valid
+			}
+		}
+		srl.mu.Unlock()
+	}
 }
 
 func (srl *SubRateLimiter) Limit() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		uuid := c.Param("uuid")
+		key := c.Param("uuid") + "|" + c.ClientIP()
 		srl.mu.Lock()
 		now := time.Now()
 		// 清理过期记录
-		existing := srl.attempts[uuid]
+		existing := srl.attempts[key]
 		var valid []time.Time
 		for _, t := range existing {
 			if now.Sub(t) < time.Minute {
@@ -125,13 +192,13 @@ func (srl *SubRateLimiter) Limit() gin.HandlerFunc {
 			}
 		}
 		if len(valid) >= 30 {
-			srl.attempts[uuid] = valid
+			srl.attempts[key] = valid
 			srl.mu.Unlock()
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "请求过于频繁", "code": "ERR_RATE_LIMIT"})
 			c.Abort()
 			return
 		}
-		srl.attempts[uuid] = append(valid, now)
+		srl.attempts[key] = append(valid, now)
 		srl.mu.Unlock()
 		c.Next()
 	}

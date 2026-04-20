@@ -8,11 +8,11 @@ import (
 
 // fakeRun 记录每次调用的完整命令，并按预设返回结果
 type fakeRun struct {
-	calls    [][]string
-	stdouts  [][]byte
-	stderrs  [][]byte
-	errs     []error
-	callIdx  int
+	calls   [][]string
+	stdouts [][]byte
+	stderrs [][]byte
+	errs    []error
+	callIdx int
 }
 
 func (f *fakeRun) run(ctx context.Context, name string, args ...string) ([]byte, []byte, error) {

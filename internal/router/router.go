@@ -23,6 +23,10 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 
 	r := gin.Default()
 
+	// 反代部署时必须配置 trusted_proxies，否则 X-Forwarded-For 可被伪造
+	// 未配置时传 nil 让 gin 忽略所有代理 header，ClientIP() 回退到直连 RemoteAddr
+	_ = r.SetTrustedProxies(cfg.Server.TrustedProxies)
+
 	// 域名绑定：配置了域名时，拒绝通过 IP 直接访问
 	if cfg.Server.Domain != "" {
 		r.Use(DomainGuard(cfg.Server.Domain))
@@ -71,7 +75,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 		api.GET("/sub/:uuid", subLimiter.Limit(), subHandler.Subscribe)
 
 		// 需要认证的端点
-		auth := api.Group("", JWTAuth(cfg.Auth.JWTSecret))
+		auth := api.Group("", JWTAuth(cfg.Auth.JWTSecret, authSvc.GetTokenVersion))
 		{
 			// 仪表盘
 			auth.GET("/dashboard", dashboardHandler.Get)
