@@ -7,6 +7,7 @@ import (
 
 	"proxy-panel/internal/database"
 	"proxy-panel/internal/model"
+	"proxy-panel/internal/service/firewall"
 )
 
 // CreateNodeReq 创建节点请求
@@ -37,11 +38,12 @@ type UpdateNodeReq struct {
 // NodeService 节点业务逻辑
 type NodeService struct {
 	db *database.DB
+	fw *firewall.Service
 }
 
 // NewNodeService 创建节点服务
-func NewNodeService(db *database.DB) *NodeService {
-	return &NodeService{db: db}
+func NewNodeService(db *database.DB, fw *firewall.Service) *NodeService {
+	return &NodeService{db: db, fw: fw}
 }
 
 // List 获取所有节点
@@ -130,7 +132,12 @@ func (s *NodeService) Create(req *CreateNodeReq) (*model.Node, error) {
 	}
 
 	id, _ := result.LastInsertId()
-	return s.GetByID(id)
+	node, err := s.GetByID(id)
+	if err != nil || node == nil {
+		return node, err
+	}
+	go s.fw.Allow(node.Port)
+	return node, nil
 }
 
 // Update 更新节点（部分更新）
@@ -209,14 +216,17 @@ func (s *NodeService) Update(id int64, req *UpdateNodeReq) (*model.Node, error) 
 
 // Delete 删除节点
 func (s *NodeService) Delete(id int64) error {
-	result, err := s.db.Exec("DELETE FROM nodes WHERE id = ?", id)
+	old, err := s.GetByID(id)
 	if err != nil {
-		return fmt.Errorf("删除节点失败: %w", err)
+		return err
 	}
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
+	if old == nil {
 		return fmt.Errorf("节点不存在")
 	}
+	if _, err := s.db.Exec("DELETE FROM nodes WHERE id = ?", id); err != nil {
+		return fmt.Errorf("删除节点失败: %w", err)
+	}
+	go s.fw.Revoke(old.Port)
 	return nil
 }
 

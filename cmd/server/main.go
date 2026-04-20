@@ -22,6 +22,11 @@ func main() {
 		log.Fatalf("加载配置失败: %v", err)
 	}
 
+	// 安全守卫：默认凭证 / JWT 密钥未改动时拒绝启动，避免生产裸奔
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("配置校验失败: %v\n请编辑 %s 后重新启动", err, *cfgPath)
+	}
+
 	db, err := database.Open(cfg.Database.Path)
 	if err != nil {
 		log.Fatalf("初始化数据库失败: %v", err)
@@ -38,7 +43,7 @@ func main() {
 	// 初始化 Services
 	authSvc := service.NewAuthService(db, cfg)
 	userSvc := service.NewUserService(db)
-	nodeSvc := service.NewNodeService(db)
+	nodeSvc := service.NewNodeService(db, nil) // firewall 在 Task 9 注入
 	trafficSvc := service.NewTrafficService(db, mgr)
 	notifySvc := notify.NewNotifyService(cfg, db)
 
