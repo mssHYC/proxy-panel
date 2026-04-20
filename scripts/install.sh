@@ -625,6 +625,32 @@ do_cert() {
 }
 
 # ============================================
+# 复用现有配置 (重装场景)
+# ============================================
+
+# 从现有 config.yaml 解析 setup_firewall / print_summary 所需的变量，
+# 避免重装时让用户再次输入端口、账号、TLS、Telegram 等。
+# 不重写 config.yaml：JWT、密码 hash 引用、自定义字段全部原样保留。
+load_existing_config() {
+    [[ ! -f "$CONFIG_FILE" ]] && error "config.yaml 不存在，无法复用配置"
+
+    local awk_server='/^server:/{f=1;next} /^[a-z]/{f=0} f && $1==key":"{sub(/^[^:]+:[[:space:]]*/,""); gsub(/^"|"$/,""); print; exit}'
+    PANEL_PORT=$(awk -v key="port"   "$awk_server" "$CONFIG_FILE")
+    TLS_ENABLED=$(awk -v key="tls"   "$awk_server" "$CONFIG_FILE")
+    CERT_PATH=$(awk -v key="cert"    "$awk_server" "$CONFIG_FILE")
+    KEY_PATH=$(awk -v key="key"      "$awk_server" "$CONFIG_FILE")
+    DOMAIN=$(awk -v key="domain"     "$awk_server" "$CONFIG_FILE")
+
+    ADMIN_USER=$(awk '/^auth:/{f=1;next} /^[a-z]/{f=0} f && /admin_user:/{sub(/^[^:]+:[[:space:]]*/,""); gsub(/^"|"$/,""); print; exit}' "$CONFIG_FILE")
+
+    : "${PANEL_PORT:=8080}"
+    : "${TLS_ENABLED:=false}"
+    : "${ADMIN_USER:=admin}"
+
+    info "已读取现有配置: 端口=${PANEL_PORT}, 管理员=${ADMIN_USER}, TLS=${TLS_ENABLED}${DOMAIN:+, 域名=${DOMAIN}}"
+}
+
+# ============================================
 # 交互式配置
 # ============================================
 
@@ -1084,12 +1110,14 @@ do_install() {
     detect_os
     detect_arch
 
-    # 检查是否已安装
+    # 检查是否已安装：重装走 "复用现有配置" 快捷路径
+    local REINSTALL="false"
     if [[ -f "${INSTALL_DIR}/proxy-panel" ]]; then
         warn "检测到已安装 ProxyPanel"
-        if confirm "是否覆盖安装? (配置和数据将保留)"; then
+        if confirm "是否覆盖安装? (复用现有配置、数据、证书)"; then
             stop_all_services
-            info "开始覆盖安装..."
+            REINSTALL="true"
+            info "开始覆盖安装 (复用现有配置，跳过交互式询问)..."
         else
             info "取消安装"
             exit 0
@@ -1097,6 +1125,20 @@ do_install() {
     fi
 
     install_deps
+
+    if [[ "$REINSTALL" == "true" ]]; then
+        load_existing_config
+        setup_firewall
+        download_xray
+        download_singbox
+        download_panel
+        install_cli
+        setup_systemd
+        start_services
+        print_summary
+        return
+    fi
+
     interactive_config
     setup_firewall
     generate_config
