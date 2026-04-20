@@ -77,6 +77,12 @@ confirm() {
     [[ "$answer" =~ ^[Yy]$ ]]
 }
 
+confirm_default_yes() {
+    local msg="${1:-确认继续?}"
+    read -p "${msg} [Y/n]: " answer
+    [[ -z "$answer" || "$answer" =~ ^[Yy]$ ]]
+}
+
 # ============================================
 # 安装依赖
 # ============================================
@@ -703,6 +709,10 @@ kernel:
   singbox_path: /usr/local/bin/sing-box
   singbox_config: ${INSTALL_DIR}/kernel/singbox.json
   singbox_api_port: 9090
+
+firewall:
+  enable: ${FIREWALL_ENABLE:-false}
+  backend: "${FIREWALL_BACKEND:-}"
 CFGEOF
 
     chmod 600 "$CONFIG_FILE"
@@ -871,15 +881,40 @@ SVCEOF
 
 setup_firewall() {
     step "配置防火墙..."
+
+    local detected=""
     if command -v ufw &>/dev/null; then
+        detected="ufw"
+    elif command -v firewall-cmd &>/dev/null; then
+        detected="firewalld"
+    fi
+
+    if [[ -z "$detected" ]]; then
+        warn "未检测到防火墙工具，请手动放行端口 ${PANEL_PORT}"
+        FIREWALL_ENABLE="false"
+        FIREWALL_BACKEND=""
+        return
+    fi
+
+    # 放行面板端口（保持原有逻辑）
+    if [[ "$detected" == "ufw" ]]; then
         ufw allow "${PANEL_PORT}/tcp" >/dev/null 2>&1
         info "ufw 已放行端口 ${PANEL_PORT}"
-    elif command -v firewall-cmd &>/dev/null; then
+    else
         firewall-cmd --permanent --add-port="${PANEL_PORT}/tcp" >/dev/null 2>&1
         firewall-cmd --reload >/dev/null 2>&1
         info "firewalld 已放行端口 ${PANEL_PORT}"
+    fi
+
+    # 询问是否启用节点端口自动同步
+    if confirm_default_yes "是否启用节点端口自动放行（新增/删除节点时自动同步防火墙）?"; then
+        FIREWALL_ENABLE="true"
+        FIREWALL_BACKEND="$detected"
+        info "已启用节点端口自动同步 (backend=$detected)"
     else
-        warn "未检测到防火墙工具，请手动放行端口 ${PANEL_PORT}"
+        FIREWALL_ENABLE="false"
+        FIREWALL_BACKEND=""
+        info "已跳过节点端口自动同步（可日后在 config.yaml 的 firewall 段手动开启）"
     fi
 }
 
