@@ -23,6 +23,8 @@ func selectBackend(name string) (Backend, error) {
 	switch name {
 	case "ufw":
 		return newUFWBackend(defaultRunner), nil
+	case "firewalld":
+		return newFirewalldBackend(defaultRunner), nil
 	default:
 		return nil, fmt.Errorf("不支持的 firewall backend: %q", name)
 	}
