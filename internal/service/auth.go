@@ -12,19 +12,36 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// 用于在没有真实 hash / 用户名不匹配时仍执行一次 bcrypt，消除登录响应时间差
-// 值为 bcrypt("__no_match__")，任意密码都将比较失败
-const dummyBcryptHash = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
-
 type AuthService struct {
 	db  *database.DB
 	cfg *config.Config
+	// 与真实 hash 同 cost 的 dummy bcrypt hash；用户名不匹配时也走一次 bcrypt 消除时序侧信道
+	// 启动时由 refreshDummyHash 生成，改密后刷新；保证 cost 始终与真实 hash 对齐，
+	// 避免因 bcrypt.DefaultCost 历史变化而产生时间差
+	dummyHash []byte
 }
 
 func NewAuthService(db *database.DB, cfg *config.Config) *AuthService {
 	svc := &AuthService{db: db, cfg: cfg}
 	svc.initFromConfig()
+	svc.refreshDummyHash()
 	return svc
+}
+
+// refreshDummyHash 按当前真实 hash 的 cost 生成 dummy，保持时序对齐
+func (s *AuthService) refreshDummyHash() {
+	cost := bcrypt.DefaultCost
+	if real := s.GetPasswordHash(); len(real) > 0 && real[0] == '$' {
+		if c, err := bcrypt.Cost([]byte(real)); err == nil {
+			cost = c
+		}
+	}
+	dummy, err := bcrypt.GenerateFromPassword([]byte("__no_match__"), cost)
+	if err != nil {
+		// 极端情况下回退到固定 cost；正常路径不会触发
+		dummy, _ = bcrypt.GenerateFromPassword([]byte("__no_match__"), bcrypt.DefaultCost)
+	}
+	s.dummyHash = dummy
 }
 
 // initFromConfig 首次启动时将 config 中的凭据写入数据库（如果数据库中还没有）
@@ -93,9 +110,9 @@ func (s *AuthService) GetTokenVersion() int {
 
 // bumpTokenVersion 递增 token 版本号，使历史 JWT 全部作废
 // 任何足以改变账号安全态势的操作（改密码/改用户名/开关 2FA）都应调用
+// 用单条 SQL 完成读-改-写，避免并发管理操作下少递增一次的竞态
 func (s *AuthService) bumpTokenVersion() {
-	next := s.GetTokenVersion() + 1
-	s.setSetting("token_version", strconv.Itoa(next))
+	_, _ = s.db.Exec("UPDATE settings SET value = CAST(value AS INTEGER) + 1 WHERE key = 'token_version'")
 }
 
 // VerifyCredentials 恒时校验用户名 + 密码
@@ -109,7 +126,7 @@ func (s *AuthService) VerifyCredentials(username, password string) bool {
 	stored := s.GetPasswordHash()
 	// 用户名不匹配时改用 dummy hash，保证两条分支都走 bcrypt
 	if !userOK {
-		stored = dummyBcryptHash
+		stored = string(s.dummyHash)
 	}
 
 	var passOK bool
@@ -117,7 +134,7 @@ func (s *AuthService) VerifyCredentials(username, password string) bool {
 		passOK = bcrypt.CompareHashAndPassword([]byte(stored), []byte(password)) == nil
 	} else {
 		// 历史明文兜底；此时也预执行一次 bcrypt，避免时间差
-		_ = bcrypt.CompareHashAndPassword([]byte(dummyBcryptHash), []byte(password))
+		_ = bcrypt.CompareHashAndPassword(s.dummyHash, []byte(password))
 		passOK = subtle.ConstantTimeCompare([]byte(stored), []byte(password)) == 1
 	}
 
@@ -150,6 +167,26 @@ func (s *AuthService) ChangePassword(oldPass, newPass string) error {
 	}
 	// 密码变更 → 吊销所有历史 token
 	s.bumpTokenVersion()
+	// hash 变了，重新生成同 cost 的 dummy 以保持时序对齐
+	s.refreshDummyHash()
+	return nil
+}
+
+// ForceResetPassword 由 CLI -reset-pass 调用，跳过旧密码校验直接覆盖
+// 仅用于 root 在主机上执行 install.sh reset-pwd 的场景；不暴露给 HTTP 层
+func (s *AuthService) ForceResetPassword(newPass string) error {
+	if len(newPass) < 8 {
+		return fmt.Errorf("新密码长度至少 8 位")
+	}
+	hashed, err := bcrypt.GenerateFromPassword([]byte(newPass), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("密码加密失败: %w", err)
+	}
+	if err := s.setSetting("admin_pass", string(hashed)); err != nil {
+		return err
+	}
+	s.bumpTokenVersion()
+	s.refreshDummyHash()
 	return nil
 }
 

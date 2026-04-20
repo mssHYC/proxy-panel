@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	"proxy-panel/internal/config"
 	"proxy-panel/internal/database"
@@ -17,6 +18,7 @@ import (
 
 func main() {
 	cfgPath := flag.String("config", "config.yaml", "配置文件路径")
+	resetPass := flag.String("reset-pass", "", "重置管理员密码后退出（供 install.sh reset-pwd 调用）")
 	flag.Parse()
 
 	cfg, err := config.Load(*cfgPath)
@@ -34,6 +36,17 @@ func main() {
 		log.Fatalf("初始化数据库失败: %v", err)
 	}
 	defer db.Close()
+
+	// CLI 一次性操作：重置密码后立即退出，不进入服务监听流程
+	// 直接更新 DB 并 bump token_version，使所有历史 JWT 立即失效
+	if *resetPass != "" {
+		authSvc := service.NewAuthService(db, cfg)
+		if err := authSvc.ForceResetPassword(*resetPass); err != nil {
+			log.Fatalf("重置密码失败: %v", err)
+		}
+		log.Println("密码已重置，所有现有登录会话已失效")
+		os.Exit(0)
+	}
 
 	// 初始化内核 Manager
 	mgr := kernel.NewManager()
