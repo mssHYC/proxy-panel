@@ -17,8 +17,7 @@ type Backend interface {
 }
 
 // selectBackend returns the Backend implementation for the given name.
-// This is currently a stub that returns an error for every name; real ufw /
-// firewalld cases are wired in by follow-up changes.
+// Supported names: "ufw", "firewalld".
 func selectBackend(name string) (Backend, error) {
 	switch name {
 	case "ufw":

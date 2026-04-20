@@ -106,7 +106,7 @@ func TestService_Revoke_BackendFailure_TriggersNotify(t *testing.T) {
 func TestService_EnsureAll_ContinuesOnFailure(t *testing.T) {
 	b := &fakeBackend{
 		name:     "fake",
-		allowErr: nil,
+		allowErr: errFake("backend down"),
 	}
 	n := &fakeNotifier{}
 	s := &Service{backend: b, enabled: true, notify: n}
@@ -114,6 +114,6 @@ func TestService_EnsureAll_ContinuesOnFailure(t *testing.T) {
 	s.EnsureAll(context.Background(), []int{10, 20, 30})
 
 	if len(b.allows) != 3 {
-		t.Fatalf("expected 3 allows, got %v", b.allows)
+		t.Fatalf("expected 3 allows even with failures, got %v", b.allows)
 	}
 }
