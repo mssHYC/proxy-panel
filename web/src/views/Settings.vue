@@ -14,6 +14,9 @@
       <el-tab-pane label="分流规则" name="rules">
         <RulesSection v-if="activeTab === 'rules'" />
       </el-tab-pane>
+      <el-tab-pane label="防火墙" name="firewall">
+        <FirewallSection v-if="activeTab === 'firewall'" />
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -24,6 +27,7 @@ import AccountSection from './settings/AccountSection.vue'
 import NotifySection from './settings/NotifySection.vue'
 import AlertSection from './settings/AlertSection.vue'
 import RulesSection from './settings/RulesSection.vue'
+import FirewallSection from './settings/FirewallSection.vue'
 
-const activeTab = ref<'account' | 'notify' | 'alert' | 'rules'>('account')
+const activeTab = ref<'account' | 'notify' | 'alert' | 'rules' | 'firewall'>('account')
 </script>

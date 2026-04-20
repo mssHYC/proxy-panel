@@ -4,7 +4,13 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"proxy-panel/internal/config"
 )
+
+func fwcfg(enable bool, backend string) config.FirewallConfig {
+	return config.FirewallConfig{Enable: enable, Backend: backend}
+}
 
 // fakeBackend 记录调用轨迹，便于 Service 行为断言
 type fakeBackend struct {
@@ -100,6 +106,50 @@ func TestService_Revoke_BackendFailure_TriggersNotify(t *testing.T) {
 	}
 	if len(n.messages) != 1 || !strings.Contains(n.messages[0], "关闭") {
 		t.Errorf("notify text unexpected: %v", n.messages)
+	}
+}
+
+func TestService_Swap_EnableFalse_ClearsBackend(t *testing.T) {
+	b := &fakeBackend{name: "fake"}
+	s := &Service{backend: b, enabled: true, notify: &fakeNotifier{}}
+
+	if err := s.Swap(fwcfg(false, "")); err != nil {
+		t.Fatalf("Swap disable returned error: %v", err)
+	}
+	if s.Enabled() {
+		t.Fatalf("expected Enabled=false after disable")
+	}
+	if s.CurrentBackend() != "" {
+		t.Fatalf("expected empty backend, got %q", s.CurrentBackend())
+	}
+	if err := s.Allow(80); err != nil {
+		t.Fatalf("Allow after disable should no-op: %v", err)
+	}
+}
+
+func TestService_Swap_InvalidBackend_Fallback(t *testing.T) {
+	b := &fakeBackend{name: "fake"}
+	s := &Service{backend: b, enabled: true, notify: &fakeNotifier{}}
+
+	err := s.Swap(fwcfg(true, "nope"))
+	if err == nil {
+		t.Fatalf("expected error on invalid backend")
+	}
+	if s.Enabled() {
+		t.Fatalf("expected Enabled=false after failed Swap")
+	}
+}
+
+func TestService_Probe_DoesNotMutateState(t *testing.T) {
+	b := &fakeBackend{name: "fake"}
+	s := &Service{backend: b, enabled: true, notify: &fakeNotifier{}}
+
+	// probe 未知 backend：只报错，不影响当前状态
+	if err := s.Probe(context.Background(), "nope"); err == nil {
+		t.Fatalf("expected error on unknown backend probe")
+	}
+	if !s.Enabled() || s.CurrentBackend() != "fake" {
+		t.Fatalf("state mutated by Probe: enabled=%v backend=%q", s.Enabled(), s.CurrentBackend())
 	}
 }
 

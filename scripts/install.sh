@@ -1020,6 +1020,197 @@ setup_firewall() {
 }
 
 # ============================================
+# 防火墙管理子命令 (install.sh firewall enable|disable|status)
+# ============================================
+
+# 解析 config.yaml 中 firewall 段的当前值到全局 CURR_FW_ENABLE / CURR_FW_BACKEND
+parse_firewall_conf() {
+    CURR_FW_ENABLE=""
+    CURR_FW_BACKEND=""
+    [[ ! -f "$CONFIG_FILE" ]] && return
+    CURR_FW_ENABLE=$(awk '/^firewall:/{flag=1;next} /^[a-z]/{flag=0} flag && /enable:/{print $2; exit}' "$CONFIG_FILE" 2>/dev/null | tr -d '"')
+    CURR_FW_BACKEND=$(awk '/^firewall:/{flag=1;next} /^[a-z]/{flag=0} flag && /backend:/{print $2; exit}' "$CONFIG_FILE" 2>/dev/null | tr -d '"')
+}
+
+# 原地改写 config.yaml 的 firewall 段
+# 用法: rewrite_firewall_section <enable:true|false> <backend:ufw|firewalld|"">
+rewrite_firewall_section() {
+    local new_enable="$1"
+    local new_backend="$2"
+    [[ ! -f "$CONFIG_FILE" ]] && error "找不到配置文件: $CONFIG_FILE"
+
+    cp "$CONFIG_FILE" "${CONFIG_FILE}.bak"
+
+    # 若已存在 firewall 段，用 awk 原地替换 enable/backend 两行；否则 append 整段
+    if grep -q "^firewall:" "$CONFIG_FILE"; then
+        awk -v en="$new_enable" -v be="$new_backend" '
+            BEGIN{flag=0}
+            /^firewall:/{print; flag=1; next}
+            flag && /^[a-z]/{flag=0}
+            flag && /enable:/{printf "  enable: %s\n", en; next}
+            flag && /backend:/{printf "  backend: \"%s\"\n", be; next}
+            {print}
+        ' "${CONFIG_FILE}.bak" > "$CONFIG_FILE"
+    else
+        {
+            cat "${CONFIG_FILE}.bak"
+            echo ""
+            echo "firewall:"
+            echo "  enable: $new_enable"
+            echo "  backend: \"$new_backend\""
+        } > "$CONFIG_FILE"
+    fi
+}
+
+# 同步清理 settings 表中的 firewall 键（避免 DB 值覆盖 yaml 值）
+clear_firewall_settings_db() {
+    [[ ! -f "$DB_FILE" ]] && return
+    command -v sqlite3 &>/dev/null || return
+    sqlite3 "$DB_FILE" "DELETE FROM settings WHERE key IN ('firewall_enable','firewall_backend')" 2>/dev/null || true
+}
+
+firewall_status() {
+    echo "========== 防火墙状态 =========="
+    parse_firewall_conf
+    if [[ "$CURR_FW_ENABLE" == "true" ]]; then
+        echo -e "面板同步开关: ${GREEN}已启用${NC}"
+    else
+        echo -e "面板同步开关: ${YELLOW}未启用${NC}"
+    fi
+    echo "config.yaml backend: ${CURR_FW_BACKEND:-(未设置)}"
+
+    local detected=""
+    if command -v ufw &>/dev/null; then detected="ufw"
+    elif command -v firewall-cmd &>/dev/null; then detected="firewalld"
+    fi
+    echo "本机可用后端: ${detected:-(未检测到)}"
+
+    if [[ "$detected" == "ufw" ]]; then
+        echo ""
+        echo "--- ufw 当前规则 ---"
+        ufw status numbered 2>/dev/null || echo "(ufw status 无法执行)"
+    elif [[ "$detected" == "firewalld" ]]; then
+        echo ""
+        echo "--- firewalld 当前放行端口 ---"
+        firewall-cmd --list-ports 2>/dev/null || echo "(firewall-cmd 无法执行)"
+    fi
+
+    if [[ -f "$DB_FILE" ]] && command -v sqlite3 &>/dev/null; then
+        echo ""
+        echo "--- DB 中 enable=true 节点端口 ---"
+        sqlite3 "$DB_FILE" "SELECT DISTINCT port FROM nodes WHERE enable=1 ORDER BY port" 2>/dev/null | paste -sd ', ' -
+    fi
+    echo "================================"
+}
+
+firewall_enable() {
+    check_root
+    step "启用节点端口自动同步..."
+
+    local detected=""
+    if command -v ufw &>/dev/null; then detected="ufw"
+    elif command -v firewall-cmd &>/dev/null; then detected="firewalld"
+    fi
+
+    # 未检测到时尝试自动安装 ufw (仅 apt)
+    if [[ -z "$detected" ]]; then
+        if [[ "${PKG_MGR:-}" == "apt" ]] || command -v apt-get &>/dev/null; then
+            info "未检测到防火墙工具，尝试通过 apt-get 自动安装 ufw..."
+            apt-get update -y >/dev/null 2>&1
+            if DEBIAN_FRONTEND=noninteractive apt-get install -y ufw >/dev/null 2>&1 && command -v ufw &>/dev/null; then
+                detected="ufw"
+                info "ufw 安装成功"
+            else
+                error "未检测到 ufw / firewalld，且自动安装失败。请手动安装后重试。"
+            fi
+        else
+            error "未检测到 ufw / firewalld。请手动安装 (yum/dnf install firewalld 或 apt-get install ufw) 后重试。"
+        fi
+    fi
+
+    # 放行面板端口
+    parse_firewall_conf
+    local panel_port
+    panel_port=$(awk '/^server:/{flag=1;next} /^[a-z]/{flag=0} flag && /port:/{print $2; exit}' "$CONFIG_FILE" 2>/dev/null)
+    : "${panel_port:=8080}"
+    if [[ "$detected" == "ufw" ]]; then
+        ufw allow "${panel_port}/tcp" >/dev/null 2>&1
+    else
+        firewall-cmd --permanent --add-port="${panel_port}/tcp" >/dev/null 2>&1
+    fi
+
+    # 写回 config.yaml
+    rewrite_firewall_section "true" "$detected"
+    info "已写入 config.yaml: firewall.enable=true, backend=$detected"
+
+    # 避免 settings 表旧值覆盖 yaml 新值
+    clear_firewall_settings_db
+
+    # 对齐存量节点端口
+    if [[ -f "$DB_FILE" ]] && command -v sqlite3 &>/dev/null; then
+        local ports
+        ports=$(sqlite3 "$DB_FILE" "SELECT DISTINCT port FROM nodes WHERE enable=1" 2>/dev/null)
+        if [[ -n "$ports" ]]; then
+            local count=0
+            while IFS= read -r port; do
+                [[ -z "$port" ]] && continue
+                if [[ "$detected" == "ufw" ]]; then
+                    ufw allow "${port}/tcp" >/dev/null 2>&1
+                    ufw allow "${port}/udp" >/dev/null 2>&1
+                else
+                    firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1
+                    firewall-cmd --permanent --add-port="${port}/udp" >/dev/null 2>&1
+                fi
+                count=$((count+1))
+            done <<< "$ports"
+            [[ "$detected" == "firewalld" ]] && firewall-cmd --reload >/dev/null 2>&1
+            info "已补放行 ${count} 个存量节点端口"
+        fi
+    fi
+
+    info "重启面板服务使配置生效..."
+    systemctl restart ${SERVICE_NAME} 2>/dev/null || warn "重启 ${SERVICE_NAME} 失败，请手动执行"
+
+    echo ""
+    firewall_status
+}
+
+firewall_disable() {
+    check_root
+    step "关闭节点端口自动同步..."
+
+    if ! confirm "关闭后面板将不再同步防火墙规则；已存在的端口规则不会被回收。继续？"; then
+        info "已取消"
+        return
+    fi
+
+    rewrite_firewall_section "false" ""
+    info "已写入 config.yaml: firewall.enable=false"
+
+    clear_firewall_settings_db
+
+    info "重启面板服务使配置生效..."
+    systemctl restart ${SERVICE_NAME} 2>/dev/null || warn "重启 ${SERVICE_NAME} 失败，请手动执行"
+
+    echo ""
+    firewall_status
+}
+
+do_firewall() {
+    case "${2:-}" in
+        enable)  firewall_enable ;;
+        disable) firewall_disable ;;
+        status)  firewall_status ;;
+        *)
+            echo "防火墙管理命令:"
+            echo "  $0 firewall enable   - 启用节点端口自动同步 (写入 config.yaml + 重启面板 + 放行存量端口)"
+            echo "  $0 firewall disable  - 关闭自动同步 (不主动回收已有规则)"
+            echo "  $0 firewall status   - 查看启停状态 / 后端 / 放行端口"
+            ;;
+    esac
+}
+
+# ============================================
 # 停止所有服务
 # ============================================
 
@@ -1557,6 +1748,7 @@ show_help() {
     echo "  backup      备份配置和数据"
     echo "  restore     从备份恢复 (可选: restore <文件路径>)"
     echo "  cert        证书管理 (cert setup|status|renew)"
+    echo "  firewall    防火墙管理 (firewall enable|disable|status)"
     echo "  help        显示此帮助"
     echo ""
 }
@@ -1578,6 +1770,7 @@ main() {
         backup)     do_backup ;;
         restore)    do_restore "$2" ;;
         cert)       do_cert "$@" ;;
+        firewall)   do_firewall "$@" ;;
         help|--help|-h)
             show_help ;;
         "")
@@ -1586,7 +1779,7 @@ main() {
             echo ""
             ;;
         *)
-            error "未知命令: $1\n用法: proxy-panel {install|update|uninstall|status|restart|logs|reset-pwd|disable-2fa|backup|restore|cert|help}"
+            error "未知命令: $1\n用法: proxy-panel {install|update|uninstall|status|restart|logs|reset-pwd|disable-2fa|backup|restore|cert|firewall|help}"
             ;;
     esac
 }

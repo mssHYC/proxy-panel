@@ -9,6 +9,7 @@ import (
 	"proxy-panel/internal/handler"
 	"proxy-panel/internal/kernel"
 	"proxy-panel/internal/service"
+	"proxy-panel/internal/service/firewall"
 	notify "proxy-panel/internal/service/notify"
 	"proxy-panel/web"
 
@@ -19,7 +20,8 @@ import (
 func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	userSvc *service.UserService, nodeSvc *service.NodeService,
 	trafficSvc *service.TrafficService, notifySvc *notify.NotifyService,
-	authSvc *service.AuthService, scheduler *service.Scheduler) *gin.Engine {
+	authSvc *service.AuthService, scheduler *service.Scheduler,
+	fwSvc *firewall.Service) *gin.Engine {
 
 	r := gin.Default()
 
@@ -62,6 +64,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	settingHandler := handler.NewSettingHandler(db, cfg, scheduler)
 	notifyHandler := handler.NewNotifyHandler(notifySvc)
 	subHandler := handler.NewSubscriptionHandler(userSvc, nodeSvc, db)
+	firewallHandler := handler.NewFirewallHandler(fwSvc, cfg, db, nodeSvc)
 
 	// 限流器
 	rateLimiter := NewRateLimiter()
@@ -120,6 +123,10 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 
 			// 通知测试
 			auth.POST("/notify/test", notifyHandler.Test)
+
+			// 防火墙管理
+			auth.POST("/firewall/probe", firewallHandler.Probe)
+			auth.POST("/firewall/apply", firewallHandler.Apply)
 		}
 	}
 

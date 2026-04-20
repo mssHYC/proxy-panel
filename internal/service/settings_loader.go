@@ -10,12 +10,13 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// ApplySettingsToConfig 读取 settings 表中的调度相关键，覆盖 cfg.Traffic 中的对应字段
+// ApplySettingsToConfig 读取 settings 表中的调度/防火墙相关键，覆盖 cfg 对应字段
 // 调用时机：启动时（main）与热重载时（Scheduler.Reload）
 // 非法值会被忽略并记 log，不阻塞主流程
 func ApplySettingsToConfig(db *database.DB, cfg *config.Config) error {
-	rows, err := db.Query("SELECT key, value FROM settings WHERE key IN (?, ?, ?)",
-		"reset_cron", "collect_interval", "warn_percent")
+	rows, err := db.Query("SELECT key, value FROM settings WHERE key IN (?, ?, ?, ?, ?)",
+		"reset_cron", "collect_interval", "warn_percent",
+		"firewall_enable", "firewall_backend")
 	if err != nil {
 		return err
 	}
@@ -50,6 +51,18 @@ func ApplySettingsToConfig(db *database.DB, cfg *config.Config) error {
 				continue
 			}
 			cfg.Traffic.WarnPercent = n
+		case "firewall_enable":
+			if v != "true" && v != "false" {
+				log.Printf("[设置加载] firewall_enable %q 非法（需 true/false），忽略", v)
+				continue
+			}
+			cfg.Firewall.Enable = v == "true"
+		case "firewall_backend":
+			if v != "ufw" && v != "firewalld" && v != "" {
+				log.Printf("[设置加载] firewall_backend %q 非法（需 ufw/firewalld），忽略", v)
+				continue
+			}
+			cfg.Firewall.Backend = v
 		}
 	}
 	return nil

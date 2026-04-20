@@ -41,6 +41,17 @@ func (h *SettingHandler) Get(c *gin.Context) {
 	// 附带系统证书路径 (来自 config.yaml，install.sh 安装时生成)
 	settings["system_cert_path"] = h.cfg.Server.Cert
 	settings["system_key_path"] = h.cfg.Server.Key
+	// 防火墙：若 settings 表未存，用当前生效 cfg 值回显
+	if _, ok := settings["firewall_enable"]; !ok {
+		if h.cfg.Firewall.Enable {
+			settings["firewall_enable"] = "true"
+		} else {
+			settings["firewall_enable"] = "false"
+		}
+	}
+	if _, ok := settings["firewall_backend"]; !ok {
+		settings["firewall_backend"] = h.cfg.Firewall.Backend
+	}
 	c.JSON(http.StatusOK, settings)
 }
 
@@ -72,6 +83,30 @@ func (h *SettingHandler) Update(c *gin.Context) {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 1 || n > 100 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "warn_percent 必须为 1-100 的整数", "code": "ERR_BAD_REQUEST"})
+			return
+		}
+	}
+	// 防火墙键校验：enable 须为 true/false；backend 须为 ufw/firewalld/""；
+	// enable=true 时 backend 不可为空
+	if v, ok := settings["firewall_enable"]; ok {
+		if v != "true" && v != "false" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "firewall_enable 必须为 true 或 false", "code": "ERR_BAD_REQUEST"})
+			return
+		}
+	}
+	if v, ok := settings["firewall_backend"]; ok {
+		if v != "" && v != "ufw" && v != "firewalld" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "firewall_backend 仅支持 ufw 或 firewalld", "code": "ERR_BAD_REQUEST"})
+			return
+		}
+	}
+	if settings["firewall_enable"] == "true" {
+		backend, ok := settings["firewall_backend"]
+		if !ok {
+			backend = h.cfg.Firewall.Backend
+		}
+		if backend == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "启用防火墙时必须选择 backend", "code": "ERR_BAD_REQUEST"})
 			return
 		}
 	}
