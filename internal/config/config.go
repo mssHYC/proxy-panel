@@ -13,6 +13,7 @@ type Config struct {
 	Traffic  TrafficConfig  `yaml:"traffic"`
 	Notify   NotifyConfig   `yaml:"notify"`
 	Kernel   KernelConfig   `yaml:"kernel"`
+	Firewall FirewallConfig `yaml:"firewall"`
 }
 
 type ServerConfig struct {
@@ -64,6 +65,11 @@ type KernelConfig struct {
 	SingboxPath    string `yaml:"singbox_path"`
 	SingboxConfig  string `yaml:"singbox_config"`
 	SingboxAPIPort int    `yaml:"singbox_api_port"`
+}
+
+type FirewallConfig struct {
+	Enable  bool   `yaml:"enable"`
+	Backend string `yaml:"backend"`
 }
 
 // Load 从指定路径加载 YAML 配置文件，并返回解析后的 Config 结构体
