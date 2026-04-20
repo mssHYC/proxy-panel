@@ -71,15 +71,32 @@ detect_arch() {
     info "CPU 架构: $ARCH"
 }
 
+# 读取用户输入：优先从 /dev/tty 读，避免 `curl | bash` 下 stdin 是管道导致
+# read 把脚本自身当作答案。无 tty 时 answer 保持空串，由调用方按默认值决定。
+_read_answer() {
+    local msg="$1"
+    local __var="$2"
+    if [[ -r /dev/tty ]]; then
+        read -r -p "${msg}" "${__var}" </dev/tty
+    else
+        # 非交互场景：打印提示但立即返回空串（走默认分支）
+        printf '%s' "${msg}"
+        eval "${__var}=''"
+        echo "(非交互环境，采用默认值)"
+    fi
+}
+
 confirm() {
     local msg="${1:-确认继续?}"
-    read -p "${msg} [y/N]: " answer
+    local answer
+    _read_answer "${msg} [y/N]: " answer
     [[ "$answer" =~ ^[Yy]$ ]]
 }
 
 confirm_default_yes() {
     local msg="${1:-确认继续?}"
-    read -p "${msg} [Y/n]: " answer
+    local answer
+    _read_answer "${msg} [Y/n]: " answer
     [[ -z "$answer" || "$answer" =~ ^[Yy]$ ]]
 }
 
@@ -927,15 +944,52 @@ setup_firewall() {
         info "firewalld 已放行端口 ${PANEL_PORT}"
     fi
 
-    # 询问是否启用节点端口自动同步
-    if confirm_default_yes "是否启用节点端口自动放行（新增/删除节点时自动同步防火墙）?"; then
+    # 重装场景：若旧 config.yaml 已显式启用防火墙同步，直接继承，不再追问
+    local prev_enable=""
+    local prev_backend=""
+    if [[ -f "$CONFIG_FILE" ]]; then
+        prev_enable=$(awk '/^firewall:/{flag=1;next} /^[a-z]/{flag=0} flag && /enable:/{print $2; exit}' "$CONFIG_FILE" 2>/dev/null | tr -d '"')
+        prev_backend=$(awk '/^firewall:/{flag=1;next} /^[a-z]/{flag=0} flag && /backend:/{print $2; exit}' "$CONFIG_FILE" 2>/dev/null | tr -d '"')
+    fi
+
+    if [[ "$prev_enable" == "true" ]]; then
         FIREWALL_ENABLE="true"
-        FIREWALL_BACKEND="$detected"
-        info "已启用节点端口自动同步 (backend=$detected)"
+        FIREWALL_BACKEND="${prev_backend:-$detected}"
+        info "继承原 config.yaml 的节点端口自动同步设置 (backend=${FIREWALL_BACKEND})"
     else
-        FIREWALL_ENABLE="false"
-        FIREWALL_BACKEND=""
-        info "已跳过节点端口自动同步（可日后在 config.yaml 的 firewall 段手动开启）"
+        # 首次安装：询问是否启用节点端口自动同步
+        if confirm_default_yes "是否启用节点端口自动放行（新增/删除节点时自动同步防火墙）?"; then
+            FIREWALL_ENABLE="true"
+            FIREWALL_BACKEND="$detected"
+            info "已启用节点端口自动同步 (backend=$detected)"
+        else
+            FIREWALL_ENABLE="false"
+            FIREWALL_BACKEND=""
+            info "已跳过节点端口自动同步（可日后在 config.yaml 的 firewall 段手动开启）"
+        fi
+    fi
+
+    # 启用同步时，立即从 DB 读取存量节点端口并放行。
+    # 避免 systemd 尚未启动 / boot-time EnsureAll 还没跑完时节点不可达的窗口。
+    if [[ "$FIREWALL_ENABLE" == "true" && -f "$DB_FILE" ]] && command -v sqlite3 &>/dev/null; then
+        local ports
+        ports=$(sqlite3 "$DB_FILE" "SELECT DISTINCT port FROM nodes WHERE enable=1" 2>/dev/null)
+        if [[ -n "$ports" ]]; then
+            local count=0
+            while IFS= read -r port; do
+                [[ -z "$port" ]] && continue
+                if [[ "$detected" == "ufw" ]]; then
+                    ufw allow "${port}/tcp" >/dev/null 2>&1
+                    ufw allow "${port}/udp" >/dev/null 2>&1
+                else
+                    firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1
+                    firewall-cmd --permanent --add-port="${port}/udp" >/dev/null 2>&1
+                fi
+                count=$((count+1))
+            done <<< "$ports"
+            [[ "$detected" == "firewalld" ]] && firewall-cmd --reload >/dev/null 2>&1
+            info "已补放行 ${count} 个存量节点端口"
+        fi
     fi
 }
 
