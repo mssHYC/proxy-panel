@@ -9,6 +9,7 @@ import (
 
 	"golang.org/x/crypto/curve25519"
 
+	"proxy-panel/internal/model"
 	"proxy-panel/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -73,7 +74,7 @@ func (h *NodeHandler) Create(c *gin.Context) {
 	// 同步内核配置
 	go h.syncSvc.Sync()
 
-	c.JSON(http.StatusCreated, node)
+	c.JSON(http.StatusCreated, withFirewallWarning(h, node))
 }
 
 // Update 更新节点
@@ -103,7 +104,7 @@ func (h *NodeHandler) Update(c *gin.Context) {
 	// 同步内核配置
 	go h.syncSvc.Sync()
 
-	c.JSON(http.StatusOK, node)
+	c.JSON(http.StatusOK, withFirewallWarning(h, node))
 }
 
 // GenerateRealityKeypair 生成 x25519 密钥对和 Short IDs
@@ -158,5 +159,32 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 	// 同步内核配置
 	go h.syncSvc.Sync()
 
-	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
+	resp := gin.H{"message": "删除成功"}
+	if w := firewallWarning(h); w != "" {
+		resp["firewall_warning"] = w
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// firewallWarning returns a user-facing hint when firewall sync is enabled.
+// Empty string means the feature is off; callers should omit the field.
+func firewallWarning(h *NodeHandler) string {
+	if h.svc == nil || !h.svc.FirewallEnabled() {
+		return ""
+	}
+	return "防火墙同步已异步触发，如需核对请查看系统日志或 ufw/firewall-cmd 当前规则"
+}
+
+// withFirewallWarning wraps a node in an anonymous struct that embeds the node
+// (inheriting all existing JSON fields) and adds an optional firewall_warning
+// field. When the warning is empty, omitempty keeps the output identical to
+// the bare node.
+func withFirewallWarning(h *NodeHandler, node *model.Node) any {
+	return struct {
+		*model.Node
+		FirewallWarning string `json:"firewall_warning,omitempty"`
+	}{
+		Node:            node,
+		FirewallWarning: firewallWarning(h),
+	}
 }

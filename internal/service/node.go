@@ -309,3 +309,8 @@ func scanNodeRow(row *sql.Row, n *model.Node) error {
 	return row.Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Protocol, &n.Transport,
 		&n.KernelType, &n.Settings, &n.Enable, &n.SortOrder, &n.CreatedAt, &n.UpdatedAt)
 }
+
+// FirewallEnabled 供 handler 判断是否需要返回 firewall_warning
+func (s *NodeService) FirewallEnabled() bool {
+	return s.fw != nil && s.fw.Enabled()
+}
