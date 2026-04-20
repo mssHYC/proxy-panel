@@ -1023,6 +1023,7 @@ do_install() {
 
     install_deps
     interactive_config
+    setup_firewall
     generate_config
     generate_default_xray_config
     generate_default_singbox_config
@@ -1031,7 +1032,6 @@ do_install() {
     download_panel
     install_cli
     setup_systemd
-    setup_firewall
     start_services
     print_summary
 }
