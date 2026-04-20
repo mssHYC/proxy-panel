@@ -11,6 +11,7 @@ const routes = [
       { path: 'users', name: 'Users', component: () => import('../views/Users.vue') },
       { path: 'nodes', name: 'Nodes', component: () => import('../views/Nodes.vue') },
       { path: 'traffic', name: 'Traffic', component: () => import('../views/Traffic.vue') },
+      { path: 'audit-logs', name: 'AuditLogs', component: () => import('../views/AuditLogs.vue') },
       { path: 'settings', name: 'Settings', component: () => import('../views/Settings.vue') },
     ],
   },

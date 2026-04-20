@@ -1,5 +1,7 @@
 package database
 
+import "strings"
+
 // migrate 执行数据库迁移，创建所有必要的表和索引
 func (db *DB) migrate() error {
 	queries := []string{
@@ -77,6 +79,18 @@ func (db *DB) migrate() error {
 			key TEXT PRIMARY KEY,
 			value TEXT DEFAULT ''
 		)`,
+		`CREATE TABLE IF NOT EXISTS audit_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			actor TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL,
+			target_type TEXT DEFAULT '',
+			target_id TEXT DEFAULT '',
+			ip TEXT DEFAULT '',
+			detail TEXT DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_logs(actor)`,
 	}
 
 	for _, q := range queries {
@@ -84,5 +98,41 @@ func (db *DB) migrate() error {
 			return err
 		}
 	}
+
+	if err := db.addColumnIfNotExists("nodes", "last_check_at", "DATETIME"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfNotExists("nodes", "last_check_ok", "INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfNotExists("nodes", "last_check_err", "TEXT DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfNotExists("nodes", "fail_count", "INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
 	return nil
+}
+
+// addColumnIfNotExists 针对 SQLite 幂等添加列。
+func (db *DB) addColumnIfNotExists(table, column, typ string) error {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if strings.EqualFold(name, column) {
+			return nil
+		}
+	}
+	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + typ)
+	return err
 }

@@ -49,7 +49,8 @@ func NewNodeService(db *database.DB, fw *firewall.Service) *NodeService {
 // List 获取所有节点
 func (s *NodeService) List() ([]model.Node, error) {
 	rows, err := s.db.Query(`SELECT id, name, host, port, protocol, transport,
-		kernel_type, settings, enable, sort_order, created_at, updated_at
+		kernel_type, settings, enable, sort_order, created_at, updated_at,
+		last_check_at, last_check_ok, last_check_err, fail_count
 		FROM nodes ORDER BY sort_order ASC, id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("查询节点列表失败: %w", err)
@@ -70,7 +71,8 @@ func (s *NodeService) List() ([]model.Node, error) {
 // ListEnabled 获取已启用的节点（用于订阅）
 func (s *NodeService) ListEnabled() ([]model.Node, error) {
 	rows, err := s.db.Query(`SELECT id, name, host, port, protocol, transport,
-		kernel_type, settings, enable, sort_order, created_at, updated_at
+		kernel_type, settings, enable, sort_order, created_at, updated_at,
+		last_check_at, last_check_ok, last_check_err, fail_count
 		FROM nodes WHERE enable = 1 ORDER BY sort_order ASC, id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("查询启用节点失败: %w", err)
@@ -91,7 +93,8 @@ func (s *NodeService) ListEnabled() ([]model.Node, error) {
 // GetByID 根据 ID 获取节点
 func (s *NodeService) GetByID(id int64) (*model.Node, error) {
 	row := s.db.QueryRow(`SELECT id, name, host, port, protocol, transport,
-		kernel_type, settings, enable, sort_order, created_at, updated_at
+		kernel_type, settings, enable, sort_order, created_at, updated_at,
+		last_check_at, last_check_ok, last_check_err, fail_count
 		FROM nodes WHERE id = ?`, id)
 
 	var n model.Node
@@ -123,7 +126,8 @@ func (s *NodeService) Create(req *CreateNodeReq) (*model.Node, error) {
 	}
 
 	result, err := s.db.Exec(`INSERT INTO nodes (name, host, port, protocol, transport,
-		kernel_type, settings, enable, sort_order, created_at, updated_at)
+		kernel_type, settings, enable, sort_order, created_at, updated_at,
+		last_check_at, last_check_ok, last_check_err, fail_count)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
 		req.Name, req.Host, req.Port, req.Protocol, transport,
 		kernelType, settings, req.SortOrder, now, now)
@@ -301,13 +305,39 @@ func (s *NodeService) ListByUserID(userID int64) ([]model.Node, error) {
 }
 
 func scanNode(rows *sql.Rows, n *model.Node) error {
-	return rows.Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Protocol, &n.Transport,
-		&n.KernelType, &n.Settings, &n.Enable, &n.SortOrder, &n.CreatedAt, &n.UpdatedAt)
+	var lastAt sql.NullTime
+	var lastErr sql.NullString
+	if err := rows.Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Protocol, &n.Transport,
+		&n.KernelType, &n.Settings, &n.Enable, &n.SortOrder, &n.CreatedAt, &n.UpdatedAt,
+		&lastAt, &n.LastCheckOK, &lastErr, &n.FailCount); err != nil {
+		return err
+	}
+	if lastAt.Valid {
+		t := lastAt.Time
+		n.LastCheckAt = &t
+	}
+	if lastErr.Valid {
+		n.LastCheckErr = lastErr.String
+	}
+	return nil
 }
 
 func scanNodeRow(row *sql.Row, n *model.Node) error {
-	return row.Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Protocol, &n.Transport,
-		&n.KernelType, &n.Settings, &n.Enable, &n.SortOrder, &n.CreatedAt, &n.UpdatedAt)
+	var lastAt sql.NullTime
+	var lastErr sql.NullString
+	if err := row.Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Protocol, &n.Transport,
+		&n.KernelType, &n.Settings, &n.Enable, &n.SortOrder, &n.CreatedAt, &n.UpdatedAt,
+		&lastAt, &n.LastCheckOK, &lastErr, &n.FailCount); err != nil {
+		return err
+	}
+	if lastAt.Valid {
+		t := lastAt.Time
+		n.LastCheckAt = &t
+	}
+	if lastErr.Valid {
+		n.LastCheckErr = lastErr.String
+	}
+	return nil
 }
 
 // FirewallEnabled 供 handler 判断是否需要返回 firewall_warning

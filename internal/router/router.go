@@ -21,7 +21,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	userSvc *service.UserService, nodeSvc *service.NodeService,
 	trafficSvc *service.TrafficService, notifySvc *notify.NotifyService,
 	authSvc *service.AuthService, scheduler *service.Scheduler,
-	fwSvc *firewall.Service) *gin.Engine {
+	fwSvc *firewall.Service, auditSvc *service.AuditService, dbPath string) *gin.Engine {
 
 	r := gin.Default()
 
@@ -65,6 +65,8 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	notifyHandler := handler.NewNotifyHandler(notifySvc)
 	subHandler := handler.NewSubscriptionHandler(userSvc, nodeSvc, db)
 	firewallHandler := handler.NewFirewallHandler(fwSvc, cfg, db, nodeSvc)
+	auditHandler := handler.NewAuditHandler(auditSvc)
+	backupHandler := handler.NewBackupHandler(db, dbPath)
 
 	// 限流器
 	rateLimiter := NewRateLimiter()
@@ -78,7 +80,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 		api.GET("/sub/:uuid", subLimiter.Limit(), subHandler.Subscribe)
 
 		// 需要认证的端点
-		auth := api.Group("", JWTAuth(cfg.Auth.JWTSecret, authSvc.GetTokenVersion))
+		auth := api.Group("", JWTAuth(cfg.Auth.JWTSecret, authSvc.GetTokenVersion), AuditMiddleware(auditSvc))
 		{
 			// 仪表盘
 			auth.GET("/dashboard", dashboardHandler.Get)
@@ -127,6 +129,13 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 			// 防火墙管理
 			auth.POST("/firewall/probe", firewallHandler.Probe)
 			auth.POST("/firewall/apply", firewallHandler.Apply)
+
+			// 审计日志
+			auth.GET("/audit-logs", auditHandler.List)
+
+			// 备份/恢复
+			auth.GET("/backup/export", backupHandler.Export)
+			auth.POST("/backup/import", backupHandler.Import)
 		}
 	}
 

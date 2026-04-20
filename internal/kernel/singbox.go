@@ -313,12 +313,142 @@ func (e *SingboxEngine) buildInbound(node NodeConfig, users []UserConfig) map[st
 		return inbound
 
 	case "vless", "vmess", "trojan":
-		// TODO: 后续支持
-		return nil
+		inbound := map[string]interface{}{
+			"type":        node.Protocol,
+			"tag":         node.Tag,
+			"listen":      "::",
+			"listen_port": node.Port,
+		}
+
+		userList := make([]map[string]interface{}, 0)
+		for _, u := range users {
+			if !userLinkedToNode(u, node.ID) {
+				continue
+			}
+			ue := map[string]interface{}{"name": u.Email}
+			switch node.Protocol {
+			case "vless":
+				ue["uuid"] = u.UUID
+				if flow := getSettingStr(s, "flow", ""); flow != "" {
+					ue["flow"] = flow
+				}
+			case "vmess":
+				ue["uuid"] = u.UUID
+				ue["alterId"] = 0
+			case "trojan":
+				ue["password"] = u.UUID
+			}
+			userList = append(userList, ue)
+		}
+		inbound["users"] = userList
+
+		if tr := buildSingboxTransport(node); tr != nil {
+			inbound["transport"] = tr
+		}
+		if tls := buildSingboxTLS(s); tls != nil {
+			inbound["tls"] = tls
+		}
+
+		return inbound
 
 	default:
 		return nil
 	}
+}
+
+// buildSingboxTransport 按 node.Transport 生成 sing-box transport 对象，tcp/空 返回 nil。
+func buildSingboxTransport(node NodeConfig) map[string]interface{} {
+	s := node.Settings
+	switch node.Transport {
+	case "ws":
+		tr := map[string]interface{}{
+			"type": "ws",
+			"path": getSettingStr(s, "path", "/"),
+		}
+		if host := getSettingStr(s, "host", ""); host != "" {
+			tr["headers"] = map[string]interface{}{"Host": host}
+		}
+		return tr
+	case "grpc":
+		return map[string]interface{}{
+			"type":         "grpc",
+			"service_name": getSettingStrAny(s, "", "serviceName", "service_name", "grpc_service_name"),
+		}
+	case "httpupgrade":
+		tr := map[string]interface{}{
+			"type": "httpupgrade",
+			"path": getSettingStr(s, "path", "/"),
+		}
+		if host := getSettingStr(s, "host", ""); host != "" {
+			tr["host"] = host
+		}
+		return tr
+	}
+	return nil
+}
+
+// buildSingboxTLS 生成 sing-box inbound.tls 对象；security=none 或未配置返回 nil。
+func buildSingboxTLS(s map[string]interface{}) map[string]interface{} {
+	security := getSettingStr(s, "security", "none")
+	switch security {
+	case "tls":
+		tls := map[string]interface{}{
+			"enabled":     true,
+			"server_name": getSettingStrAny(s, "", "sni", "serverName"),
+		}
+		if cert := getSettingStrAny(s, "", "cert_path", "certPath"); cert != "" {
+			tls["certificate_path"] = cert
+		}
+		if key := getSettingStrAny(s, "", "key_path", "keyPath"); key != "" {
+			tls["key_path"] = key
+		}
+		return tls
+	case "reality":
+		dest := getSettingStrAny(s, "", "dest")
+		handshakeServer := dest
+		handshakePort := 443
+		if idx := indexOfColon(dest); idx > 0 {
+			handshakeServer = dest[:idx]
+			if p, err := parseIntSafe(dest[idx+1:]); err == nil && p > 0 {
+				handshakePort = p
+			}
+		}
+		serverNames := getSettingSliceAny(s, "server_names", "serverNames")
+		serverName := ""
+		if len(serverNames) > 0 {
+			serverName = serverNames[0]
+		}
+		tls := map[string]interface{}{
+			"enabled":     true,
+			"server_name": serverName,
+			"reality": map[string]interface{}{
+				"enabled":     true,
+				"private_key": getSettingStrAny(s, "", "private_key", "privateKey"),
+				"short_id":    getSettingSliceAny(s, "short_ids", "shortIds"),
+				"handshake": map[string]interface{}{
+					"server":      handshakeServer,
+					"server_port": handshakePort,
+				},
+			},
+		}
+		return tls
+	}
+	return nil
+}
+
+func indexOfColon(s string) int {
+	return strings.LastIndex(s, ":")
+}
+
+func parseIntSafe(s string) (int, error) {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("invalid")
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n, nil
 }
 
 // WriteConfig 将配置写入文件

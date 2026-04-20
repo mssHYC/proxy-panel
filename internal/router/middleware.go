@@ -8,9 +8,40 @@ import (
 	"sync"
 	"time"
 
+	"proxy-panel/internal/service"
+
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
+
+// AuditMiddleware 在写操作（POST/PUT/DELETE）完成后异步记一条审计日志。
+// 排除订阅接口与登录接口（登录失败也不应记为 actor=匿名操作日志）。
+func AuditMiddleware(audit *service.AuditService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Next()
+		if audit == nil {
+			return
+		}
+		m := c.Request.Method
+		if m != http.MethodPost && m != http.MethodPut && m != http.MethodDelete {
+			return
+		}
+		if c.Writer.Status() >= 400 {
+			return
+		}
+		path := c.Request.URL.Path
+		if strings.HasPrefix(path, "/api/sub/") || strings.HasPrefix(path, "/api/auth/login") || strings.HasPrefix(path, "/api/auth/2fa/verify") {
+			return
+		}
+		actor, _ := c.Get("username")
+		actorStr := ""
+		if s, ok := actor.(string); ok {
+			actorStr = s
+		}
+		action := m + " " + path
+		_ = audit.Log(actorStr, action, "", c.Param("id"), c.ClientIP(), "")
+	}
+}
 
 // DomainGuard - 域名访问限制中间件，拒绝通过 IP 直接访问
 func DomainGuard(domain string) gin.HandlerFunc {

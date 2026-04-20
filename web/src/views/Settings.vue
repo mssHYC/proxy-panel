@@ -17,6 +17,9 @@
       <el-tab-pane label="防火墙" name="firewall">
         <FirewallSection v-if="activeTab === 'firewall'" />
       </el-tab-pane>
+      <el-tab-pane label="备份" name="backup">
+        <BackupSection v-if="activeTab === 'backup'" />
+      </el-tab-pane>
     </el-tabs>
   </div>
 </template>
@@ -28,6 +31,7 @@ import NotifySection from './settings/NotifySection.vue'
 import AlertSection from './settings/AlertSection.vue'
 import RulesSection from './settings/RulesSection.vue'
 import FirewallSection from './settings/FirewallSection.vue'
+import BackupSection from './settings/BackupSection.vue'
 
-const activeTab = ref<'account' | 'notify' | 'alert' | 'rules' | 'firewall'>('account')
+const activeTab = ref<'account' | 'notify' | 'alert' | 'rules' | 'firewall' | 'backup'>('account')
 </script>

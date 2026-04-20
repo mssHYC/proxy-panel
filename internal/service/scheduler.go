@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sync"
@@ -21,6 +22,7 @@ type Scheduler struct {
 	notifySvc  *notify.NotifyService
 	db         *database.DB
 	syncSvc    *KernelSyncService
+	healthSvc  *HealthChecker
 
 	mu             sync.Mutex
 	collectEntryID cron.EntryID
@@ -28,7 +30,7 @@ type Scheduler struct {
 }
 
 // NewScheduler 创建调度器
-func NewScheduler(cfg *config.Config, trafficSvc *TrafficService, notifySvc *notify.NotifyService, db *database.DB, syncSvc *KernelSyncService) *Scheduler {
+func NewScheduler(cfg *config.Config, trafficSvc *TrafficService, notifySvc *notify.NotifyService, db *database.DB, syncSvc *KernelSyncService, healthSvc *HealthChecker) *Scheduler {
 	return &Scheduler{
 		cron:       cron.New(),
 		cfg:        cfg,
@@ -36,6 +38,7 @@ func NewScheduler(cfg *config.Config, trafficSvc *TrafficService, notifySvc *not
 		notifySvc:  notifySvc,
 		db:         db,
 		syncSvc:    syncSvc,
+		healthSvc:  healthSvc,
 	}
 }
 
@@ -121,6 +124,17 @@ func (s *Scheduler) Start() {
 			s.notifySvc.SendAll(msg)
 		}
 	})
+
+	// 节点健康检查（每 5 分钟）
+	if s.healthSvc != nil {
+		s.cron.AddFunc("@every 5m", func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			if err := s.healthSvc.CheckAll(ctx); err != nil {
+				log.Printf("[调度器] 节点健康检查失败: %v", err)
+			}
+		})
+	}
 
 	s.cron.Start()
 	log.Printf("[调度器] 已启动，流量采集间隔 %d 秒，服务器流量重置 cron=%q",

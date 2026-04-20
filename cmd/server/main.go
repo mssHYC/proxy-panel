@@ -96,8 +96,14 @@ func main() {
 		log.Printf("启动时同步内核配置失败: %v", err)
 	}
 
+	// 节点健康检查
+	healthSvc := service.NewHealthChecker(db, nodeSvc, notifySvc)
+
+	// 审计日志
+	auditSvc := service.NewAuditService(db)
+
 	// 初始化调度器（流量超限/用户过期时通过 syncSvc 立即剔除用户并重启内核）
-	scheduler := service.NewScheduler(cfg, trafficSvc, notifySvc, db, syncSvc)
+	scheduler := service.NewScheduler(cfg, trafficSvc, notifySvc, db, syncSvc, healthSvc)
 
 	// 启动时对存量 enable 节点做一次单向 ensure（幂等）
 	if fwSvc.Enabled() {
@@ -120,7 +126,7 @@ func main() {
 	defer scheduler.Stop()
 
 	// 设置路由
-	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc, scheduler, fwSvc)
+	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc, scheduler, fwSvc, auditSvc, cfg.Database.Path)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	if cfg.Server.Domain != "" {
