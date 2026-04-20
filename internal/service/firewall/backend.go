@@ -20,5 +20,10 @@ type Backend interface {
 // This is currently a stub that returns an error for every name; real ufw /
 // firewalld cases are wired in by follow-up changes.
 func selectBackend(name string) (Backend, error) {
-	return nil, fmt.Errorf("backend %q 暂未实现", name)
+	switch name {
+	case "ufw":
+		return newUFWBackend(defaultRunner), nil
+	default:
+		return nil, fmt.Errorf("不支持的 firewall backend: %q", name)
+	}
 }
