@@ -1732,24 +1732,48 @@ do_restore() {
 
 show_help() {
     echo ""
-    echo "ProxyPanel 管理脚本"
+    echo -e "${BLUE}ProxyPanel 管理脚本${NC}"
     echo ""
     echo "用法: proxy-panel <命令> [参数]"
     echo ""
-    echo "命令:"
-    echo "  install     完整安装 ProxyPanel"
-    echo "  update      升级 (保留配置和数据)"
-    echo "  uninstall   卸载 (可选保留数据)"
-    echo "  status      查看服务状态"
-    echo "  restart     重启所有服务"
-    echo "  logs        查看日志 (可选: logs [服务名] [行数])"
-    echo "  reset-pwd   重置管理员密码"
-    echo "  disable-2fa 应急关闭 2FA (authenticator 设备丢失时)"
-    echo "  backup      备份配置和数据"
-    echo "  restore     从备份恢复 (可选: restore <文件路径>)"
-    echo "  cert        证书管理 (cert setup|status|renew)"
-    echo "  firewall    防火墙管理 (firewall enable|disable|status)"
-    echo "  help        显示此帮助"
+    echo -e "${GREEN}[安装]${NC}"
+    echo "  install            完整安装 ProxyPanel"
+    echo "  update             升级 (保留配置和数据)"
+    echo "  uninstall          卸载 (可选保留数据)"
+    echo ""
+    echo -e "${GREEN}[运维]${NC}"
+    echo "  status             查看服务状态"
+    echo "  restart            重启所有服务"
+    echo "  logs [svc] [行数]  查看日志"
+    echo "  backup             备份配置和数据"
+    echo "  restore [文件]     从备份恢复"
+    echo ""
+    echo -e "${GREEN}[安全]${NC}"
+    echo "  reset-pwd          重置管理员密码"
+    echo "  disable-2fa        应急关闭 2FA (authenticator 设备丢失时)"
+    echo "  cert <子命令>      证书管理 (setup|status|renew)"
+    echo "  firewall <子命令>  防火墙管理 (enable|disable|status)"
+    echo ""
+    echo -e "${GREEN}[其它]${NC}"
+    echo "  help               显示此帮助"
+    echo ""
+}
+
+# 根据安装状态给出上下文建议；主入口无参数时调用
+show_context_hint() {
+    if [[ -f "$CONFIG_FILE" ]] && systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        local port
+        port=$(awk '/^server:/{flag=1;next} /^[a-z]/{flag=0} flag && /port:/{print $2; exit}' "$CONFIG_FILE" 2>/dev/null)
+        : "${port:=8080}"
+        echo -e "${GREEN}当前状态: 已安装并运行 (端口 ${port})${NC}"
+        echo -e "常用操作: ${YELLOW}proxy-panel status${NC} | ${YELLOW}proxy-panel logs${NC} | ${YELLOW}proxy-panel restart${NC}"
+    elif [[ -f "$CONFIG_FILE" ]]; then
+        echo -e "${YELLOW}当前状态: 已安装但服务未运行${NC}"
+        echo -e "建议: ${YELLOW}proxy-panel status${NC} 查看状态，或 ${YELLOW}proxy-panel restart${NC} 重启服务"
+    else
+        echo -e "${YELLOW}当前状态: 尚未安装${NC}"
+        echo -e "建议: 首次安装请执行 ${YELLOW}proxy-panel install${NC}"
+    fi
     echo ""
 }
 
@@ -1775,8 +1799,7 @@ main() {
             show_help ;;
         "")
             show_help
-            echo -e "${YELLOW}提示: 首次安装请执行: proxy-panel install${NC}"
-            echo ""
+            show_context_hint
             ;;
         *)
             error "未知命令: $1\n用法: proxy-panel {install|update|uninstall|status|restart|logs|reset-pwd|disable-2fa|backup|restore|cert|firewall|help}"
