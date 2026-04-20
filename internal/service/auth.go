@@ -229,6 +229,18 @@ func (s *AuthService) ForceResetPassword(newPass string) error {
 	return nil
 }
 
+// ForceDisableTOTP 由 CLI -disable-totp 调用，用于用户丢失 authenticator 设备时应急解锁
+// 仅供 root 在主机上执行 install.sh disable-2fa 的场景；不暴露给 HTTP 层
+func (s *AuthService) ForceDisableTOTP() error {
+	if err := s.setSetting("totp_enabled", "false"); err != nil {
+		return err
+	}
+	_ = s.setSetting("totp_secret", "")
+	_ = s.setSetting("totp_secret_pending", "")
+	s.bumpTokenVersion()
+	return nil
+}
+
 // ChangeUsername 修改用户名
 func (s *AuthService) ChangeUsername(password, newUsername string) error {
 	if !s.VerifyPassword(password) {

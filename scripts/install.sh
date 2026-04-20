@@ -1347,8 +1347,14 @@ do_reset_pwd() {
     step "重置管理员密码"
 
     # 显示当前管理员用户名
-    local current_user
-    current_user=$(grep 'admin_user:' "$CONFIG_FILE" | awk '{print $2}' | tr -d '"')
+    # 优先读 DB（WebUI 改名只写 settings 表，不回写 yaml），读不到再回退 yaml
+    local current_user=""
+    if [[ -f "$DB_FILE" ]] && command -v sqlite3 &>/dev/null; then
+        current_user=$(sqlite3 "$DB_FILE" "SELECT value FROM settings WHERE key='admin_user' LIMIT 1;" 2>/dev/null)
+    fi
+    if [[ -z "$current_user" ]]; then
+        current_user=$(grep 'admin_user:' "$CONFIG_FILE" | awk '{print $2}' | tr -d '"')
+    fi
     info "当前管理员用户名: ${current_user}"
 
     # 输入新密码
@@ -1373,11 +1379,47 @@ do_reset_pwd() {
     [[ ! -x "${INSTALL_DIR}/proxy-panel" ]] && error "未找到 ${INSTALL_DIR}/proxy-panel 二进制"
     "${INSTALL_DIR}/proxy-panel" -config "${CONFIG_FILE}" -reset-pass "${NEW_PASS}" || error "重置失败，请查看输出"
 
+    # 可选：同时关闭 2FA（用户丢失 authenticator 时使用）
+    local totp_enabled=""
+    if [[ -f "$DB_FILE" ]] && command -v sqlite3 &>/dev/null; then
+        totp_enabled=$(sqlite3 "$DB_FILE" "SELECT value FROM settings WHERE key='totp_enabled' LIMIT 1;" 2>/dev/null)
+    fi
+    if [[ "$totp_enabled" == "true" ]]; then
+        read -p "检测到已启用 2FA，是否同时关闭 2FA？[y/N]: " disable_2fa
+        if [[ "$disable_2fa" =~ ^[Yy]$ ]]; then
+            "${INSTALL_DIR}/proxy-panel" -config "${CONFIG_FILE}" -disable-totp || warn "关闭 2FA 失败，请查看输出"
+        fi
+    fi
+
     # 重启面板，让正在运行的进程清理任何缓存状态
     systemctl restart ${SERVICE_NAME} 2>/dev/null || warn "面板重启失败，请手动重启"
 
     echo ""
     info "密码已重置，所有现有登录会话已失效"
+}
+
+# ============================================
+# disable-2fa 子命令: 应急关闭 2FA（authenticator 设备丢失时）
+# ============================================
+
+do_disable_2fa() {
+    check_root
+
+    [[ ! -f "$CONFIG_FILE" ]] && error "配置文件不存在: $CONFIG_FILE"
+    [[ ! -x "${INSTALL_DIR}/proxy-panel" ]] && error "未找到 ${INSTALL_DIR}/proxy-panel 二进制"
+
+    echo ""
+    step "关闭 2FA（两步验证）"
+    warn "此操作仅用于 authenticator 设备丢失后的应急解锁"
+    read -p "确认关闭 2FA？[y/N]: " confirm
+    [[ ! "$confirm" =~ ^[Yy]$ ]] && { info "已取消"; return; }
+
+    "${INSTALL_DIR}/proxy-panel" -config "${CONFIG_FILE}" -disable-totp || error "关闭 2FA 失败，请查看输出"
+
+    systemctl restart ${SERVICE_NAME} 2>/dev/null || warn "面板重启失败，请手动重启"
+
+    echo ""
+    info "2FA 已关闭，所有现有登录会话已失效"
 }
 
 # ============================================
@@ -1511,6 +1553,7 @@ show_help() {
     echo "  restart     重启所有服务"
     echo "  logs        查看日志 (可选: logs [服务名] [行数])"
     echo "  reset-pwd   重置管理员密码"
+    echo "  disable-2fa 应急关闭 2FA (authenticator 设备丢失时)"
     echo "  backup      备份配置和数据"
     echo "  restore     从备份恢复 (可选: restore <文件路径>)"
     echo "  cert        证书管理 (cert setup|status|renew)"
@@ -1531,6 +1574,7 @@ main() {
         restart)    do_restart ;;
         logs)       do_logs "$@" ;;
         reset-pwd)  do_reset_pwd ;;
+        disable-2fa) do_disable_2fa ;;
         backup)     do_backup ;;
         restore)    do_restore "$2" ;;
         cert)       do_cert "$@" ;;
@@ -1542,7 +1586,7 @@ main() {
             echo ""
             ;;
         *)
-            error "未知命令: $1\n用法: proxy-panel {install|update|uninstall|status|restart|logs|reset-pwd|backup|restore|cert|help}"
+            error "未知命令: $1\n用法: proxy-panel {install|update|uninstall|status|restart|logs|reset-pwd|disable-2fa|backup|restore|cert|help}"
             ;;
     esac
 }

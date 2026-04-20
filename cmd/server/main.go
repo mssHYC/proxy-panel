@@ -19,6 +19,7 @@ import (
 func main() {
 	cfgPath := flag.String("config", "config.yaml", "配置文件路径")
 	resetPass := flag.String("reset-pass", "", "重置管理员密码后退出（供 install.sh reset-pwd 调用）")
+	disableTOTP := flag.Bool("disable-totp", false, "强制关闭 2FA 后退出（供 install.sh disable-2fa 应急解锁调用）")
 	flag.Parse()
 
 	cfg, err := config.Load(*cfgPath)
@@ -45,6 +46,16 @@ func main() {
 			log.Fatalf("重置密码失败: %v", err)
 		}
 		log.Println("密码已重置，所有现有登录会话已失效")
+		os.Exit(0)
+	}
+
+	// CLI 一次性操作：丢失 authenticator 设备时应急关闭 2FA 后退出
+	if *disableTOTP {
+		authSvc := service.NewAuthService(db, cfg)
+		if err := authSvc.ForceDisableTOTP(); err != nil {
+			log.Fatalf("关闭 2FA 失败: %v", err)
+		}
+		log.Println("2FA 已关闭，所有现有登录会话已失效")
 		os.Exit(0)
 	}
 
@@ -109,7 +120,7 @@ func main() {
 	defer scheduler.Stop()
 
 	// 设置路由
-	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc, scheduler)
+	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc, scheduler, fwSvc)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	if cfg.Server.Domain != "" {
