@@ -37,3 +37,7 @@ kernel:
   singbox_path: /usr/local/bin/sing-box
   singbox_config: /opt/proxy-panel/kernel/singbox.json
   singbox_api_port: 9090
+
+firewall:
+  enable: false
+  backend: ""   # "ufw" | "firewalld"，仅在 enable=true 时生效
