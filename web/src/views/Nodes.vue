@@ -44,7 +44,10 @@
         </el-table-column>
         <el-table-column label="健康" width="80" align="center">
           <template #default="{ row }">
-            <el-tooltip v-if="row.last_check_at" :content="healthTooltip(row)" placement="top">
+            <el-tooltip v-if="isUdpProto(row.protocol)" content="UDP/QUIC 协议不做 TCP 探测" placement="top">
+              <el-tag size="small" type="info">UDP</el-tag>
+            </el-tooltip>
+            <el-tooltip v-else-if="row.last_check_at" :content="healthTooltip(row)" placement="top">
               <el-tag size="small" :type="row.last_check_ok ? 'success' : 'danger'">
                 {{ row.last_check_ok ? '在线' : '离线' }}
               </el-tag>
@@ -580,6 +583,7 @@ function getSecurity(row: any): string {
   try { const s = JSON.parse(row.settings || '{}'); return s.security || (s.tls ? 'tls' : 'none') } catch { return 'none' }
 }
 function protocolColor(p: string) { return ({ vless: '', vmess: 'success', trojan: 'warning', ss: 'danger', hysteria2: 'info' } as any)[p] || '' }
+function isUdpProto(p: string) { return p === 'hysteria2' || p === 'hy2' || p === 'tuic' }
 function healthTooltip(row: any) {
   const t = row.last_check_at ? new Date(row.last_check_at).toLocaleString() : '-'
   if (row.last_check_ok) return `最近检测: ${t}`

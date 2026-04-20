@@ -43,6 +43,12 @@ func (h *HealthChecker) CheckAll(ctx context.Context) error {
 
 	var wg sync.WaitGroup
 	for i := range nodes {
+		// UDP/QUIC 协议无法通过 TCP 可靠探测（closed port 不回 ICMP 亦视为可达），
+		// 跳过以避免误报离线；前端按 protocol 显示为 "UDP"。
+		if isUDPProtocol(nodes[i].Protocol) {
+			h.clearStatus(nodes[i].ID)
+			continue
+		}
 		wg.Add(1)
 		go func(n model.Node) {
 			defer wg.Done()
@@ -51,6 +57,23 @@ func (h *HealthChecker) CheckAll(ctx context.Context) error {
 	}
 	wg.Wait()
 	return nil
+}
+
+func isUDPProtocol(p string) bool {
+	switch p {
+	case "hysteria2", "hy2", "tuic":
+		return true
+	}
+	return false
+}
+
+// clearStatus 把 UDP 类节点的历史误报清零，避免保留旧的 offline 状态。
+func (h *HealthChecker) clearStatus(id int64) {
+	if _, err := h.db.Exec(`UPDATE nodes
+		SET last_check_at = NULL, last_check_ok = 0, last_check_err = '', fail_count = 0
+		WHERE id = ? AND (last_check_at IS NOT NULL OR fail_count > 0)`, id); err != nil {
+		log.Printf("[健康检查] 清理 UDP 节点 %d 历史状态失败: %v", id, err)
+	}
 }
 
 func (h *HealthChecker) checkOne(ctx context.Context, n *model.Node) {
