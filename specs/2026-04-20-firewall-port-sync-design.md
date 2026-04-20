@@ -318,3 +318,13 @@ main.go
 ## 开放问题
 
 无（设计已覆盖澄清问答中的全部决策）。
+
+## 手工验证记录
+
+- [ ] Ubuntu 22.04 (ufw)：install → 同意启用 → 新建节点 → `ufw status | grep <port>` 含 tcp/udp 两行
+- [ ] Ubuntu 22.04 (ufw)：改端口 → 旧端口消失、新端口出现
+- [ ] Ubuntu 22.04 (ufw)：enable → false → 端口消失；enable → true → 端口恢复
+- [ ] Ubuntu 22.04 (ufw)：删除节点 → 端口消失
+- [ ] CentOS Stream (firewalld)：全套同上，`firewall-cmd --list-ports` 核对
+- [ ] 防火墙故障路径：`systemctl stop ufw` 后新建节点 → HTTP 响应 200 带 firewall_warning；Telegram 收到告警
+- [ ] 启动对齐：改完 config 开启 firewall.enable 后首次启动 → 日志出现 `启动对齐完成，处理 N 个节点端口`
