@@ -894,22 +894,17 @@ setup_firewall() {
         detected="firewalld"
     fi
 
-    # 未检测到 ufw / firewalld 时，尝试通过 apt 自动安装 ufw（仅限 Debian/Ubuntu）
+    # 未检测到 ufw / firewalld 时，在 Debian/Ubuntu 上自动通过 apt-get 安装 ufw
+    # 使用 detect_os 已设好的 $PKG_MGR，避免在精简镜像下 `command -v apt` 失败
     if [[ -z "$detected" ]]; then
-        if command -v apt &>/dev/null; then
-            if confirm_default_yes "未检测到防火墙工具，是否通过 apt 自动安装 ufw?"; then
-                info "正在安装 ufw..."
-                if apt install -y ufw >/dev/null 2>&1; then
-                    detected="ufw"
-                    info "ufw 安装成功"
-                else
-                    warn "ufw 安装失败，请手动放行端口 ${PANEL_PORT}"
-                    FIREWALL_ENABLE="false"
-                    FIREWALL_BACKEND=""
-                    return
-                fi
+        if [[ "$PKG_MGR" == "apt" ]]; then
+            info "未检测到防火墙工具，尝试通过 apt-get 自动安装 ufw..."
+            apt-get update -y >/dev/null 2>&1
+            if DEBIAN_FRONTEND=noninteractive apt-get install -y ufw >/dev/null 2>&1 && command -v ufw &>/dev/null; then
+                detected="ufw"
+                info "ufw 安装成功"
             else
-                warn "已跳过 ufw 安装，请手动放行端口 ${PANEL_PORT}"
+                warn "ufw 自动安装失败，请手动执行: apt-get install -y ufw；本次将跳过，端口 ${PANEL_PORT} 请手动放行"
                 FIREWALL_ENABLE="false"
                 FIREWALL_BACKEND=""
                 return
