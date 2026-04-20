@@ -33,14 +33,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// 验证用户名
-	if req.Username != h.authSvc.GetUsername() {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误", "code": "ERR_LOGIN_FAILED"})
-		return
-	}
-
-	// 验证密码
-	if !h.authSvc.VerifyPassword(req.Password) {
+	// 一次性校验用户名 + 密码，恒时比较，消除时序侧信道
+	if !h.authSvc.VerifyCredentials(req.Username, req.Password) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误", "code": "ERR_LOGIN_FAILED"})
 		return
 	}
@@ -48,9 +42,11 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	// 检查是否启用 2FA
 	if h.authSvc.IsTOTPEnabled() {
 		// 生成临时 token（短期有效，仅用于 2FA 验证）
+		// 带上 ver：管理员在 5 分钟窗口内改密 / 关 2FA，未消费的 temp_token 也立即失效
 		tempToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 			"username": req.Username,
 			"type":     "2fa_pending",
+			"ver":      h.authSvc.GetTokenVersion(),
 			"exp":      time.Now().Add(5 * time.Minute).Unix(),
 		})
 		tempTokenStr, _ := tempToken.SignedString([]byte(h.cfg.Auth.JWTSecret))
@@ -87,6 +83,12 @@ func (h *AuthHandler) Verify2FA(c *gin.Context) {
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok || claims["type"] != "2fa_pending" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "无效的令牌类型", "code": "ERR_INVALID_TOKEN"})
+		return
+	}
+	// 与 access token 同样的吊销机制：改密 / 改用户名 / 开关 2FA 后，未消费的 temp_token 立即失效
+	tempVer, _ := claims["ver"].(float64)
+	if int(tempVer) != h.authSvc.GetTokenVersion() {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "临时令牌已失效，请重新登录", "code": "ERR_TOKEN_REVOKED"})
 		return
 	}
 
@@ -182,9 +184,15 @@ func (h *AuthHandler) Disable2FA(c *gin.Context) {
 }
 
 func (h *AuthHandler) generateToken(username string) string {
+	now := time.Now()
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"username": username,
-		"exp":      time.Now().Add(time.Duration(h.cfg.Auth.TokenExpiry) * time.Hour).Unix(),
+		"type":     "access",
+		// ver 与 AuthService.GetTokenVersion() 绑定；改密/改用户名/开关 2FA 时版本递增
+		// 中间件发现 ver 不等于当前版本即视为 token 已吊销
+		"ver": h.authSvc.GetTokenVersion(),
+		"iat": now.Unix(),
+		"exp": now.Add(time.Duration(h.cfg.Auth.TokenExpiry) * time.Hour).Unix(),
 	})
 	tokenStr, _ := token.SignedString([]byte(h.cfg.Auth.JWTSecret))
 	return tokenStr

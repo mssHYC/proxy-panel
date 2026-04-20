@@ -7,6 +7,7 @@ import (
 
 	"proxy-panel/internal/database"
 	"proxy-panel/internal/model"
+	"proxy-panel/internal/service/firewall"
 )
 
 // CreateNodeReq 创建节点请求
@@ -37,11 +38,12 @@ type UpdateNodeReq struct {
 // NodeService 节点业务逻辑
 type NodeService struct {
 	db *database.DB
+	fw *firewall.Service
 }
 
 // NewNodeService 创建节点服务
-func NewNodeService(db *database.DB) *NodeService {
-	return &NodeService{db: db}
+func NewNodeService(db *database.DB, fw *firewall.Service) *NodeService {
+	return &NodeService{db: db, fw: fw}
 }
 
 // List 获取所有节点
@@ -130,16 +132,21 @@ func (s *NodeService) Create(req *CreateNodeReq) (*model.Node, error) {
 	}
 
 	id, _ := result.LastInsertId()
-	return s.GetByID(id)
+	node, err := s.GetByID(id)
+	if err != nil || node == nil {
+		return node, err
+	}
+	go s.fw.Allow(node.Port)
+	return node, nil
 }
 
 // Update 更新节点（部分更新）
 func (s *NodeService) Update(id int64, req *UpdateNodeReq) (*model.Node, error) {
-	node, err := s.GetByID(id)
+	old, err := s.GetByID(id)
 	if err != nil {
 		return nil, err
 	}
-	if node == nil {
+	if old == nil {
 		return nil, nil
 	}
 
@@ -184,7 +191,7 @@ func (s *NodeService) Update(id int64, req *UpdateNodeReq) (*model.Node, error) 
 	}
 
 	if len(sets) == 0 {
-		return node, nil
+		return old, nil
 	}
 
 	sets = append(sets, "updated_at = ?")
@@ -192,11 +199,11 @@ func (s *NodeService) Update(id int64, req *UpdateNodeReq) (*model.Node, error) 
 	args = append(args, id)
 
 	query := "UPDATE nodes SET "
-	for i, s := range sets {
+	for i, part := range sets {
 		if i > 0 {
 			query += ", "
 		}
-		query += s
+		query += part
 	}
 	query += " WHERE id = ?"
 
@@ -204,19 +211,56 @@ func (s *NodeService) Update(id int64, req *UpdateNodeReq) (*model.Node, error) 
 		return nil, fmt.Errorf("更新节点失败: %w", err)
 	}
 
+	s.syncFirewallOnUpdate(old, req)
+
 	return s.GetByID(id)
+}
+
+// syncFirewallOnUpdate 按新旧状态差异触发防火墙操作；所有调用都是异步的
+// 规则：
+//  1. enable 由 true 变 false：撤销旧端口
+//  2. enable 由 false 变 true：放行当前端口（可能已被 port 变更）
+//  3. enable 未变 且 enable=true：端口变化则撤旧+放新；否则 no-op
+//  4. enable 未变 且 enable=false：不操作（节点本就不在防火墙中）
+func (s *NodeService) syncFirewallOnUpdate(old *model.Node, req *UpdateNodeReq) {
+	newEnable := old.Enable
+	if req.Enable != nil {
+		newEnable = *req.Enable
+	}
+	newPort := old.Port
+	if req.Port != nil {
+		newPort = *req.Port
+	}
+
+	switch {
+	case old.Enable && !newEnable:
+		// 关闭节点：撤销旧端口
+		go s.fw.Revoke(old.Port)
+	case !old.Enable && newEnable:
+		// 重新启用：放行当前端口
+		go s.fw.Allow(newPort)
+	case old.Enable && newEnable && old.Port != newPort:
+		// 仅改端口
+		go func(oldPort, port int) {
+			s.fw.Revoke(oldPort)
+			s.fw.Allow(port)
+		}(old.Port, newPort)
+	}
 }
 
 // Delete 删除节点
 func (s *NodeService) Delete(id int64) error {
-	result, err := s.db.Exec("DELETE FROM nodes WHERE id = ?", id)
+	old, err := s.GetByID(id)
 	if err != nil {
-		return fmt.Errorf("删除节点失败: %w", err)
+		return err
 	}
-	rows, _ := result.RowsAffected()
-	if rows == 0 {
+	if old == nil {
 		return fmt.Errorf("节点不存在")
 	}
+	if _, err := s.db.Exec("DELETE FROM nodes WHERE id = ?", id); err != nil {
+		return fmt.Errorf("删除节点失败: %w", err)
+	}
+	go s.fw.Revoke(old.Port)
 	return nil
 }
 
@@ -264,4 +308,9 @@ func scanNode(rows *sql.Rows, n *model.Node) error {
 func scanNodeRow(row *sql.Row, n *model.Node) error {
 	return row.Scan(&n.ID, &n.Name, &n.Host, &n.Port, &n.Protocol, &n.Transport,
 		&n.KernelType, &n.Settings, &n.Enable, &n.SortOrder, &n.CreatedAt, &n.UpdatedAt)
+}
+
+// FirewallEnabled 供 handler 判断是否需要返回 firewall_warning
+func (s *NodeService) FirewallEnabled() bool {
+	return s.fw != nil && s.fw.Enabled()
 }

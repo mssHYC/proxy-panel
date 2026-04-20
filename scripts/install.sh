@@ -77,6 +77,12 @@ confirm() {
     [[ "$answer" =~ ^[Yy]$ ]]
 }
 
+confirm_default_yes() {
+    local msg="${1:-确认继续?}"
+    read -p "${msg} [Y/n]: " answer
+    [[ -z "$answer" || "$answer" =~ ^[Yy]$ ]]
+}
+
 # ============================================
 # 安装依赖
 # ============================================
@@ -283,7 +289,8 @@ setup_tls() {
             echo "  Cloudflare Dashboard → My Profile → API Tokens → Create Token"
             echo "  模板选 'Edit zone DNS'，Zone 选你的域名"
             echo ""
-            read -p "Cloudflare API Token (Zone.DNS 权限): " CF_TOKEN
+            read -sp "Cloudflare API Token (Zone.DNS 权限): " CF_TOKEN
+            echo
             [[ -z "$CF_TOKEN" ]] && error "API Token 不能为空"
 
             # 可选: Zone ID (自动检测或手动输入)
@@ -330,8 +337,10 @@ setup_tls() {
             echo "  https://console.dnspod.cn/account/token/token"
             echo "  创建 API 密钥，获取 ID 和 Token"
             echo ""
-            read -p "DNSPod API ID: " DP_ID
-            read -p "DNSPod API Token: " DP_KEY
+            read -sp "DNSPod API ID: " DP_ID
+            echo
+            read -sp "DNSPod API Token: " DP_KEY
+            echo
             [[ -z "$DP_ID" || -z "$DP_KEY" ]] && error "API ID 和 Token 不能为空"
 
             install_acme || {
@@ -366,8 +375,10 @@ setup_tls() {
             echo "  https://ram.console.aliyun.com/manage/ak"
             echo "  建议使用 RAM 子账号，仅授予 DNS 管理权限"
             echo ""
-            read -p "阿里云 AccessKey ID: " ALI_KEY
-            read -p "阿里云 AccessKey Secret: " ALI_SECRET
+            read -sp "阿里云 AccessKey ID: " ALI_KEY
+            echo
+            read -sp "阿里云 AccessKey Secret: " ALI_SECRET
+            echo
             [[ -z "$ALI_KEY" || -z "$ALI_SECRET" ]] && error "AccessKey 不能为空"
 
             install_acme || {
@@ -703,6 +714,10 @@ kernel:
   singbox_path: /usr/local/bin/sing-box
   singbox_config: ${INSTALL_DIR}/kernel/singbox.json
   singbox_api_port: 9090
+
+firewall:
+  enable: ${FIREWALL_ENABLE:-false}
+  backend: "${FIREWALL_BACKEND:-}"
 CFGEOF
 
     chmod 600 "$CONFIG_FILE"
@@ -871,15 +886,40 @@ SVCEOF
 
 setup_firewall() {
     step "配置防火墙..."
+
+    local detected=""
     if command -v ufw &>/dev/null; then
+        detected="ufw"
+    elif command -v firewall-cmd &>/dev/null; then
+        detected="firewalld"
+    fi
+
+    if [[ -z "$detected" ]]; then
+        warn "未检测到防火墙工具，请手动放行端口 ${PANEL_PORT}"
+        FIREWALL_ENABLE="false"
+        FIREWALL_BACKEND=""
+        return
+    fi
+
+    # 放行面板端口（保持原有逻辑）
+    if [[ "$detected" == "ufw" ]]; then
         ufw allow "${PANEL_PORT}/tcp" >/dev/null 2>&1
         info "ufw 已放行端口 ${PANEL_PORT}"
-    elif command -v firewall-cmd &>/dev/null; then
+    else
         firewall-cmd --permanent --add-port="${PANEL_PORT}/tcp" >/dev/null 2>&1
         firewall-cmd --reload >/dev/null 2>&1
         info "firewalld 已放行端口 ${PANEL_PORT}"
+    fi
+
+    # 询问是否启用节点端口自动同步
+    if confirm_default_yes "是否启用节点端口自动放行（新增/删除节点时自动同步防火墙）?"; then
+        FIREWALL_ENABLE="true"
+        FIREWALL_BACKEND="$detected"
+        info "已启用节点端口自动同步 (backend=$detected)"
     else
-        warn "未检测到防火墙工具，请手动放行端口 ${PANEL_PORT}"
+        FIREWALL_ENABLE="false"
+        FIREWALL_BACKEND=""
+        info "已跳过节点端口自动同步（可日后在 config.yaml 的 firewall 段手动开启）"
     fi
 }
 
@@ -988,6 +1028,7 @@ do_install() {
 
     install_deps
     interactive_config
+    setup_firewall
     generate_config
     generate_default_xray_config
     generate_default_singbox_config
@@ -996,7 +1037,6 @@ do_install() {
     download_panel
     install_cli
     setup_systemd
-    setup_firewall
     start_services
     print_summary
 }
@@ -1216,14 +1256,16 @@ do_reset_pwd() {
         fi
     done
 
-    # 更新配置文件中的密码
-    sed -i "s|admin_pass:.*|admin_pass: \"${NEW_PASS}\"|" "$CONFIG_FILE"
+    # 直接更新数据库中的密码 hash 并 bump token_version（让历史 JWT 立即失效）
+    # 不再 sed config.yaml：旧逻辑只在数据库为空时才把 config 写入 DB，等于"重置无效"
+    [[ ! -x "${INSTALL_DIR}/proxy-panel" ]] && error "未找到 ${INSTALL_DIR}/proxy-panel 二进制"
+    "${INSTALL_DIR}/proxy-panel" -config "${CONFIG_FILE}" -reset-pass "${NEW_PASS}" || error "重置失败，请查看输出"
 
-    # 重启面板使新密码生效
+    # 重启面板，让正在运行的进程清理任何缓存状态
     systemctl restart ${SERVICE_NAME} 2>/dev/null || warn "面板重启失败，请手动重启"
 
     echo ""
-    info "密码已重置，面板已重启"
+    info "密码已重置，所有现有登录会话已失效"
 }
 
 # ============================================

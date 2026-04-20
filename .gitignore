@@ -3,6 +3,9 @@ proxy-panel
 *.exe
 /data/
 
+# 本地配置（含真实凭证 / JWT 密钥，禁止入库）
+/config.yaml
+
 # Frontend
 web/node_modules/
 web/dist/

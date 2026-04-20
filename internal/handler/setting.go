@@ -2,22 +2,26 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"proxy-panel/internal/config"
 	"proxy-panel/internal/database"
+	"proxy-panel/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"github.com/robfig/cron/v3"
 )
 
 // SettingHandler 系统设置处理器
 type SettingHandler struct {
-	db  *database.DB
-	cfg *config.Config
+	db        *database.DB
+	cfg       *config.Config
+	scheduler *service.Scheduler
 }
 
 // NewSettingHandler 创建设置处理器
-func NewSettingHandler(db *database.DB, cfg *config.Config) *SettingHandler {
-	return &SettingHandler{db: db, cfg: cfg}
+func NewSettingHandler(db *database.DB, cfg *config.Config, scheduler *service.Scheduler) *SettingHandler {
+	return &SettingHandler{db: db, cfg: cfg, scheduler: scheduler}
 }
 
 // Get 获取所有设置
@@ -41,12 +45,37 @@ func (h *SettingHandler) Get(c *gin.Context) {
 }
 
 // Update 更新设置
+// 对调度相关键（reset_cron / collect_interval / warn_percent）做语法/范围校验；
+// 保存成功后若涉及调度键，调用 scheduler.Reload 热替换 cron entry
 func (h *SettingHandler) Update(c *gin.Context) {
 	var settings map[string]string
 	if err := c.ShouldBindJSON(&settings); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "ERR_BAD_REQUEST"})
 		return
 	}
+
+	// 预校验调度相关键
+	if v, ok := settings["reset_cron"]; ok && v != "" {
+		if _, err := cron.ParseStandard(v); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "reset_cron 表达式无效：" + err.Error(), "code": "ERR_BAD_REQUEST"})
+			return
+		}
+	}
+	if v, ok := settings["collect_interval"]; ok && v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 10 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "collect_interval 必须为 >=10 的整数", "code": "ERR_BAD_REQUEST"})
+			return
+		}
+	}
+	if v, ok := settings["warn_percent"]; ok && v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "warn_percent 必须为 1-100 的整数", "code": "ERR_BAD_REQUEST"})
+			return
+		}
+	}
+
 	for key, value := range settings {
 		_, err := h.db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=?`, key, value, value)
 		if err != nil {
@@ -54,5 +83,19 @@ func (h *SettingHandler) Update(c *gin.Context) {
 			return
 		}
 	}
+
+	// 若涉及调度键，热重载
+	if h.scheduler != nil {
+		_, hasReset := settings["reset_cron"]
+		_, hasCollect := settings["collect_interval"]
+		_, hasWarn := settings["warn_percent"]
+		if hasReset || hasCollect || hasWarn {
+			if err := h.scheduler.Reload(); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "设置已保存但热重载失败：" + err.Error(), "code": "ERR_INTERNAL"})
+				return
+			}
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
 }
