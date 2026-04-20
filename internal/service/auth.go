@@ -4,6 +4,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"strconv"
+	"unicode"
 
 	"proxy-panel/internal/config"
 	"proxy-panel/internal/database"
@@ -11,6 +12,44 @@ import (
 	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// validatePasswordStrength 强制新密码至少 8 位且至少覆盖三种字符类别中的两种：
+// 大小写字母 / 数字 / 符号。长度 >= 12 时放宽到任意一类以上即可，
+// 兼顾"拒绝 password/12345678"与"允许长 passphrase"两种使用方式。
+func validatePasswordStrength(pw string) error {
+	if len(pw) < 8 {
+		return fmt.Errorf("新密码长度至少 8 位")
+	}
+	var hasLower, hasUpper, hasDigit, hasSymbol bool
+	for _, r := range pw {
+		switch {
+		case unicode.IsLower(r):
+			hasLower = true
+		case unicode.IsUpper(r):
+			hasUpper = true
+		case unicode.IsDigit(r):
+			hasDigit = true
+		case unicode.IsPunct(r) || unicode.IsSymbol(r):
+			hasSymbol = true
+		}
+	}
+	classes := 0
+	for _, ok := range []bool{hasLower, hasUpper, hasDigit, hasSymbol} {
+		if ok {
+			classes++
+		}
+	}
+	if len(pw) >= 12 {
+		if classes < 1 {
+			return fmt.Errorf("新密码必须包含字母、数字或符号中的至少一种")
+		}
+		return nil
+	}
+	if classes < 2 {
+		return fmt.Errorf("新密码需至少包含大小写字母、数字、符号中的两类")
+	}
+	return nil
+}
 
 type AuthService struct {
 	db  *database.DB
@@ -155,8 +194,8 @@ func (s *AuthService) ChangePassword(oldPass, newPass string) error {
 	if !s.VerifyPassword(oldPass) {
 		return fmt.Errorf("旧密码错误")
 	}
-	if len(newPass) < 8 {
-		return fmt.Errorf("新密码长度至少 8 位")
+	if err := validatePasswordStrength(newPass); err != nil {
+		return err
 	}
 	hashed, err := bcrypt.GenerateFromPassword([]byte(newPass), bcrypt.DefaultCost)
 	if err != nil {
@@ -175,8 +214,8 @@ func (s *AuthService) ChangePassword(oldPass, newPass string) error {
 // ForceResetPassword 由 CLI -reset-pass 调用，跳过旧密码校验直接覆盖
 // 仅用于 root 在主机上执行 install.sh reset-pwd 的场景；不暴露给 HTTP 层
 func (s *AuthService) ForceResetPassword(newPass string) error {
-	if len(newPass) < 8 {
-		return fmt.Errorf("新密码长度至少 8 位")
+	if err := validatePasswordStrength(newPass); err != nil {
+		return err
 	}
 	hashed, err := bcrypt.GenerateFromPassword([]byte(newPass), bcrypt.DefaultCost)
 	if err != nil {

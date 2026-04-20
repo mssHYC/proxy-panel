@@ -142,7 +142,20 @@ func (h *AuthHandler) Get2FAStatus(c *gin.Context) {
 }
 
 // Setup2FA 生成 TOTP 密钥
+// 要求再次校验当前密码，构成纵深防御：即使 access token 被盗，
+// 攻击者也无法在无密码的情况下静默替换 TOTP 密钥。
 func (h *AuthHandler) Setup2FA(c *gin.Context) {
+	var req struct {
+		Password string `json:"password" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	if !h.authSvc.VerifyPassword(req.Password) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "密码错误", "code": "ERR_PASSWORD_INVALID"})
+		return
+	}
 	secret, url, err := h.authSvc.SetupTOTP()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -152,12 +165,18 @@ func (h *AuthHandler) Setup2FA(c *gin.Context) {
 }
 
 // Enable2FA 验证并启用 2FA
+// 同 Setup2FA：要求再次校验当前密码
 func (h *AuthHandler) Enable2FA(c *gin.Context) {
 	var req struct {
-		Code string `json:"code" binding:"required"`
+		Password string `json:"password" binding:"required"`
+		Code     string `json:"code" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+		return
+	}
+	if !h.authSvc.VerifyPassword(req.Password) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "密码错误", "code": "ERR_PASSWORD_INVALID"})
 		return
 	}
 	if err := h.authSvc.EnableTOTP(req.Code); err != nil {

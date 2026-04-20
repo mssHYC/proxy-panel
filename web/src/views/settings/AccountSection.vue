@@ -53,6 +53,16 @@
           <p style="color: #606266; margin-bottom: 16px">启用二次验证后，每次登录需要输入验证器 App 中的动态验证码</p>
           <el-button type="primary" @click="handleSetup2FA">启用二次验证</el-button>
         </div>
+
+        <!-- 开启 2FA 前需二次校验密码 -->
+        <el-dialog v-model="setupAuthDialogVisible" title="验证当前密码" width="420px" :close-on-click-modal="false">
+          <p style="color: #606266; margin-bottom: 12px">为防止令牌被盗后静默绑定 2FA，请再次输入当前密码。</p>
+          <el-input v-model="setupPassword" type="password" show-password placeholder="当前密码" />
+          <template #footer>
+            <el-button @click="setupAuthDialogVisible = false">取消</el-button>
+            <el-button type="primary" :loading="fetchingSetup" @click="confirmSetup2FA">下一步</el-button>
+          </template>
+        </el-dialog>
       </div>
     </el-card>
 
@@ -60,6 +70,8 @@
     <el-dialog v-model="setupDialogVisible" title="设置二次验证" width="460px" :close-on-click-modal="false">
       <div style="text-align: center">
         <p style="margin-bottom: 16px; color: #606266">请使用验证器 App (如 Google Authenticator) 扫描下方二维码</p>
+        <el-input v-model="enablePassword" type="password" show-password placeholder="再次输入当前密码"
+          style="width: 280px; margin-bottom: 16px" />
         <img :src="qrImageUrl" alt="QR Code" style="width: 200px; height: 200px; margin: 0 auto 16px" />
         <p style="margin-bottom: 8px; color: #909399; font-size: 13px">无法扫码？手动输入密钥：</p>
         <el-input :model-value="totpSecret" readonly style="margin-bottom: 20px">
@@ -93,6 +105,10 @@ const savingPassword = ref(false)
 const totpLoading = ref(false)
 const totpEnabled = ref(false)
 const setupDialogVisible = ref(false)
+const setupAuthDialogVisible = ref(false)
+const setupPassword = ref('')
+const enablePassword = ref('')
+const fetchingSetup = ref(false)
 const totpSecret = ref('')
 const qrImageUrl = ref('')
 const setupCode = ref('')
@@ -149,28 +165,40 @@ async function fetch2FAStatus() {
   }
 }
 
-async function handleSetup2FA() {
+function handleSetup2FA() {
+  setupPassword.value = ''
+  setupAuthDialogVisible.value = true
+}
+
+async function confirmSetup2FA() {
+  if (!setupPassword.value) { ElMessage.warning('请输入当前密码'); return }
+  fetchingSetup.value = true
   try {
-    const { data } = await setup2FA()
+    const { data } = await setup2FA(setupPassword.value)
     totpSecret.value = data.secret
     qrImageUrl.value = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(data.qr_url)}`
     setupCode.value = ''
+    enablePassword.value = setupPassword.value
+    setupAuthDialogVisible.value = false
     setupDialogVisible.value = true
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || '获取二次验证配置失败')
+  } finally {
+    fetchingSetup.value = false
   }
 }
 
 async function handleEnable2FA() {
+  if (!enablePassword.value) { ElMessage.warning('请输入当前密码'); return }
   if (setupCode.value.length !== 6) { ElMessage.warning('请输入 6 位验证码'); return }
   enabling2FA.value = true
   try {
-    await enable2FA(setupCode.value)
+    await enable2FA(enablePassword.value, setupCode.value)
     ElMessage.success('二次验证已启用')
     setupDialogVisible.value = false
     totpEnabled.value = true
   } catch (e: any) {
-    ElMessage.error(e.response?.data?.error || '启用失败，请检查验证码')
+    ElMessage.error(e.response?.data?.error || '启用失败，请检查密码或验证码')
   } finally {
     enabling2FA.value = false
   }

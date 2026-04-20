@@ -15,11 +15,11 @@ export const changeUsername = (password: string, new_username: string) =>
 export const get2FAStatus = () =>
   request.get('/auth/2fa/status')
 
-export const setup2FA = () =>
-  request.post('/auth/2fa/setup')
+export const setup2FA = (password: string) =>
+  request.post('/auth/2fa/setup', { password })
 
-export const enable2FA = (code: string) =>
-  request.post('/auth/2fa/enable', { code })
+export const enable2FA = (password: string, code: string) =>
+  request.post('/auth/2fa/enable', { password, code })
 
 export const disable2FA = (password: string) =>
   request.post('/auth/2fa/disable', { password })
