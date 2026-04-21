@@ -43,6 +43,20 @@ func AuditMiddleware(audit *service.AuditService) gin.HandlerFunc {
 	}
 }
 
+// MetricsMiddleware 统计 HTTP 请求数到 Prometheus。为避免标签高基数爆炸，
+// /api/sub/:uuid 这类含动态参数的路径统一合并为 "/api/sub/:uuid"。
+func MetricsMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Next()
+		path := c.FullPath()
+		if path == "" {
+			path = "unknown"
+		}
+		status := fmt.Sprintf("%d", c.Writer.Status())
+		service.HTTPRequestsTotal.WithLabelValues(c.Request.Method, path, status).Inc()
+	}
+}
+
 // DomainGuard - 域名访问限制中间件，拒绝通过 IP 直接访问
 func DomainGuard(domain string) gin.HandlerFunc {
 	return func(c *gin.Context) {

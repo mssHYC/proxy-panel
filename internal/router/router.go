@@ -14,6 +14,7 @@ import (
 	"proxy-panel/web"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Setup 初始化路由，注册所有端点
@@ -28,6 +29,10 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	// 反代部署时必须配置 trusted_proxies，否则 X-Forwarded-For 可被伪造
 	// 未配置时传 nil 让 gin 忽略所有代理 header，ClientIP() 回退到直连 RemoteAddr
 	_ = r.SetTrustedProxies(cfg.Server.TrustedProxies)
+
+	// Prometheus 指标中间件
+	r.Use(MetricsMiddleware())
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// 域名绑定：配置了域名时，拒绝通过 IP 直接访问
 	if cfg.Server.Domain != "" {

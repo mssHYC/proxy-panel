@@ -90,6 +90,8 @@ func (h *HealthChecker) checkOne(ctx context.Context, n *model.Node) {
 			WHERE id = ?`, time.Now(), n.ID); uerr != nil {
 			log.Printf("[健康检查] 更新节点 %d 状态失败: %v", n.ID, uerr)
 		}
+		NodeHealth.WithLabelValues(n.Name, n.Protocol).Set(1)
+		NodeFailCount.WithLabelValues(n.Name).Set(0)
 		return
 	}
 
@@ -100,11 +102,14 @@ func (h *HealthChecker) checkOne(ctx context.Context, n *model.Node) {
 		WHERE id = ?`, time.Now(), errMsg, newFail, n.ID); uerr != nil {
 		log.Printf("[健康检查] 更新节点 %d 状态失败: %v", n.ID, uerr)
 	}
+	NodeHealth.WithLabelValues(n.Name, n.Protocol).Set(0)
+	NodeFailCount.WithLabelValues(n.Name).Set(float64(newFail))
 
 	// 仅在首次跨越阈值时发送，避免重复告警
 	if n.FailCount < healthFailThreshold && newFail >= healthFailThreshold && h.notifySvc != nil {
 		msg := fmt.Sprintf("🚫 节点「%s」(%s:%d) 连续 %d 次探测失败：%s",
 			n.Name, n.Host, n.Port, newFail, errMsg)
 		h.notifySvc.SendAll(msg)
+		AlertsSentTotal.WithLabelValues("node_offline").Inc()
 	}
 }
