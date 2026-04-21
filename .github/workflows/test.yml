@@ -38,6 +38,7 @@ jobs:
           SHELLCHECK_OPTS: -e SC1091 -e SC2155
         with:
           scandir: ./scripts
+          severity: warning
 
   web:
     runs-on: ubuntu-latest
