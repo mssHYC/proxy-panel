@@ -1,0 +1,16 @@
+.git
+.github
+.tasks
+data
+dist
+docs
+node_modules
+web/node_modules
+web/dist
+*.db
+*.db-wal
+*.db-shm
+plans
+specs
+proxy-panel
+config.yaml

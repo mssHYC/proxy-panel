@@ -1,0 +1,21 @@
+services:
+  proxy-panel:
+    build: .
+    image: proxy-panel:local
+    container_name: proxy-panel
+    restart: unless-stopped
+    # 订阅/面板端口；如需让面板管理的内核监听低端口，可改 network_mode: host
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+      - ./config.yaml:/app/config.yaml:ro
+      # 若将 Xray/Sing-box 作为独立容器或宿主机服务，此处保留 kernel 目录共享
+      - ./kernel:/app/kernel
+    environment:
+      - TZ=Asia/Shanghai
+    healthcheck:
+      test: ["CMD", "/app/proxy-panel", "-h"]
+      interval: 60s
+      timeout: 5s
+      retries: 3

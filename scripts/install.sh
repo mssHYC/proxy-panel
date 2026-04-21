@@ -850,6 +850,8 @@ setup_systemd() {
     step "配置 systemd 服务..."
 
     # ProxyPanel 服务
+    # Restart=always 是必须：备份恢复 API 通过 os.Exit(0) 让 systemd 拉起，
+    # 用 on-failure 的话成功退出不会重启。
     cat > /etc/systemd/system/${SERVICE_NAME}.service <<SVCEOF
 [Unit]
 Description=ProxyPanel - Proxy Management Panel
@@ -861,11 +863,28 @@ Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
 ExecStart=${INSTALL_DIR}/proxy-panel -config ${CONFIG_FILE}
-Restart=on-failure
+Restart=always
 RestartSec=5
 LimitNOFILE=65535
 StandardOutput=journal
 StandardError=journal
+
+# --- Security hardening ---
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=${INSTALL_DIR}
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictRealtime=yes
+# 面板绑定 8080 等高端口，无需 NET_BIND_SERVICE；根据需要自行放行
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target
@@ -888,6 +907,22 @@ LimitNOFILE=65535
 StandardOutput=journal
 StandardError=journal
 
+# --- Security hardening ---
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=${INSTALL_DIR}/kernel
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
+
 [Install]
 WantedBy=multi-user.target
 SVCEOF
@@ -909,6 +944,22 @@ RestartSec=5
 LimitNOFILE=65535
 StandardOutput=journal
 StandardError=journal
+
+# --- Security hardening ---
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=${INSTALL_DIR}/kernel
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
 
 [Install]
 WantedBy=multi-user.target
