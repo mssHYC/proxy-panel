@@ -284,7 +284,8 @@ func (s *NodeService) Count() (total int, enabled int, err error) {
 // ListByUserID 获取用户关联的已启用节点（用于订阅生成）
 func (s *NodeService) ListByUserID(userID int64) ([]model.Node, error) {
 	rows, err := s.db.Query(`SELECT n.id, n.name, n.host, n.port, n.protocol, n.transport,
-		n.kernel_type, n.settings, n.enable, n.sort_order, n.created_at, n.updated_at
+		n.kernel_type, n.settings, n.enable, n.sort_order, n.created_at, n.updated_at,
+		n.last_check_at, n.last_check_ok, n.last_check_err, n.fail_count
 		FROM nodes n
 		INNER JOIN user_nodes un ON un.node_id = n.id
 		WHERE un.user_id = ? AND n.enable = 1
