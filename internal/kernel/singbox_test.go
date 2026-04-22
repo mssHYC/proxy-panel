@@ -199,13 +199,12 @@ func TestSingboxBuildInbound_Vmess(t *testing.T) {
 	}
 }
 
-func TestHy2BuildInbound_IgnoreClientBandwidthAndMasquerade(t *testing.T) {
+func TestHy2BuildInbound_IgnoreClientBandwidth(t *testing.T) {
 	e := NewSingboxEngine("", "", 0)
 	node := NodeConfig{
 		ID: 1, Tag: "hy2-1", Port: 443, Protocol: "hysteria2",
 		Settings: map[string]interface{}{
 			"ignore_client_bandwidth": true,
-			"masquerade":              "https://example.com",
 		},
 	}
 	users := []UserConfig{{UUID: "u1", Email: "alice", Protocol: "hysteria2", NodeIDs: []int64{1}}}
@@ -213,8 +212,23 @@ func TestHy2BuildInbound_IgnoreClientBandwidthAndMasquerade(t *testing.T) {
 	if ib["ignore_client_bandwidth"] != true {
 		t.Errorf("ignore_client_bandwidth: want true, got %v", ib["ignore_client_bandwidth"])
 	}
-	if ib["masquerade"] != "https://example.com" {
-		t.Errorf("masquerade: want https://example.com, got %v", ib["masquerade"])
+}
+
+// Hy2 inbound 不再透传 masquerade：sing-box 1.10+ 的同端口 HTTP/3 反代实现会
+// 干扰鉴权后流传输（handshake success 紧跟 stream canceled），整体不通。
+// 即使老 settings JSON 里残留该字段，内核层也应忽略。
+func TestHy2BuildInbound_MasqueradeAlwaysStripped(t *testing.T) {
+	e := NewSingboxEngine("", "", 0)
+	node := NodeConfig{
+		ID: 1, Tag: "hy2-1", Port: 443, Protocol: "hysteria2",
+		Settings: map[string]interface{}{
+			"masquerade": "https://example.com",
+		},
+	}
+	users := []UserConfig{{UUID: "u1", Email: "alice", Protocol: "hysteria2", NodeIDs: []int64{1}}}
+	ib := e.buildInbound(node, users)
+	if _, ok := ib["masquerade"]; ok {
+		t.Errorf("masquerade 应被过滤掉, got %v", ib["masquerade"])
 	}
 }
 

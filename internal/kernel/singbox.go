@@ -317,10 +317,10 @@ func (e *SingboxEngine) buildInbound(node NodeConfig, users []UserConfig) map[st
 			inbound["ignore_client_bandwidth"] = true
 		}
 
-		// masquerade：伪装为普通 HTTPS 站点，支持字符串或对象
-		if masq := getSettingStr(s, "masquerade", ""); masq != "" {
-			inbound["masquerade"] = masq
-		}
+		// 注意：曾尝试下发 masquerade，但 sing-box 1.10+ 在 hy2 同端口同时跑
+		// HTTP/3 反代会干扰鉴权后的流传输，表现为 "handshake success: stream
+		// canceled" 错误，hy2 整体不可用。保留一个坑位说明避免后续回归。
+		// 老配置里残留的 masquerade 字段 UI 已不再读写，这里也不再透传。
 
 		return inbound
 

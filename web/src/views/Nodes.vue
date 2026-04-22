@@ -309,9 +309,6 @@
             <el-switch v-model="form.hy2_ignore_client_bandwidth" />
             <span class="ml-2 text-xs text-gray-400">服务端全权控制带宽，忽略客户端声明</span>
           </el-form-item>
-          <el-form-item label="伪装站点">
-            <el-input v-model="form.hy2_masquerade" placeholder="https://example.com (被主动探测时的伪装回应)" />
-          </el-form-item>
         </template>
       </el-form>
 
@@ -481,7 +478,6 @@ const defaultForm = () => ({
   hy2_max_up_mbps: 10,
   hy2_max_down_mbps: 10,
   hy2_ignore_client_bandwidth: false,
-  hy2_masquerade: '',
 })
 const form = reactive(defaultForm())
 
@@ -560,7 +556,6 @@ function formToSettings(): string {
     s.max_down_mbps = Number(form.hy2_max_down_mbps) || 0
     if (form.allow_insecure) s.skip_cert_verify = true
     if (form.hy2_ignore_client_bandwidth) s.ignore_client_bandwidth = true
-    if (form.hy2_masquerade) s.masquerade = form.hy2_masquerade
   }
 
   // 监听地址
@@ -610,7 +605,6 @@ function settingsToForm(settingsStr: string) {
   const downFromSettings = Number(s.max_down_mbps)
   form.hy2_max_down_mbps = Number.isFinite(downFromSettings) ? downFromSettings : 10
   form.hy2_ignore_client_bandwidth = !!s.ignore_client_bandwidth
-  form.hy2_masquerade = s.masquerade || ''
 }
 
 // ---- 表格辅助 ----
