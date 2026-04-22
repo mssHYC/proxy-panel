@@ -218,7 +218,8 @@ func TestHy2BuildInbound_IgnoreClientBandwidthAndMasquerade(t *testing.T) {
 	}
 }
 
-func TestHy2BuildInbound_TLSWithALPN(t *testing.T) {
+// Hy2 inbound 不写 server_name / alpn：避免 sing-box 做强匹配导致握手失败
+func TestHy2BuildInbound_TLSOmitsSNIAndALPN(t *testing.T) {
 	e := NewSingboxEngine("", "", 0)
 	node := NodeConfig{
 		ID: 1, Tag: "hy2-1", Port: 443, Protocol: "hysteria2",
@@ -235,12 +236,11 @@ func TestHy2BuildInbound_TLSWithALPN(t *testing.T) {
 	if !ok {
 		t.Fatalf("tls missing: %+v", ib["tls"])
 	}
-	if tls["server_name"] != "example.com" {
-		t.Errorf("server_name: want example.com, got %v", tls["server_name"])
+	if _, ok := tls["server_name"]; ok {
+		t.Errorf("hy2 inbound 不应写入 server_name: %v", tls["server_name"])
 	}
-	alpn, ok := tls["alpn"].([]string)
-	if !ok || len(alpn) != 1 || alpn[0] != "h3" {
-		t.Errorf("alpn: want [h3], got %v", tls["alpn"])
+	if _, ok := tls["alpn"]; ok {
+		t.Errorf("hy2 inbound 不应写入 alpn: %v", tls["alpn"])
 	}
 }
 

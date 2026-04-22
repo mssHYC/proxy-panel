@@ -290,21 +290,18 @@ func (e *SingboxEngine) buildInbound(node NodeConfig, users []UserConfig) map[st
 		}
 
 		// TLS 配置
+		// 注意：sing-box hysteria2 inbound 若设了 server_name / alpn，
+		// 会强制校验客户端 SNI/ALPN 必须匹配，任一不一致即 TLS 握手失败。
+		// 订阅侧（客户端）默认不主动声明这些字段（hy2 底层 QUIC 自动协商 h3），
+		// 所以服务端不写，沿用 sing-box "任何 SNI 均可" 的默认行为，避免上游把 hy2 连接直接拒掉。
 		certPath := getSettingStrAny(s, "", "cert_path", "certPath")
 		keyPath := getSettingStrAny(s, "", "key_path", "keyPath")
 		if certPath != "" && keyPath != "" {
-			tls := map[string]interface{}{
+			inbound["tls"] = map[string]interface{}{
 				"enabled":          true,
 				"certificate_path": certPath,
 				"key_path":         keyPath,
 			}
-			if sni := getSettingStrAny(s, "", "sni", "serverName"); sni != "" {
-				tls["server_name"] = sni
-			}
-			if alpn := getSettingSliceAny(s, "alpn"); len(alpn) > 0 {
-				tls["alpn"] = alpn
-			}
-			inbound["tls"] = tls
 		}
 
 		// 混淆配置

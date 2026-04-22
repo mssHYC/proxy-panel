@@ -305,14 +305,6 @@
             <el-switch v-model="form.allow_insecure" />
             <span class="ml-2 text-xs text-gray-400">客户端侧</span>
           </el-form-item>
-          <el-form-item label="ALPN">
-            <el-select v-model="form.alpn" multiple style="width:100%" placeholder="留空自动">
-              <el-option label="h3" value="h3" />
-              <el-option label="h2" value="h2" />
-              <el-option label="http/1.1" value="http/1.1" />
-            </el-select>
-            <span class="ml-2 text-xs text-gray-400">Hysteria2 走 QUIC，通常自动协商</span>
-          </el-form-item>
           <el-form-item label="忽略客户端带宽">
             <el-switch v-model="form.hy2_ignore_client_bandwidth" />
             <span class="ml-2 text-xs text-gray-400">服务端全权控制带宽，忽略客户端声明</span>
@@ -567,7 +559,6 @@ function formToSettings(): string {
     s.max_up_mbps = Number(form.hy2_max_up_mbps) || 0
     s.max_down_mbps = Number(form.hy2_max_down_mbps) || 0
     if (form.allow_insecure) s.skip_cert_verify = true
-    if (form.alpn.length > 0) s.alpn = form.alpn
     if (form.hy2_ignore_client_bandwidth) s.ignore_client_bandwidth = true
     if (form.hy2_masquerade) s.masquerade = form.hy2_masquerade
   }
