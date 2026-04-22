@@ -4,18 +4,30 @@ import (
 	"net/http"
 
 	"proxy-panel/internal/kernel"
+	"proxy-panel/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
 
 // KernelHandler 内核管理处理器
 type KernelHandler struct {
-	mgr *kernel.Manager
+	mgr     *kernel.Manager
+	syncSvc *service.KernelSyncService
 }
 
 // NewKernelHandler 创建内核处理器
-func NewKernelHandler(mgr *kernel.Manager) *KernelHandler {
-	return &KernelHandler{mgr: mgr}
+func NewKernelHandler(mgr *kernel.Manager, syncSvc *service.KernelSyncService) *KernelHandler {
+	return &KernelHandler{mgr: mgr, syncSvc: syncSvc}
+}
+
+// Sync 手动触发内核配置同步：跳过防抖窗口立即生效。
+// 面板上"应用变更"按钮调用，用于批量修改后的即时下发。
+func (h *KernelHandler) Sync(c *gin.Context) {
+	if err := h.syncSvc.SyncNow(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "内核配置已同步"})
 }
 
 // Status 返回所有内核的运行状态

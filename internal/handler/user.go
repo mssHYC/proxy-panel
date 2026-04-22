@@ -65,7 +65,7 @@ func (h *UserHandler) Create(c *gin.Context) {
 		return
 	}
 
-	go h.syncSvc.Sync()
+	h.syncSvc.Trigger()
 	c.JSON(http.StatusCreated, user)
 }
 
@@ -93,7 +93,7 @@ func (h *UserHandler) Update(c *gin.Context) {
 		return
 	}
 
-	go h.syncSvc.Sync()
+	h.syncSvc.Trigger()
 	c.JSON(http.StatusOK, user)
 }
 
@@ -110,7 +110,7 @@ func (h *UserHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	go h.syncSvc.Sync()
+	h.syncSvc.Trigger()
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }
 
@@ -138,6 +138,6 @@ func (h *UserHandler) ResetUUID(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error(), "code": "ERR_INTERNAL"})
 		return
 	}
-	go h.syncSvc.Sync()
+	h.syncSvc.Trigger()
 	c.JSON(http.StatusOK, gin.H{"uuid": newUUID, "message": "UUID 已重置"})
 }

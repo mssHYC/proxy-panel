@@ -199,6 +199,144 @@ func TestSingboxBuildInbound_Vmess(t *testing.T) {
 	}
 }
 
+func TestHy2BuildInbound_IgnoreClientBandwidthAndMasquerade(t *testing.T) {
+	e := NewSingboxEngine("", "", 0)
+	node := NodeConfig{
+		ID: 1, Tag: "hy2-1", Port: 443, Protocol: "hysteria2",
+		Settings: map[string]interface{}{
+			"ignore_client_bandwidth": true,
+			"masquerade":              "https://example.com",
+		},
+	}
+	users := []UserConfig{{UUID: "u1", Email: "alice", Protocol: "hysteria2", NodeIDs: []int64{1}}}
+	ib := e.buildInbound(node, users)
+	if ib["ignore_client_bandwidth"] != true {
+		t.Errorf("ignore_client_bandwidth: want true, got %v", ib["ignore_client_bandwidth"])
+	}
+	if ib["masquerade"] != "https://example.com" {
+		t.Errorf("masquerade: want https://example.com, got %v", ib["masquerade"])
+	}
+}
+
+func TestHy2BuildInbound_TLSWithALPN(t *testing.T) {
+	e := NewSingboxEngine("", "", 0)
+	node := NodeConfig{
+		ID: 1, Tag: "hy2-1", Port: 443, Protocol: "hysteria2",
+		Settings: map[string]interface{}{
+			"cert_path": "/a.crt",
+			"key_path":  "/a.key",
+			"sni":       "example.com",
+			"alpn":      []interface{}{"h3"},
+		},
+	}
+	users := []UserConfig{{UUID: "u1", Email: "alice", Protocol: "hysteria2", NodeIDs: []int64{1}}}
+	ib := e.buildInbound(node, users)
+	tls, ok := ib["tls"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("tls missing: %+v", ib["tls"])
+	}
+	if tls["server_name"] != "example.com" {
+		t.Errorf("server_name: want example.com, got %v", tls["server_name"])
+	}
+	alpn, ok := tls["alpn"].([]string)
+	if !ok || len(alpn) != 1 || alpn[0] != "h3" {
+		t.Errorf("alpn: want [h3], got %v", tls["alpn"])
+	}
+}
+
+func TestSingboxBuildInbound_Shadowsocks_SingleUser(t *testing.T) {
+	e := NewSingboxEngine("", "", 0)
+	node := NodeConfig{
+		ID: 9, Tag: "ss-1", Port: 8388, Protocol: "shadowsocks",
+		Settings: map[string]interface{}{"method": "aes-256-gcm"},
+	}
+	users := []UserConfig{{UUID: "pw-a", Email: "alice", Protocol: "ss", NodeIDs: []int64{9}}}
+	ib := e.buildInbound(node, users)
+	if ib["type"] != "shadowsocks" || ib["method"] != "aes-256-gcm" {
+		t.Fatalf("ss inbound wrong: %+v", ib)
+	}
+	// 单用户 + 非 2022 加密走顶层 password
+	if ib["password"] != "pw-a" {
+		t.Errorf("expected top-level password for single-user legacy SS, got %+v", ib)
+	}
+	if _, ok := ib["users"]; ok {
+		t.Errorf("legacy SS single-user should not use users array: %+v", ib["users"])
+	}
+}
+
+func TestSingboxBuildInbound_Shadowsocks2022_UsesUsersArray(t *testing.T) {
+	e := NewSingboxEngine("", "", 0)
+	node := NodeConfig{
+		ID: 10, Tag: "ss-2", Port: 8389, Protocol: "ss",
+		Settings: map[string]interface{}{"method": "2022-blake3-aes-256-gcm"},
+	}
+	users := []UserConfig{
+		{UUID: "pw-a", Email: "alice", Protocol: "ss", NodeIDs: []int64{10}},
+		{UUID: "pw-b", Email: "bob", Protocol: "ss", NodeIDs: []int64{10}},
+	}
+	ib := e.buildInbound(node, users)
+	us, ok := ib["users"].([]map[string]interface{})
+	if !ok || len(us) != 2 {
+		t.Fatalf("ss2022 should use users array with 2 entries, got %+v", ib["users"])
+	}
+	if _, ok := ib["password"]; ok {
+		t.Errorf("ss2022 multi-user should not have top-level password")
+	}
+}
+
+func TestSingboxTLS_ALPN(t *testing.T) {
+	tls := buildSingboxTLS(map[string]interface{}{
+		"security": "tls",
+		"sni":      "example.com",
+		"alpn":     []interface{}{"h2", "http/1.1"},
+	})
+	alpn, ok := tls["alpn"].([]string)
+	if !ok || len(alpn) != 2 || alpn[0] != "h2" || alpn[1] != "http/1.1" {
+		t.Errorf("alpn: want [h2, http/1.1], got %v", tls["alpn"])
+	}
+}
+
+func TestGetSettingBool(t *testing.T) {
+	cases := []struct {
+		in   interface{}
+		want bool
+	}{
+		{true, true},
+		{false, false},
+		{"true", true},
+		{"1", true},
+		{"yes", true},
+		{"false", false},
+		{"", false},
+		{float64(1), true},
+		{float64(0), false},
+	}
+	for _, c := range cases {
+		got := getSettingBool(map[string]interface{}{"k": c.in}, "k", false)
+		if got != c.want {
+			t.Errorf("in=%v: want %v, got %v", c.in, c.want, got)
+		}
+	}
+	if got := getSettingBool(nil, "k", true); got != true {
+		t.Errorf("nil map should return default")
+	}
+	if got := getSettingBool(map[string]interface{}{}, "missing", true); got != true {
+		t.Errorf("missing key should return default")
+	}
+}
+
+func TestIsSS2022Method(t *testing.T) {
+	if !isSS2022Method("2022-blake3-aes-256-gcm") {
+		t.Error("should detect 2022-blake3 as SS2022")
+	}
+	if isSS2022Method("aes-256-gcm") {
+		t.Error("legacy method should not be SS2022")
+	}
+	if isSS2022Method("") {
+		t.Error("empty should not be SS2022")
+	}
+}
+
 func TestSingboxBuildInbound_Trojan(t *testing.T) {
 	e := NewSingboxEngine("", "", 0)
 	node := NodeConfig{

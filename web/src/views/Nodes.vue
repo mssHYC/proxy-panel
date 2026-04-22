@@ -3,9 +3,16 @@
     <!-- 顶部栏 -->
     <div class="flex items-center justify-between">
       <h2 class="text-xl font-bold">节点管理</h2>
-      <el-button type="primary" @click="openDialog()">
-        <el-icon class="mr-1"><Plus /></el-icon>新增节点
-      </el-button>
+      <div class="flex gap-2">
+        <el-tooltip content="跳过 5s 防抖窗口，立即把当前节点/用户配置下发到内核（Xray 热加载，Sing-box 重启）" placement="top">
+          <el-button :loading="syncing" @click="handleManualSync">
+            <el-icon class="mr-1"><Refresh /></el-icon>立即应用变更
+          </el-button>
+        </el-tooltip>
+        <el-button type="primary" @click="openDialog()">
+          <el-icon class="mr-1"><Plus /></el-icon>新增节点
+        </el-button>
+      </div>
     </div>
 
     <!-- 节点表格 -->
@@ -298,6 +305,21 @@
             <el-switch v-model="form.allow_insecure" />
             <span class="ml-2 text-xs text-gray-400">客户端侧</span>
           </el-form-item>
+          <el-form-item label="ALPN">
+            <el-select v-model="form.alpn" multiple style="width:100%" placeholder="留空自动">
+              <el-option label="h3" value="h3" />
+              <el-option label="h2" value="h2" />
+              <el-option label="http/1.1" value="http/1.1" />
+            </el-select>
+            <span class="ml-2 text-xs text-gray-400">Hysteria2 走 QUIC，通常自动协商</span>
+          </el-form-item>
+          <el-form-item label="忽略客户端带宽">
+            <el-switch v-model="form.hy2_ignore_client_bandwidth" />
+            <span class="ml-2 text-xs text-gray-400">服务端全权控制带宽，忽略客户端声明</span>
+          </el-form-item>
+          <el-form-item label="伪装站点">
+            <el-input v-model="form.hy2_masquerade" placeholder="https://example.com (被主动探测时的伪装回应)" />
+          </el-form-item>
         </template>
       </el-form>
 
@@ -314,6 +336,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
 import { getNodes, createNode, updateNode, deleteNode, generateRealityKeypair } from '../api/node'
 import { getSettings } from '../api/setting'
+import request from '../api/request'
 
 // ---- 状态 ----
 const loading = ref(false)
@@ -322,7 +345,21 @@ const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editId = ref<number | null>(null)
 const submitting = ref(false)
+const syncing = ref(false)
 const formRef = ref<FormInstance>()
+
+// 手动触发：跳过后端 5s 防抖窗口，立即生成配置并重启/热加载内核
+async function handleManualSync() {
+  syncing.value = true
+  try {
+    await request.post('/kernel/sync')
+    ElMessage.success('内核配置已立即下发')
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.error || '同步失败')
+  } finally {
+    syncing.value = false
+  }
+}
 
 // ---- 常量：协议 / 传输 / 安全 / 内核 映射 ----
 const protocols = [
@@ -451,6 +488,8 @@ const defaultForm = () => ({
   hy2_obfs_password: '',
   hy2_max_up_mbps: 10,
   hy2_max_down_mbps: 10,
+  hy2_ignore_client_bandwidth: false,
+  hy2_masquerade: '',
 })
 const form = reactive(defaultForm())
 
@@ -528,6 +567,9 @@ function formToSettings(): string {
     s.max_up_mbps = Number(form.hy2_max_up_mbps) || 0
     s.max_down_mbps = Number(form.hy2_max_down_mbps) || 0
     if (form.allow_insecure) s.skip_cert_verify = true
+    if (form.alpn.length > 0) s.alpn = form.alpn
+    if (form.hy2_ignore_client_bandwidth) s.ignore_client_bandwidth = true
+    if (form.hy2_masquerade) s.masquerade = form.hy2_masquerade
   }
 
   // 监听地址
@@ -576,6 +618,8 @@ function settingsToForm(settingsStr: string) {
   form.hy2_max_up_mbps = Number.isFinite(upFromSettings) ? upFromSettings : 10
   const downFromSettings = Number(s.max_down_mbps)
   form.hy2_max_down_mbps = Number.isFinite(downFromSettings) ? downFromSettings : 10
+  form.hy2_ignore_client_bandwidth = !!s.ignore_client_bandwidth
+  form.hy2_masquerade = s.masquerade || ''
 }
 
 // ---- 表格辅助 ----

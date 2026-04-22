@@ -64,7 +64,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	userHandler := handler.NewUserHandler(userSvc, syncSvc)
 	nodeHandler := handler.NewNodeHandler(nodeSvc, syncSvc)
 	dashboardHandler := handler.NewDashboardHandler(userSvc, nodeSvc, trafficSvc, mgr, db)
-	kernelHandler := handler.NewKernelHandler(mgr)
+	kernelHandler := handler.NewKernelHandler(mgr, syncSvc)
 	trafficHandler := handler.NewTrafficHandler(trafficSvc)
 	settingHandler := handler.NewSettingHandler(db, cfg, scheduler)
 	notifyHandler := handler.NewNotifyHandler(notifySvc)
@@ -110,6 +110,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 			// 内核管理
 			auth.GET("/kernel/status", kernelHandler.Status)
 			auth.POST("/kernel/restart", kernelHandler.Restart)
+			auth.POST("/kernel/sync", kernelHandler.Sync)
 
 			// 流量管理
 			auth.GET("/traffic/server", trafficHandler.GetServerTraffic)

@@ -510,3 +510,35 @@ func getSettingInt(m map[string]interface{}, key string, defaultVal int) int {
 	}
 	return defaultVal
 }
+
+// getSettingBool 从 Settings 中安全获取布尔值，支持 true/false 和 "true"/"false"/"1"/"0"
+func getSettingBool(m map[string]interface{}, key string, defaultVal bool) bool {
+	if m == nil {
+		return defaultVal
+	}
+	v, ok := m[key]
+	if !ok {
+		return defaultVal
+	}
+	switch val := v.(type) {
+	case bool:
+		return val
+	case string:
+		switch strings.ToLower(val) {
+		case "true", "1", "yes":
+			return true
+		case "false", "0", "no", "":
+			return false
+		}
+	case float64:
+		return val != 0
+	case int:
+		return val != 0
+	}
+	return defaultVal
+}
+
+// isSS2022Method 判定 Shadowsocks 加密方法是否属于 2022 系列（多用户协议，使用 users 数组）
+func isSS2022Method(method string) bool {
+	return strings.HasPrefix(method, "2022-blake3-")
+}

@@ -364,6 +364,9 @@ func (g *SingboxGenerator) buildVLESS(node model.Node, user *model.User, s nodeS
 		if s.AllowInsecure {
 			tls["insecure"] = true
 		}
+		if s.ALPN != "" {
+			tls["alpn"] = splitALPN(s.ALPN)
+		}
 		ob["tls"] = tls
 	}
 
@@ -389,6 +392,12 @@ func (g *SingboxGenerator) buildVMess(node model.Node, user *model.User, s nodeS
 		if s.SNI != "" {
 			tls["server_name"] = s.SNI
 		}
+		if s.AllowInsecure {
+			tls["insecure"] = true
+		}
+		if s.ALPN != "" {
+			tls["alpn"] = splitALPN(s.ALPN)
+		}
 		ob["tls"] = tls
 	}
 
@@ -413,6 +422,9 @@ func (g *SingboxGenerator) buildTrojan(node model.Node, user *model.User, s node
 	}
 	if s.AllowInsecure {
 		tls["insecure"] = true
+	}
+	if s.ALPN != "" {
+		tls["alpn"] = splitALPN(s.ALPN)
 	}
 	ob["tls"] = tls
 
@@ -458,6 +470,9 @@ func (g *SingboxGenerator) buildHysteria2(node model.Node, user *model.User, s n
 	if s.AllowInsecure {
 		tls["insecure"] = true
 	}
+	if s.ALPN != "" {
+		tls["alpn"] = splitALPN(s.ALPN)
+	}
 	ob["tls"] = tls
 
 	if s.Obfs != "" {
@@ -466,7 +481,26 @@ func (g *SingboxGenerator) buildHysteria2(node model.Node, user *model.User, s n
 			"password": s.ObfsPassword,
 		}
 	}
+	// 客户端带宽上报（Hysteria2 拥塞算法依据），0 视为未配置
+	if s.UpMbps > 0 {
+		ob["up_mbps"] = s.UpMbps
+	}
+	if s.DownMbps > 0 {
+		ob["down_mbps"] = s.DownMbps
+	}
 	return ob
+}
+
+// splitALPN 把逗号分隔的 ALPN 字符串拆成数组，兼容前端既可存字符串也可存数组的情况
+func splitALPN(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // setTransport 设置传输层配置

@@ -290,26 +290,68 @@ func (e *SingboxEngine) buildInbound(node NodeConfig, users []UserConfig) map[st
 		}
 
 		// TLS 配置
-		certPath := getSettingStr(s, "cert_path", "")
-		keyPath := getSettingStr(s, "key_path", "")
+		certPath := getSettingStrAny(s, "", "cert_path", "certPath")
+		keyPath := getSettingStrAny(s, "", "key_path", "keyPath")
 		if certPath != "" && keyPath != "" {
-			inbound["tls"] = map[string]interface{}{
+			tls := map[string]interface{}{
 				"enabled":          true,
 				"certificate_path": certPath,
 				"key_path":         keyPath,
 			}
+			if sni := getSettingStrAny(s, "", "sni", "serverName"); sni != "" {
+				tls["server_name"] = sni
+			}
+			if alpn := getSettingSliceAny(s, "alpn"); len(alpn) > 0 {
+				tls["alpn"] = alpn
+			}
+			inbound["tls"] = tls
 		}
 
 		// 混淆配置
-		obfs := getSettingStr(s, "obfs", "")
-		if obfs != "" {
-			obfsPassword := getSettingStr(s, "obfs_password", "")
+		if obfs := getSettingStr(s, "obfs", ""); obfs != "" {
 			inbound["obfs"] = map[string]interface{}{
 				"type":     obfs,
-				"password": obfsPassword,
+				"password": getSettingStr(s, "obfs_password", ""),
 			}
 		}
 
+		// ignore_client_bandwidth：服务端全权控制带宽，无视客户端声明
+		if getSettingBool(s, "ignore_client_bandwidth", false) {
+			inbound["ignore_client_bandwidth"] = true
+		}
+
+		// masquerade：伪装为普通 HTTPS 站点，支持字符串或对象
+		if masq := getSettingStr(s, "masquerade", ""); masq != "" {
+			inbound["masquerade"] = masq
+		}
+
+		return inbound
+
+	case "shadowsocks", "ss":
+		method := getSettingStr(s, "method", "aes-256-gcm")
+		inbound := map[string]interface{}{
+			"type":        "shadowsocks",
+			"tag":         node.Tag,
+			"listen":      "::",
+			"listen_port": node.Port,
+			"method":      method,
+		}
+		userList := make([]map[string]interface{}, 0)
+		for _, u := range users {
+			if !userLinkedToNode(u, node.ID) {
+				continue
+			}
+			userList = append(userList, map[string]interface{}{
+				"name":     u.Email,
+				"password": u.UUID,
+			})
+		}
+		// 多用户协议（2022-blake3-*）用 users 数组；单用户传统加密用顶层 password
+		if len(userList) == 1 && !isSS2022Method(method) {
+			inbound["password"] = userList[0]["password"]
+		} else {
+			inbound["users"] = userList
+		}
 		return inbound
 
 	case "vless", "vmess", "trojan":
@@ -401,6 +443,9 @@ func buildSingboxTLS(s map[string]interface{}) map[string]interface{} {
 		}
 		if key := getSettingStrAny(s, "", "key_path", "keyPath"); key != "" {
 			tls["key_path"] = key
+		}
+		if alpn := getSettingSliceAny(s, "alpn"); len(alpn) > 0 {
+			tls["alpn"] = alpn
 		}
 		return tls
 	case "reality":

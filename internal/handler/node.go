@@ -71,8 +71,8 @@ func (h *NodeHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// 同步内核配置
-	go h.syncSvc.Sync()
+	// 同步内核配置（5s 防抖合并）
+	h.syncSvc.Trigger()
 
 	c.JSON(http.StatusCreated, withFirewallWarning(h, node))
 }
@@ -101,8 +101,8 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		return
 	}
 
-	// 同步内核配置
-	go h.syncSvc.Sync()
+	// 同步内核配置（5s 防抖合并）
+	h.syncSvc.Trigger()
 
 	c.JSON(http.StatusOK, withFirewallWarning(h, node))
 }
@@ -156,8 +156,8 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	// 同步内核配置
-	go h.syncSvc.Sync()
+	// 同步内核配置（5s 防抖合并）
+	h.syncSvc.Trigger()
 
 	resp := gin.H{"message": "删除成功"}
 	if w := firewallWarning(h); w != "" {

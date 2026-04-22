@@ -4,20 +4,61 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
+	"time"
 
 	"proxy-panel/internal/database"
 	"proxy-panel/internal/kernel"
 )
 
+// syncDebounceWindow 默认防抖窗口：5 秒内的多次 Trigger 合并为一次 Sync。
+// 对 sing-box 尤其关键：每次 Sync 都会重启内核，合并后重启次数与连接中断显著降低。
+const syncDebounceWindow = 5 * time.Second
+
 // KernelSyncService 负责将数据库中的节点和用户同步到内核配置文件
 type KernelSyncService struct {
 	db  *database.DB
 	mgr *kernel.Manager
+
+	debounceMu     sync.Mutex
+	debounceTimer  *time.Timer
+	debounceWindow time.Duration
 }
 
 // NewKernelSyncService 创建内核同步服务
 func NewKernelSyncService(db *database.DB, mgr *kernel.Manager) *KernelSyncService {
-	return &KernelSyncService{db: db, mgr: mgr}
+	return &KernelSyncService{db: db, mgr: mgr, debounceWindow: syncDebounceWindow}
+}
+
+// Trigger 请求一次内核同步；在 debounceWindow 内的多次调用会合并为一次执行。
+//
+// 用于所有"修改用户/节点"类 handler：Xray 本来就能热加载大部分变更，sing-box
+// 则必须重启，合并窗口把高频批量操作（如 UI 表格勾选多个节点批量保存）从每
+// 次一重启降到最终一次重启。
+func (s *KernelSyncService) Trigger() {
+	s.debounceMu.Lock()
+	defer s.debounceMu.Unlock()
+
+	if s.debounceTimer != nil {
+		s.debounceTimer.Stop()
+	}
+	s.debounceTimer = time.AfterFunc(s.debounceWindow, func() {
+		if err := s.Sync(); err != nil {
+			log.Printf("[内核同步] 防抖触发同步失败: %v", err)
+		}
+	})
+}
+
+// SyncNow 立即执行一次同步，取消任何等待中的防抖计时。
+// 用于"应用变更"按钮等需要即刻生效的场景。
+func (s *KernelSyncService) SyncNow() error {
+	s.debounceMu.Lock()
+	if s.debounceTimer != nil {
+		s.debounceTimer.Stop()
+		s.debounceTimer = nil
+	}
+	s.debounceMu.Unlock()
+	return s.Sync()
 }
 
 // Sync 从数据库读取所有启用的节点和用户，生成配置并写入文件，重启内核
