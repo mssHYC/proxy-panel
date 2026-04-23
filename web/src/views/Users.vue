@@ -211,7 +211,7 @@ const rules: FormRules = {
 
 // 订阅弹窗
 const subVisible = ref(false)
-const subUser = ref<{ uuid: string; username: string } | null>(null)
+const subUser = ref<{ id: number; uuid: string; username: string } | null>(null)
 
 // ---- 工具函数 ----
 function trafficPercent(row: User): number {
@@ -366,7 +366,7 @@ async function handleResetTraffic(row: User) {
 
 // ---- 订阅 ----
 function openSub(row: User) {
-  subUser.value = { uuid: row.uuid, username: row.username }
+  subUser.value = { id: row.id, uuid: row.uuid, username: row.username }
   subVisible.value = true
 }
 </script>
