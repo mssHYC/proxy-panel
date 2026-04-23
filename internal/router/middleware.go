@@ -225,7 +225,7 @@ func (srl *SubRateLimiter) janitor() {
 
 func (srl *SubRateLimiter) Limit() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		key := c.Param("uuid") + "|" + c.ClientIP()
+		key := subLimitKey(c) + "|" + c.ClientIP()
 		srl.mu.Lock()
 		now := time.Now()
 		// 清理过期记录
@@ -247,4 +247,11 @@ func (srl *SubRateLimiter) Limit() gin.HandlerFunc {
 		srl.mu.Unlock()
 		c.Next()
 	}
+}
+
+func subLimitKey(c *gin.Context) string {
+	if t := c.Param("token"); t != "" {
+		return t
+	}
+	return c.Param("uuid")
 }
