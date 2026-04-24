@@ -298,6 +298,23 @@ function isExpired(t: SubscriptionToken): boolean {
   return new Date(t.expires_at).getTime() < Date.now()
 }
 
+// el-date-picker 的 value-format="YYYY-MM-DDTHH:mm:ss" 无时区，
+// 后端 CreateTokenReq.ExpiresAt *time.Time 要求 RFC3339。这里把本地时间转 UTC ISO。
+function toRFC3339(local: string | null): string | null {
+  if (!local) return null
+  const d = new Date(local)
+  return isNaN(d.getTime()) ? null : d.toISOString()
+}
+
+// 反向：后端返回的 RFC3339 转成 picker 能回显的本地时间串。
+function fromRFC3339(iso: string | null): string | null {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return null
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
 function formatDate(d: string | null): string {
   if (!d) return '-'
   return new Date(d).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
@@ -500,7 +517,7 @@ async function handleCreate() {
   try {
     await createSubToken(props.user.id, {
       name: createForm.value.name.trim(),
-      expires_at: createForm.value.expires_at || null,
+      expires_at: toRFC3339(createForm.value.expires_at),
       ip_bind_enabled: createForm.value.ip_bind_enabled,
     })
     createDialogVisible.value = false
@@ -516,7 +533,7 @@ async function handleCreate() {
 // ---- Edit ----
 function openEditDialog(row: SubscriptionToken) {
   editingToken.value = row
-  editForm.value = { name: row.name, expires_at: row.expires_at }
+  editForm.value = { name: row.name, expires_at: fromRFC3339(row.expires_at) }
   editDialogVisible.value = true
 }
 
@@ -528,8 +545,9 @@ async function handleEdit() {
   editSubmitting.value = true
   try {
     const payload: any = { name: editForm.value.name.trim() }
-    if (editForm.value.expires_at) {
-      payload.expires_at = editForm.value.expires_at
+    const iso = toRFC3339(editForm.value.expires_at)
+    if (iso) {
+      payload.expires_at = iso
     } else {
       payload.expires_at_null = true
     }
