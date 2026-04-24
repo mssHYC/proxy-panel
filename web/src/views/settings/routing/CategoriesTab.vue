@@ -9,7 +9,7 @@
       <el-button @click="onAddCustom">+ 新增自定义分类</el-button>
     </div>
 
-    <el-table :data="config.categories" border>
+    <el-table :key="tableKey" :data="config.categories" border>
       <el-table-column prop="DisplayName" label="名称" width="180" />
       <el-table-column label="类型" width="80">
         <template #default="{ row }">
@@ -53,7 +53,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { applyPreset, createCategory, updateCategory, deleteCategory } from '../../../api/routing'
 import type { RoutingConfig, Category } from './types'
@@ -65,6 +65,10 @@ const emit = defineEmits<{ (e: 'refresh'): void }>()
 const presetCode = ref('')
 const editing = ref<Category | null>(null)
 const editingIsSystem = ref(false)
+
+// Force el-table re-mount when categories change so el-switch reflects updated Enabled state.
+const tableKey = ref(0)
+watch(() => props.config.categories, () => { tableKey.value++ })
 
 async function onApplyPreset() {
   try {
