@@ -68,7 +68,7 @@ func (g *ClashGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node
 	b.WriteString("proxy-groups:\n")
 	for _, group := range groups {
 		b.WriteString(fmt.Sprintf("  - name: %q\n", group["name"]))
-		b.WriteString(fmt.Sprintf("    type: %s\n", group["type"]))
+		b.WriteString(fmt.Sprintf("    type: %s\n", clashGroupType(group["type"])))
 		if url, ok := group["url"].(string); ok {
 			b.WriteString(fmt.Sprintf("    url: %q\n", url))
 		}
@@ -169,6 +169,19 @@ func renderClashRoutingFromPlan(plan *routing.Plan, allNodeNames []string) (
 	}
 	rules = append(rules, fmt.Sprintf("MATCH,%s", clashOutboundName(plan.Final, codeToName)))
 	return
+}
+
+// clashGroupType 把 IR 中的 group type（对齐 sing-box 词汇）映射到 Clash/Mihomo 的命名。
+// IR: selector / urltest   →   Clash: select / url-test
+func clashGroupType(t any) string {
+	s, _ := t.(string)
+	switch s {
+	case "selector":
+		return "select"
+	case "urltest":
+		return "url-test"
+	}
+	return s
 }
 
 func clashOutboundName(codeOrLiteral string, codeToName map[string]string) string {
