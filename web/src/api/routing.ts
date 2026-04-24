@@ -1,5 +1,5 @@
 import request from './request'
-import type { RoutingConfig, Category, Group, CustomRule } from '@/views/settings/routing/types'
+import type { RoutingConfig, Category, Group, CustomRule } from '../views/settings/routing/types'
 
 export const getRoutingConfig = () => request.get<RoutingConfig>('/routing/config')
 
