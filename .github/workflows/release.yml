@@ -4,30 +4,95 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, for example v1.6.1'
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref_name || inputs.version }}
+  cancel-in-progress: false
+
 jobs:
-  build:
+  prepare:
+    name: Prepare Release
     runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve Version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME}"
+          fi
+
+          if ! echo "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Invalid version: $VERSION"
+            echo "Version must look like v1.2.3"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Create Tag For Manual Release
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --tags origin "refs/tags/$VERSION" | grep -q "$VERSION"; then
+            echo "Tag $VERSION already exists"
+            exit 1
+          fi
+
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "$VERSION"
+
+  build:
+    name: Build ${{ matrix.goos }} ${{ matrix.goarch }}
+    needs: prepare
+    runs-on: ubuntu-latest
+
     strategy:
+      fail-fast: false
       matrix:
         include:
           - goos: linux
             goarch: amd64
           - goos: linux
             goarch: arm64
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.version }}
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
 
       - name: Build Frontend
         run: |
@@ -35,7 +100,10 @@ jobs:
           npm ci
           npm run build
 
-      - name: Build
+      - name: Run Backend Tests
+        run: go test ./...
+
+      - name: Build Backend
         env:
           CGO_ENABLED: 0
           GOOS: ${{ matrix.goos }}
@@ -49,6 +117,7 @@ jobs:
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.prepare.outputs.version }}
           files: |
             proxy-panel-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
             proxy-panel-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz.sha256
