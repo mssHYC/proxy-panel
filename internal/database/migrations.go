@@ -91,6 +91,27 @@ func (db *DB) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_logs(actor)`,
+		`CREATE TABLE IF NOT EXISTS subscription_tokens (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			name TEXT NOT NULL,
+			token TEXT NOT NULL UNIQUE,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			expires_at DATETIME,
+			ip_bind_enabled INTEGER NOT NULL DEFAULT 1,
+			bound_ip TEXT,
+			last_ip TEXT,
+			last_ua TEXT,
+			last_used_at DATETIME,
+			use_count INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sub_tokens_user ON subscription_tokens(user_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_sub_tokens_token ON subscription_tokens(token)`,
+		`INSERT INTO subscription_tokens (user_id, name, token, enabled, ip_bind_enabled, created_at)
+		 SELECT id, 'default', uuid, 1, 0, created_at FROM users
+		 WHERE NOT EXISTS (SELECT 1 FROM subscription_tokens st WHERE st.user_id = users.id)`,
 	}
 
 	for _, q := range queries {

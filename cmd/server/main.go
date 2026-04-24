@@ -75,6 +75,7 @@ func main() {
 	// 初始化 Services
 	authSvc := service.NewAuthService(db, cfg)
 	userSvc := service.NewUserService(db)
+	subTokenSvc := service.NewSubscriptionTokenService(db)
 	trafficSvc := service.NewTrafficService(db, mgr)
 	notifySvc := notify.NewNotifyService(cfg, db)
 	fwSvc, err := firewall.NewService(cfg.Firewall, notifySvc)
@@ -126,7 +127,7 @@ func main() {
 	defer scheduler.Stop()
 
 	// 设置路由
-	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc, scheduler, fwSvc, auditSvc, cfg.Database.Path)
+	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc, scheduler, fwSvc, auditSvc, subTokenSvc, cfg.Database.Path)
 
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	if cfg.Server.Domain != "" {

@@ -196,6 +196,14 @@ func (s *UserService) Create(req *CreateUserReq) (*model.User, error) {
 		}
 	}
 
+	// 为新用户注入 default token：token = uuid，ip_bind_enabled=0
+	// 与启动时一次性迁移脚本等价，保证 /api/sub/:uuid 旧端点始终可用
+	if _, err := s.db.Exec(
+		`INSERT INTO subscription_tokens (user_id, name, token, enabled, ip_bind_enabled, created_at)
+		 VALUES (?, 'default', ?, 1, 0, ?)`, id, uid, now); err != nil {
+		return nil, fmt.Errorf("初始化订阅 token 失败: %w", err)
+	}
+
 	return s.GetByID(id)
 }
 
@@ -319,6 +327,13 @@ func (s *UserService) ResetTraffic(id int64) error {
 
 // ResetUUID 重新生成用户 UUID
 func (s *UserService) ResetUUID(id int64) (string, error) {
+	cur, err := s.GetByID(id)
+	if err != nil {
+		return "", err
+	}
+	if cur == nil {
+		return "", fmt.Errorf("用户不存在")
+	}
 	newUUID := uuid.New().String()
 	result, err := s.db.Exec("UPDATE users SET uuid = ?, updated_at = ? WHERE id = ?",
 		newUUID, time.Now(), id)
@@ -329,6 +344,9 @@ func (s *UserService) ResetUUID(id int64) (string, error) {
 	if rows == 0 {
 		return "", fmt.Errorf("用户不存在")
 	}
+	// 同步更新 default token（token = 旧 uuid），让旧订阅链接立即失效
+	_, _ = s.db.Exec(`UPDATE subscription_tokens SET token = ? WHERE user_id = ? AND token = ?`,
+		newUUID, id, cur.UUID)
 	return newUUID, nil
 }
 

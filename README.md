@@ -108,7 +108,8 @@ proxy-panel/
 |---|---|---|
 | POST | `/api/auth/login` | 登录 |
 | POST | `/api/auth/2fa/verify` | TOTP 二次验证 |
-| GET | `/api/sub/:uuid` | 订阅链接 (`?format=surge\|clash\|v2ray\|shadowrocket\|singbox`) |
+| GET | `/api/sub/t/:token` | 订阅链接，推荐路径；支持多 token、过期、IP 绑定、UA 自动识别 (`?format=` 仍可手动覆盖) |
+| GET | `/api/sub/:uuid` | 旧订阅链接，保留兼容（响应头 `X-Subscription-Deprecated`） |
 
 ### 认证端点 (需 JWT)
 

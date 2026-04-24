@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,47 +13,67 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// SubscriptionHandler 订阅处理器
 type SubscriptionHandler struct {
-	userSvc *service.UserService
-	nodeSvc *service.NodeService
-	db      *database.DB
+	userSvc  *service.UserService
+	nodeSvc  *service.NodeService
+	tokenSvc *service.SubscriptionTokenService
+	db       *database.DB
 }
 
-// NewSubscriptionHandler 创建订阅处理器
-func NewSubscriptionHandler(userSvc *service.UserService, nodeSvc *service.NodeService, db *database.DB) *SubscriptionHandler {
-	return &SubscriptionHandler{userSvc: userSvc, nodeSvc: nodeSvc, db: db}
+func NewSubscriptionHandler(userSvc *service.UserService, nodeSvc *service.NodeService,
+	tokenSvc *service.SubscriptionTokenService, db *database.DB) *SubscriptionHandler {
+	return &SubscriptionHandler{userSvc: userSvc, nodeSvc: nodeSvc, tokenSvc: tokenSvc, db: db}
 }
 
-// Subscribe 处理订阅请求
+// SubscribeByToken 新订阅端点 GET /api/sub/t/:token
+func (h *SubscriptionHandler) SubscribeByToken(c *gin.Context) {
+	h.doSub(c, c.Param("token"), false)
+}
+
+// Subscribe 旧端点 GET /api/sub/:uuid，保留向后兼容；迁移已把 uuid 作为 token 写入表。
 func (h *SubscriptionHandler) Subscribe(c *gin.Context) {
-	uuid := c.Param("uuid")
-	format := c.DefaultQuery("format", "v2ray")
+	h.doSub(c, c.Param("uuid"), true)
+}
 
-	// 查询用户
-	user, err := h.userSvc.GetByUUID(uuid)
-	if err != nil {
+func (h *SubscriptionHandler) doSub(c *gin.Context, tokenStr string, deprecated bool) {
+	tok, err := h.tokenSvc.Validate(tokenStr, c.ClientIP())
+	switch {
+	case errors.Is(err, service.ErrTokenNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "订阅链接无效"})
+		return
+	case errors.Is(err, service.ErrTokenDisabled):
+		c.JSON(http.StatusForbidden, gin.H{"error": "订阅链接已禁用"})
+		return
+	case errors.Is(err, service.ErrTokenExpired):
+		c.JSON(http.StatusGone, gin.H{"error": "订阅链接已过期"})
+		return
+	case errors.Is(err, service.ErrTokenIPBound):
+		c.JSON(http.StatusForbidden, gin.H{"error": "订阅链接已绑定其他 IP"})
+		return
+	case err != nil:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "服务器内部错误"})
 		return
 	}
-	if user == nil {
+
+	h.tokenSvc.TouchAsync(tok.ID, c.ClientIP(), c.GetHeader("User-Agent"))
+	h.serve(c, tok.UserID, deprecated)
+}
+
+func (h *SubscriptionHandler) serve(c *gin.Context, userID int64, deprecated bool) {
+	user, err := h.userSvc.GetByID(userID)
+	if err != nil || user == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
 		return
 	}
-
-	// 检查用户是否启用
 	if !user.Enable {
 		c.JSON(http.StatusForbidden, gin.H{"error": "账户已禁用"})
 		return
 	}
-
-	// 检查流量是否耗尽
 	if user.TrafficLimit > 0 && user.TrafficUsed >= user.TrafficLimit {
 		c.JSON(http.StatusForbidden, gin.H{"error": "流量已耗尽"})
 		return
 	}
 
-	// 获取用户关联的节点，无关联则返回全部启用节点
 	nodes, err := h.nodeSvc.ListByUserID(user.ID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取节点失败"})
@@ -66,10 +87,16 @@ func (h *SubscriptionHandler) Subscribe(c *gin.Context) {
 		}
 	}
 
-	// 构建 baseURL
+	format := c.Query("format")
+	if format == "" {
+		format = subscription.SniffFormat(c.GetHeader("User-Agent"))
+	}
+	if format == "" {
+		format = "v2ray"
+	}
+
 	baseURL := fmt.Sprintf("%s://%s", scheme(c), c.Request.Host)
 
-	// 加载自定义规则和模式
 	var customRulesStr, customRulesMode string
 	h.db.QueryRow("SELECT value FROM settings WHERE key = 'custom_rules'").Scan(&customRulesStr)
 	h.db.QueryRow("SELECT value FROM settings WHERE key = 'custom_rules_mode'").Scan(&customRulesMode)
@@ -80,7 +107,6 @@ func (h *SubscriptionHandler) Subscribe(c *gin.Context) {
 	}
 	subscription.SetCustomRulesMode(customRulesMode)
 
-	// 生成订阅内容
 	gen := subscription.GetGenerator(format)
 	content, contentType, err := gen.Generate(nodes, user, baseURL)
 	if err != nil {
@@ -88,25 +114,21 @@ func (h *SubscriptionHandler) Subscribe(c *gin.Context) {
 		return
 	}
 
-	// 设置 Subscription-Userinfo 头
 	userinfo := fmt.Sprintf("upload=%d; download=%d; total=%d",
 		user.TrafficUp, user.TrafficDown, user.TrafficLimit)
 	if user.ExpiresAt != nil {
 		userinfo += fmt.Sprintf("; expire=%d", user.ExpiresAt.Unix())
 	}
 	c.Header("Subscription-Userinfo", userinfo)
-
-	// 浏览器直接查看，客户端通过 Content-Type 识别格式
-	// 仅在客户端主动请求下载时附加 filename
+	if deprecated {
+		c.Header("X-Subscription-Deprecated", "please migrate to /api/sub/t/<token>")
+	}
 	if c.Query("dl") == "1" {
 		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", user.Username))
 	}
-
-	// 返回订阅内容
 	c.Data(http.StatusOK, contentType, []byte(content))
 }
 
-// scheme 获取请求的协议（http/https）
 func scheme(c *gin.Context) string {
 	if c.Request.TLS != nil {
 		return "https"

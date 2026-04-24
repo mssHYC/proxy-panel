@@ -22,7 +22,8 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	userSvc *service.UserService, nodeSvc *service.NodeService,
 	trafficSvc *service.TrafficService, notifySvc *notify.NotifyService,
 	authSvc *service.AuthService, scheduler *service.Scheduler,
-	fwSvc *firewall.Service, auditSvc *service.AuditService, dbPath string) *gin.Engine {
+	fwSvc *firewall.Service, auditSvc *service.AuditService,
+	subTokenSvc *service.SubscriptionTokenService, dbPath string) *gin.Engine {
 
 	r := gin.Default()
 
@@ -68,7 +69,8 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	trafficHandler := handler.NewTrafficHandler(trafficSvc)
 	settingHandler := handler.NewSettingHandler(db, cfg, scheduler)
 	notifyHandler := handler.NewNotifyHandler(notifySvc)
-	subHandler := handler.NewSubscriptionHandler(userSvc, nodeSvc, db)
+	subHandler := handler.NewSubscriptionHandler(userSvc, nodeSvc, subTokenSvc, db)
+	subTokenHandler := handler.NewSubTokenHandler(subTokenSvc)
 	firewallHandler := handler.NewFirewallHandler(fwSvc, cfg, db, nodeSvc)
 	auditHandler := handler.NewAuditHandler(auditSvc)
 	backupHandler := handler.NewBackupHandler(db, dbPath)
@@ -83,6 +85,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 		api.POST("/auth/login", rateLimiter.LoginRateLimit(), authHandler.Login)
 		api.POST("/auth/2fa/verify", rateLimiter.LoginRateLimit(), authHandler.Verify2FA)
 		api.GET("/sub/:uuid", subLimiter.Limit(), subHandler.Subscribe)
+		api.GET("/sub/t/:token", subLimiter.Limit(), subHandler.SubscribeByToken)
 
 		// 需要认证的端点
 		auth := api.Group("", JWTAuth(cfg.Auth.JWTSecret, authSvc.GetTokenVersion), AuditMiddleware(auditSvc))
@@ -98,6 +101,11 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 			auth.DELETE("/users/:id", userHandler.Delete)
 			auth.POST("/users/:id/reset-traffic", userHandler.ResetTraffic)
 			auth.POST("/users/:id/reset-uuid", userHandler.ResetUUID)
+			auth.GET("/users/:id/sub-tokens", subTokenHandler.List)
+			auth.POST("/users/:id/sub-tokens", subTokenHandler.Create)
+			auth.PATCH("/sub-tokens/:id", subTokenHandler.Update)
+			auth.POST("/sub-tokens/:id/rotate", subTokenHandler.Rotate)
+			auth.DELETE("/sub-tokens/:id", subTokenHandler.Delete)
 
 			// 节点管理
 			auth.GET("/nodes", nodeHandler.List)
