@@ -113,6 +113,7 @@ func BuildPlan(ctx context.Context, db DB, opts BuildOptions) (*Plan, error) {
 	}
 
 	plan.Final = GetRoutingSetting(ctx, db, "routing.final_outbound", DefaultFinalGroup)
+	plan.SurgeSiteBase = GetRoutingSetting(ctx, db, "routing.surge_site_ruleset_base_url", "")
 
 	return plan, nil
 }
