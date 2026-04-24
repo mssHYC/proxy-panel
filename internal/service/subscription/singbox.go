@@ -6,26 +6,42 @@ import (
 	"strings"
 
 	"proxy-panel/internal/model"
+	"proxy-panel/internal/service/routing"
 )
 
 // SingboxGenerator Sing-box JSON 格式订阅生成器
 type SingboxGenerator struct{}
 
+// Generate 旧入口不再使用；需要通过 GenerateWithPlan 消费 routing.Plan。
 func (g *SingboxGenerator) Generate(nodes []model.Node, user *model.User, baseURL string) (string, string, error) {
+	return "", "", fmt.Errorf("singbox generator requires routing plan; use GenerateWithPlan")
+}
+
+// GenerateWithPlan 基于预构建的 routing.Plan 渲染 Sing-box 订阅。
+func (g *SingboxGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node, user *model.User, baseURL string) (string, string, error) {
 	var nodeOutbounds []map[string]interface{}
-	var nodeNames []string
+	var nodeTags []string
 
 	// 生成每个节点的 outbound
 	for _, node := range nodes {
 		ob := g.buildOutbound(node, user)
 		if ob != nil {
 			nodeOutbounds = append(nodeOutbounds, ob)
-			nodeNames = append(nodeNames, node.Name)
+			nodeTags = append(nodeTags, node.Name)
 		}
 	}
 
-	// 构建代理组 outbounds
-	groupOutbounds := g.buildProxyGroups(nodeNames)
+	// 基于 Plan 渲染路由部分
+	ruleSets, groupOutbounds, rules, final := renderSingboxRoutingFromPlan(plan, nodeTags)
+
+	// DNS 劫持规则放在最前
+	dnsHijack := map[string]interface{}{
+		"protocol": "dns",
+		"outbound": "dns-out",
+	}
+	allRules := make([]map[string]interface{}, 0, len(rules)+1)
+	allRules = append(allRules, dnsHijack)
+	allRules = append(allRules, rules...)
 
 	// 系统 outbounds
 	directOb := map[string]interface{}{"type": "direct", "tag": "direct"}
@@ -38,26 +54,26 @@ func (g *SingboxGenerator) Generate(nodes []model.Node, user *model.User, baseUR
 	allOutbounds = append(allOutbounds, nodeOutbounds...)
 	allOutbounds = append(allOutbounds, directOb, blockOb, dnsOb)
 
-	// DNS 配置
+	// DNS 配置：使用 Plan final 作为远程 DNS 出站（若为字面量 DIRECT/REJECT 则回退 direct）
+	remoteDNSDetour := final
+	if remoteDNSDetour == "direct" || remoteDNSDetour == "block" {
+		remoteDNSDetour = "direct"
+	}
 	dns := map[string]interface{}{
 		"servers": []map[string]interface{}{
-			{"tag": "dns-remote", "address": "https://1.1.1.1/dns-query", "detour": "全球代理"},
+			{"tag": "dns-remote", "address": "https://1.1.1.1/dns-query", "detour": remoteDNSDetour},
 			{"tag": "dns-direct", "address": "https://223.5.5.5/dns-query", "detour": "direct"},
 			{"tag": "dns-block", "address": "rcode://success"},
 		},
-		"rules": []map[string]interface{}{
-			{"geosite": []string{"cn"}, "server": "dns-direct"},
-			{"geosite": []string{"category-ads-all"}, "server": "dns-block", "disable_cache": true},
-		},
 	}
 
-	// 路由规则
-	routeRules := g.buildRouteRules()
-
 	route := map[string]interface{}{
-		"rules":                routeRules,
-		"final":                "漏网之鱼",
+		"rules":                 allRules,
+		"final":                 final,
 		"auto_detect_interface": true,
+	}
+	if len(ruleSets) > 0 {
+		route["rule_set"] = ruleSets
 	}
 
 	config := map[string]interface{}{
@@ -74,238 +90,107 @@ func (g *SingboxGenerator) Generate(nodes []model.Node, user *model.User, baseUR
 	return string(data), "text/plain; charset=utf-8", nil
 }
 
-// buildProxyGroups 构建所有代理组
-func (g *SingboxGenerator) buildProxyGroups(nodeNames []string) []map[string]interface{} {
-	groups := []map[string]interface{}{
-		// 手动切换
-		{
-			"type":      "selector",
-			"tag":       "手动切换",
-			"outbounds": copyNames(nodeNames),
-		},
-		// 自动选择
-		{
-			"type":      "urltest",
-			"tag":       "自动选择",
-			"outbounds": copyNames(nodeNames),
-			"url":       "http://www.gstatic.com/generate_204",
-			"interval":  "5m",
-		},
-		// 全球代理
-		{
-			"type":      "selector",
-			"tag":       "全球代理",
-			"outbounds": concat([]string{"手动切换", "自动选择"}, nodeNames),
-		},
-		// 流媒体
-		{
-			"type":      "selector",
-			"tag":       "流媒体",
-			"outbounds": concat([]string{"手动切换", "自动选择", "direct"}, nodeNames),
-		},
-		// Telegram
-		{
-			"type":      "selector",
-			"tag":       "Telegram",
-			"outbounds": concat([]string{"手动切换", "自动选择"}, nodeNames),
-		},
-		// Google
-		{
-			"type":      "selector",
-			"tag":       "Google",
-			"outbounds": concat3([]string{"手动切换", "自动选择"}, nodeNames, []string{"direct"}),
-		},
-		// YouTube
-		{
-			"type":      "selector",
-			"tag":       "YouTube",
-			"outbounds": concat([]string{"手动切换", "自动选择"}, nodeNames),
-		},
-		// Netflix
-		{
-			"type":      "selector",
-			"tag":       "Netflix",
-			"outbounds": concat([]string{"流媒体", "手动切换", "自动选择"}, nodeNames),
-		},
-		// Spotify
-		{
-			"type":      "selector",
-			"tag":       "Spotify",
-			"outbounds": concat3([]string{"流媒体", "手动切换", "自动选择"}, []string{"direct"}, nodeNames),
-		},
-		// HBO
-		{
-			"type":      "selector",
-			"tag":       "HBO",
-			"outbounds": concat([]string{"流媒体", "手动切换", "自动选择"}, nodeNames),
-		},
-		// Disney
-		{
-			"type":      "selector",
-			"tag":       "Disney",
-			"outbounds": concat([]string{"流媒体", "手动切换", "自动选择"}, nodeNames),
-		},
-		// Bing
-		{
-			"type":      "selector",
-			"tag":       "Bing",
-			"outbounds": concat([]string{"手动切换", "自动选择"}, nodeNames),
-		},
-		// OpenAI
-		{
-			"type":      "selector",
-			"tag":       "OpenAI",
-			"outbounds": concat([]string{"手动切换", "自动选择"}, nodeNames),
-		},
-		// ClaudeAI
-		{
-			"type":      "selector",
-			"tag":       "ClaudeAI",
-			"outbounds": concat([]string{"手动切换", "自动选择"}, nodeNames),
-		},
-		// GitHub
-		{
-			"type":      "selector",
-			"tag":       "GitHub",
-			"outbounds": concat3([]string{"手动切换", "自动选择"}, nodeNames, []string{"direct"}),
-		},
-		// 国内媒体
-		{
-			"type":      "selector",
-			"tag":       "国内媒体",
-			"outbounds": concat([]string{"direct"}, nodeNames),
-		},
-		// 本地直连
-		{
-			"type":      "selector",
-			"tag":       "本地直连",
-			"outbounds": concat([]string{"direct", "自动选择"}, nodeNames),
-		},
-		// 漏网之鱼
-		{
-			"type":      "selector",
-			"tag":       "漏网之鱼",
-			"outbounds": concat([]string{"direct", "手动切换", "自动选择"}, nodeNames),
-		},
+// renderSingboxRoutingFromPlan 返回 route.rule_set 条目、代理组 outbounds、route.rules 以及 final 出站 tag。
+// 节点 tag 通过 allNodeTags 传入。
+func renderSingboxRoutingFromPlan(plan *routing.Plan, allNodeTags []string) (
+	ruleSets []map[string]any,
+	groupOutbounds []map[string]any,
+	rules []map[string]any,
+	final string,
+) {
+	for tag, urls := range plan.Providers.Site {
+		ruleSets = append(ruleSets, map[string]any{
+			"tag": tag, "type": "remote", "format": "binary",
+			"url": urls.Singbox, "download_detour": "direct",
+		})
 	}
-	return groups
-}
-
-// buildRouteRules 构建路由规则
-func (g *SingboxGenerator) buildRouteRules() []map[string]interface{} {
-	var rules []map[string]interface{}
-
-	// 自定义规则
-	customRules := GetCustomRules()
-	for _, rule := range customRules {
-		rule = strings.TrimSpace(rule)
-		if rule == "" {
-			continue
-		}
-		// 尝试解析自定义规则为 sing-box 格式
-		r := parseSingboxCustomRule(rule)
-		if r != nil {
-			rules = append(rules, r)
-		}
+	for tag, urls := range plan.Providers.IP {
+		ruleSets = append(ruleSets, map[string]any{
+			"tag": tag + "-ip", "type": "remote", "format": "binary",
+			"url": urls.Singbox, "download_detour": "direct",
+		})
 	}
 
-	// DNS 劫持
-	rules = append(rules, map[string]interface{}{
-		"protocol": "dns",
-		"outbound": "dns-out",
-	})
+	// group code -> displayed tag (singbox "tag" 字段)。
+	codeToTag := map[string]string{}
+	for _, g := range plan.Groups {
+		codeToTag[g.Code] = g.DisplayName
+	}
 
-	// override 模式下跳过默认规则
-	if !IsOverrideMode() {
-		defaultRules := []struct {
-			geosite  []string
-			geoip    []string
-			outbound string
-		}{
-			{geosite: []string{"youtube"}, outbound: "YouTube"},
-			{geosite: []string{"google"}, outbound: "Google"},
-			{geosite: []string{"github"}, outbound: "GitHub"},
-			{geoip: []string{"telegram"}, outbound: "Telegram"},
-			{geosite: []string{"telegram"}, outbound: "Telegram"},
-			{geosite: []string{"spotify"}, outbound: "Spotify"},
-			{geosite: []string{"netflix"}, outbound: "Netflix"},
-			{geosite: []string{"hbo"}, outbound: "HBO"},
-			{geosite: []string{"bing"}, outbound: "Bing"},
-			{geosite: []string{"openai"}, outbound: "OpenAI"},
-			{geosite: []string{"disney"}, outbound: "Disney"},
-			{geosite: []string{"geolocation-!cn"}, outbound: "全球代理"},
-			{geoip: []string{"cn"}, outbound: "本地直连"},
-			{geosite: []string{"cn"}, outbound: "本地直连"},
-		}
-
-		for _, dr := range defaultRules {
-			r := map[string]interface{}{
-				"outbound": dr.outbound,
+	for _, g := range plan.Groups {
+		members := []string{}
+		for _, m := range g.Members {
+			switch {
+			case m == "<ALL>":
+				members = append(members, allNodeTags...)
+			case m == "DIRECT":
+				members = append(members, "direct")
+			case m == "REJECT":
+				members = append(members, "block")
+			default:
+				if t, ok := codeToTag[m]; ok {
+					members = append(members, t)
+				} else {
+					members = append(members, m)
+				}
 			}
-			if len(dr.geosite) > 0 {
-				r["geosite"] = dr.geosite
-			}
-			if len(dr.geoip) > 0 {
-				r["geoip"] = dr.geoip
-			}
-			rules = append(rules, r)
 		}
+		groupOutbounds = append(groupOutbounds, map[string]any{
+			"tag":       g.DisplayName,
+			"type":      g.Type,
+			"outbounds": members,
+		})
 	}
 
-	return rules
-}
-
-// parseSingboxCustomRule 尝试将自定义规则转换为 sing-box 路由规则
-// 支持简单的 Clash/Surge 格式规则，如 DOMAIN,example.com,Proxy
-func parseSingboxCustomRule(rule string) map[string]interface{} {
-	parts := strings.SplitN(rule, ",", 3)
-	if len(parts) < 3 {
-		return nil
+	for _, r := range plan.Rules {
+		out := singboxOutboundName(r.Outbound, codeToTag)
+		rule := map[string]any{"outbound": out}
+		if len(r.SiteTags) > 0 {
+			merged := append([]string{}, r.SiteTags...)
+			for _, t := range r.IPTags {
+				merged = append(merged, t+"-ip")
+			}
+			rule["rule_set"] = merged
+		} else if len(r.IPTags) > 0 {
+			merged := []string{}
+			for _, t := range r.IPTags {
+				merged = append(merged, t+"-ip")
+			}
+			rule["rule_set"] = merged
+		}
+		if len(r.DomainSuffix) > 0 {
+			rule["domain_suffix"] = r.DomainSuffix
+		}
+		if len(r.DomainKeyword) > 0 {
+			rule["domain_keyword"] = r.DomainKeyword
+		}
+		if len(r.IPCIDR) > 0 {
+			rule["ip_cidr"] = r.IPCIDR
+		}
+		if len(r.SrcIPCIDR) > 0 {
+			rule["source_ip_cidr"] = r.SrcIPCIDR
+		}
+		if len(r.Protocol) > 0 {
+			rule["protocol"] = r.Protocol
+		}
+		rules = append(rules, rule)
 	}
-	ruleType := strings.TrimSpace(parts[0])
-	value := strings.TrimSpace(parts[1])
-	outbound := strings.TrimSpace(parts[2])
 
-	switch strings.ToUpper(ruleType) {
-	case "DOMAIN":
-		return map[string]interface{}{"domain": []string{value}, "outbound": outbound}
-	case "DOMAIN-SUFFIX":
-		return map[string]interface{}{"domain_suffix": []string{value}, "outbound": outbound}
-	case "DOMAIN-KEYWORD":
-		return map[string]interface{}{"domain_keyword": []string{value}, "outbound": outbound}
-	case "IP-CIDR", "IP-CIDR6":
-		return map[string]interface{}{"ip_cidr": []string{value}, "outbound": outbound}
-	case "GEOIP":
-		return map[string]interface{}{"geoip": []string{strings.ToLower(value)}, "outbound": outbound}
-	case "GEOSITE":
-		return map[string]interface{}{"geosite": []string{strings.ToLower(value)}, "outbound": outbound}
-	default:
-		return nil
+	final = singboxOutboundName(plan.Final, codeToTag)
+	return
+}
+
+func singboxOutboundName(codeOrLit string, codeToTag map[string]string) string {
+	switch codeOrLit {
+	case "DIRECT":
+		return "direct"
+	case "REJECT":
+		return "block"
 	}
-}
-
-// copyNames 返回 names 的副本
-func copyNames(names []string) []string {
-	result := make([]string, len(names))
-	copy(result, names)
-	return result
-}
-
-// concat 合并 prefix 和 names
-func concat(prefix []string, names []string) []string {
-	result := make([]string, 0, len(prefix)+len(names))
-	result = append(result, prefix...)
-	result = append(result, names...)
-	return result
-}
-
-// concat3 合并三组字符串
-func concat3(a, b, c []string) []string {
-	result := make([]string, 0, len(a)+len(b)+len(c))
-	result = append(result, a...)
-	result = append(result, b...)
-	result = append(result, c...)
-	return result
+	if t, ok := codeToTag[codeOrLit]; ok {
+		return t
+	}
+	return codeOrLit
 }
 
 func (g *SingboxGenerator) buildOutbound(node model.Node, user *model.User) map[string]interface{} {
