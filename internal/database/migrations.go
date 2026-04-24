@@ -112,6 +112,61 @@ func (db *DB) migrate() error {
 		`INSERT INTO subscription_tokens (user_id, name, token, enabled, ip_bind_enabled, created_at)
 		 SELECT id, 'default', uuid, 1, 0, created_at FROM users
 		 WHERE NOT EXISTS (SELECT 1 FROM subscription_tokens st WHERE st.user_id = users.id)`,
+		`CREATE TABLE IF NOT EXISTS outbound_groups (
+			id            INTEGER PRIMARY KEY AUTOINCREMENT,
+			code          TEXT NOT NULL UNIQUE,
+			display_name  TEXT NOT NULL,
+			type          TEXT NOT NULL,
+			members       TEXT NOT NULL DEFAULT '[]',
+			kind          TEXT NOT NULL,
+			sort_order    INTEGER NOT NULL DEFAULT 0,
+			created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS rule_categories (
+			id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+			code                  TEXT NOT NULL UNIQUE,
+			display_name          TEXT NOT NULL,
+			kind                  TEXT NOT NULL,
+			site_tags             TEXT NOT NULL DEFAULT '[]',
+			ip_tags               TEXT NOT NULL DEFAULT '[]',
+			inline_domain_suffix  TEXT NOT NULL DEFAULT '[]',
+			inline_domain_keyword TEXT NOT NULL DEFAULT '[]',
+			inline_ip_cidr        TEXT NOT NULL DEFAULT '[]',
+			protocol              TEXT NOT NULL DEFAULT '',
+			default_group_id      INTEGER,
+			enabled               INTEGER NOT NULL DEFAULT 1,
+			sort_order            INTEGER NOT NULL DEFAULT 0,
+			created_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at            DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (default_group_id) REFERENCES outbound_groups(id) ON DELETE SET NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS custom_rules (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			name              TEXT NOT NULL,
+			site_tags         TEXT NOT NULL DEFAULT '[]',
+			ip_tags           TEXT NOT NULL DEFAULT '[]',
+			domain_suffix     TEXT NOT NULL DEFAULT '[]',
+			domain_keyword    TEXT NOT NULL DEFAULT '[]',
+			ip_cidr           TEXT NOT NULL DEFAULT '[]',
+			src_ip_cidr       TEXT NOT NULL DEFAULT '[]',
+			protocol          TEXT NOT NULL DEFAULT '',
+			port              TEXT NOT NULL DEFAULT '',
+			outbound_group_id INTEGER,
+			outbound_literal  TEXT NOT NULL DEFAULT '',
+			sort_order        INTEGER NOT NULL DEFAULT 0,
+			created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (outbound_group_id) REFERENCES outbound_groups(id) ON DELETE SET NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS rule_presets (
+			code               TEXT PRIMARY KEY,
+			display_name       TEXT NOT NULL,
+			enabled_categories TEXT NOT NULL DEFAULT '[]'
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_custom_rules_sort ON custom_rules(sort_order)`,
+		`CREATE INDEX IF NOT EXISTS idx_rule_categories_sort ON rule_categories(sort_order)`,
+		`CREATE INDEX IF NOT EXISTS idx_outbound_groups_sort ON outbound_groups(sort_order)`,
 	}
 
 	for _, q := range queries {
