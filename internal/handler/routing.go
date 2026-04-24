@@ -265,7 +265,11 @@ func (h *RoutingHandler) ImportLegacy(c *gin.Context) {
 		return
 	}
 	ctx := c.Request.Context()
-	groups, _ := routing.ListGroups(ctx, h.db)
+	groups, err := routing.ListGroups(ctx, h.db)
+	if err != nil {
+		h.fail(c, err)
+		return
+	}
 	groupIDByCode := map[string]int64{}
 	for _, g := range groups {
 		groupIDByCode[g.Code] = g.ID
@@ -304,7 +308,10 @@ func (h *RoutingHandler) ImportLegacy(c *gin.Context) {
 		imported++
 	}
 	if body.Mode == "override" {
-		h.db.Exec(`UPDATE rule_categories SET enabled = 0 WHERE kind = 'system'`)
+		if _, err := h.db.Exec(`UPDATE rule_categories SET enabled = 0 WHERE kind = 'system'`); err != nil {
+			h.fail(c, err)
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"imported": imported})
 }

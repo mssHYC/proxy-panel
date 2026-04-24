@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 )
 
 var (
@@ -165,8 +166,6 @@ type CustomRuleInput struct {
 	DomainKeyword   []string
 	IPCIDR          []string
 	SrcIPCIDR       []string
-	Protocol        string
-	Port            string
 	OutboundGroupID *int64
 	OutboundLiteral string
 	SortOrder       int
@@ -175,6 +174,19 @@ type CustomRuleInput struct {
 func (i CustomRuleInput) Validate() error {
 	if (i.OutboundGroupID == nil) == (i.OutboundLiteral == "") {
 		return ErrInvalidOutbound
+	}
+	if i.OutboundLiteral != "" && i.OutboundLiteral != "DIRECT" && i.OutboundLiteral != "REJECT" {
+		return ErrInvalidOutbound
+	}
+	for _, c := range i.IPCIDR {
+		if _, _, err := net.ParseCIDR(c); err != nil {
+			return fmt.Errorf("invalid ip_cidr %q: %w", c, err)
+		}
+	}
+	for _, c := range i.SrcIPCIDR {
+		if _, _, err := net.ParseCIDR(c); err != nil {
+			return fmt.Errorf("invalid src_ip_cidr %q: %w", c, err)
+		}
 	}
 	return nil
 }
@@ -191,9 +203,9 @@ func CreateCustomRule(ctx context.Context, db FullDB, in CustomRuleInput) (int64
 	sic, _ := json.Marshal(in.SrcIPCIDR)
 	res, err := db.ExecContext(ctx, `INSERT INTO custom_rules
         (name, site_tags, ip_tags, domain_suffix, domain_keyword, ip_cidr, src_ip_cidr, protocol, port, outbound_group_id, outbound_literal, sort_order)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?)`,
 		in.Name, string(site), string(ip), string(ds), string(dk), string(ic), string(sic),
-		in.Protocol, in.Port, in.OutboundGroupID, in.OutboundLiteral, in.SortOrder)
+		in.OutboundGroupID, in.OutboundLiteral, in.SortOrder)
 	if err != nil {
 		return 0, err
 	}
@@ -212,10 +224,10 @@ func UpdateCustomRule(ctx context.Context, db FullDB, id int64, in CustomRuleInp
 	sic, _ := json.Marshal(in.SrcIPCIDR)
 	_, err := db.ExecContext(ctx, `UPDATE custom_rules SET
         name=?, site_tags=?, ip_tags=?, domain_suffix=?, domain_keyword=?, ip_cidr=?, src_ip_cidr=?,
-        protocol=?, port=?, outbound_group_id=?, outbound_literal=?, sort_order=?, updated_at=CURRENT_TIMESTAMP
+        protocol='', port='', outbound_group_id=?, outbound_literal=?, sort_order=?, updated_at=CURRENT_TIMESTAMP
         WHERE id=?`,
 		in.Name, string(site), string(ip), string(ds), string(dk), string(ic), string(sic),
-		in.Protocol, in.Port, in.OutboundGroupID, in.OutboundLiteral, in.SortOrder, id)
+		in.OutboundGroupID, in.OutboundLiteral, in.SortOrder, id)
 	return err
 }
 

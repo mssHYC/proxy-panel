@@ -170,9 +170,6 @@ func renderSingboxRoutingFromPlan(plan *routing.Plan, allNodeTags []string) (
 		if len(r.SrcIPCIDR) > 0 {
 			rule["source_ip_cidr"] = r.SrcIPCIDR
 		}
-		if len(r.Protocol) > 0 {
-			rule["protocol"] = r.Protocol
-		}
 		rules = append(rules, rule)
 	}
 

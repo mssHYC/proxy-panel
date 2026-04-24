@@ -64,7 +64,6 @@ func BuildPlan(ctx context.Context, db DB, opts BuildOptions) (*Plan, error) {
 			SiteTags: cr.SiteTags, IPTags: cr.IPTags,
 			DomainSuffix: cr.DomainSuffix, DomainKeyword: cr.DomainKeyword,
 			IPCIDR: cr.IPCIDR, SrcIPCIDR: cr.SrcIPCIDR,
-			Protocol: splitCSV(cr.Protocol), Port: splitCSV(cr.Port),
 			Outbound: outbound,
 		})
 		collectProviders(plan, cr.SiteTags, cr.IPTags)
@@ -89,7 +88,6 @@ func BuildPlan(ctx context.Context, db DB, opts BuildOptions) (*Plan, error) {
 			SiteTags: c.SiteTags, IPTags: c.IPTags,
 			DomainSuffix: c.InlineDomainSuffix, DomainKeyword: c.InlineDomainKeyword,
 			IPCIDR:   c.InlineIPCIDR,
-			Protocol: splitCSV(c.Protocol),
 			Outbound: outboundCode,
 		})
 		collectProviders(plan, c.SiteTags, c.IPTags)
@@ -131,30 +129,3 @@ func collectProviders(plan *Plan, siteTags, ipTags []string) {
 	}
 }
 
-func splitCSV(s string) []string {
-	if s == "" {
-		return nil
-	}
-	var out []string
-	start := 0
-	for i := 0; i <= len(s); i++ {
-		if i == len(s) || s[i] == ',' {
-			v := trimSpace(s[start:i])
-			if v != "" {
-				out = append(out, v)
-			}
-			start = i + 1
-		}
-	}
-	return out
-}
-
-func trimSpace(s string) string {
-	for len(s) > 0 && (s[0] == ' ' || s[0] == '\t') {
-		s = s[1:]
-	}
-	for len(s) > 0 && (s[len(s)-1] == ' ' || s[len(s)-1] == '\t') {
-		s = s[:len(s)-1]
-	}
-	return s
-}
