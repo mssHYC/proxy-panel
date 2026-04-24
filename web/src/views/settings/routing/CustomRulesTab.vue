@@ -1,7 +1,7 @@
 <template>
   <div>
     <el-button @click="onAdd">+ 新增规则</el-button>
-    <el-table :data="config.customRules" border style="margin-top: 12px" row-key="ID">
+    <el-table :data="config.customRules" border style="margin-top: 12px">
       <el-table-column prop="Name" label="名称" width="200" />
       <el-table-column label="Site">
         <template #default="{ row }">

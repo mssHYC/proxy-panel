@@ -1,7 +1,7 @@
 <template>
   <div>
     <el-button @click="onAdd">+ 新增自定义组</el-button>
-    <el-table :data="config.groups" border style="margin-top: 12px" row-key="ID">
+    <el-table :data="config.groups" border style="margin-top: 12px">
       <el-table-column prop="DisplayName" label="显示名" width="200" />
       <el-table-column prop="Code" label="Code" width="160" />
       <el-table-column prop="Type" label="类型" width="100" />
