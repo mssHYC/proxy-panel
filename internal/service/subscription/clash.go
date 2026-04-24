@@ -244,7 +244,7 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 
 	switch node.Protocol {
 	case "vless":
-		b.WriteString(fmt.Sprintf("  - name: %s\n", node.Name))
+		b.WriteString(fmt.Sprintf("  - name: %q\n", node.Name))
 		b.WriteString("    type: vless\n")
 		b.WriteString(fmt.Sprintf("    server: %s\n", node.Host))
 		b.WriteString(fmt.Sprintf("    port: %d\n", node.Port))
@@ -276,7 +276,7 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 		g.writeTransportOpts(&b, node, s)
 
 	case "vmess":
-		b.WriteString(fmt.Sprintf("  - name: %s\n", node.Name))
+		b.WriteString(fmt.Sprintf("  - name: %q\n", node.Name))
 		b.WriteString("    type: vmess\n")
 		b.WriteString(fmt.Sprintf("    server: %s\n", node.Host))
 		b.WriteString(fmt.Sprintf("    port: %d\n", node.Port))
@@ -295,7 +295,7 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 		g.writeTransportOpts(&b, node, s)
 
 	case "trojan":
-		b.WriteString(fmt.Sprintf("  - name: %s\n", node.Name))
+		b.WriteString(fmt.Sprintf("  - name: %q\n", node.Name))
 		b.WriteString("    type: trojan\n")
 		b.WriteString(fmt.Sprintf("    server: %s\n", node.Host))
 		b.WriteString(fmt.Sprintf("    port: %d\n", node.Port))
@@ -320,7 +320,7 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 		if password == "" {
 			password = user.UUID
 		}
-		b.WriteString(fmt.Sprintf("  - name: %s\n", node.Name))
+		b.WriteString(fmt.Sprintf("  - name: %q\n", node.Name))
 		b.WriteString("    type: ss\n")
 		b.WriteString(fmt.Sprintf("    server: %s\n", node.Host))
 		b.WriteString(fmt.Sprintf("    port: %d\n", node.Port))
@@ -329,7 +329,7 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 
 	case "hysteria2":
 		// sing-box 服务端固定以 user.UUID 作为 hy2 password，订阅必须与之一致
-		b.WriteString(fmt.Sprintf("  - name: %s\n", node.Name))
+		b.WriteString(fmt.Sprintf("  - name: %q\n", node.Name))
 		b.WriteString("    type: hysteria2\n")
 		b.WriteString(fmt.Sprintf("    server: %s\n", node.Host))
 		b.WriteString(fmt.Sprintf("    port: %d\n", node.Port))
