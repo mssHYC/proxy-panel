@@ -74,6 +74,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	firewallHandler := handler.NewFirewallHandler(fwSvc, cfg, db, nodeSvc)
 	auditHandler := handler.NewAuditHandler(auditSvc)
 	backupHandler := handler.NewBackupHandler(db, dbPath)
+	routingHandler := handler.NewRoutingHandler(db)
 
 	// 限流器
 	rateLimiter := NewRateLimiter()
@@ -106,6 +107,20 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 			auth.PATCH("/sub-tokens/:id", subTokenHandler.Update)
 			auth.POST("/sub-tokens/:id/rotate", subTokenHandler.Rotate)
 			auth.DELETE("/sub-tokens/:id", subTokenHandler.Delete)
+
+			// 路由规则管理
+			auth.GET("/routing/config", routingHandler.GetConfig)
+			auth.POST("/routing/categories", routingHandler.CreateCategory)
+			auth.PUT("/routing/categories/:id", routingHandler.UpdateCategory)
+			auth.DELETE("/routing/categories/:id", routingHandler.DeleteCategory)
+			auth.POST("/routing/groups", routingHandler.CreateGroup)
+			auth.PUT("/routing/groups/:id", routingHandler.UpdateGroup)
+			auth.DELETE("/routing/groups/:id", routingHandler.DeleteGroup)
+			auth.POST("/routing/custom-rules", routingHandler.CreateCustomRule)
+			auth.PUT("/routing/custom-rules/:id", routingHandler.UpdateCustomRule)
+			auth.DELETE("/routing/custom-rules/:id", routingHandler.DeleteCustomRule)
+			auth.POST("/routing/apply-preset", routingHandler.ApplyPreset)
+			auth.POST("/routing/import-legacy", routingHandler.ImportLegacy)
 
 			// 节点管理
 			auth.GET("/nodes", nodeHandler.List)
