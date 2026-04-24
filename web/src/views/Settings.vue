@@ -12,7 +12,7 @@
         <AlertSection v-if="activeTab === 'alert'" />
       </el-tab-pane>
       <el-tab-pane label="分流规则" name="rules">
-        <RulesSection v-if="activeTab === 'rules'" />
+        <RoutingSection v-if="activeTab === 'rules'" />
       </el-tab-pane>
       <el-tab-pane label="防火墙" name="firewall">
         <FirewallSection v-if="activeTab === 'firewall'" />
@@ -29,7 +29,7 @@ import { ref } from 'vue'
 import AccountSection from './settings/AccountSection.vue'
 import NotifySection from './settings/NotifySection.vue'
 import AlertSection from './settings/AlertSection.vue'
-import RulesSection from './settings/RulesSection.vue'
+import RoutingSection from './settings/routing/RoutingSection.vue'
 import FirewallSection from './settings/FirewallSection.vue'
 import BackupSection from './settings/BackupSection.vue'
 
