@@ -7,6 +7,7 @@ type Plan struct {
 	Rules     []Rule
 	Providers Providers
 	Final     string // 兜底出站：group code 或 DIRECT/REJECT
+	SurgeSiteBase string // 空 = 降级 GEOSITE；非空 = DOMAIN-SET URL 前缀
 }
 
 type Rule struct {
