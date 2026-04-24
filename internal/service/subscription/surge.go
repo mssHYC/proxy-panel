@@ -17,11 +17,11 @@ func (g *SurgeGenerator) Generate(nodes []model.Node, user *model.User, baseURL 
 }
 
 // GenerateWithPlan 基于预构建的 routing.Plan 渲染 Surge 订阅。
-func (g *SurgeGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node, user *model.User, baseURL string) (string, string, error) {
+func (g *SurgeGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node, user *model.User, baseURL, token string) (string, string, error) {
 	var b strings.Builder
 
 	// 托管配置头
-	b.WriteString(fmt.Sprintf("#!MANAGED-CONFIG %s/api/sub/%s?format=surge interval=86400 strict=false\n\n", baseURL, user.UUID))
+	b.WriteString(fmt.Sprintf("#!MANAGED-CONFIG %s/api/sub/t/%s?format=surge interval=86400 strict=false\n\n", baseURL, token))
 
 	// [General]
 	b.WriteString("[General]\n")
@@ -118,6 +118,9 @@ func renderSurgeRoutingFromPlan(plan *routing.Plan, allNodeNames []string) (prox
 		}
 		for _, v := range r.IPCIDR {
 			rules = append(rules, fmt.Sprintf("IP-CIDR,%s,%s", v, out))
+		}
+		for _, v := range r.SrcIPCIDR {
+			rules = append(rules, fmt.Sprintf("SRC-IP-CIDR,%s,%s", v, out))
 		}
 	}
 	rules = append(rules, fmt.Sprintf("FINAL,%s", surgeOutbound(plan.Final, codeToName)))

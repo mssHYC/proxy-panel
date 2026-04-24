@@ -14,7 +14,7 @@ type Generator interface {
 // 订阅 handler 在调用 BuildPlan 后，对 Generator 做类型断言以调用此接口。
 type RoutingAwareGenerator interface {
 	Generator
-	GenerateWithPlan(plan *routing.Plan, nodes []model.Node, user *model.User, baseURL string) (content string, contentType string, err error)
+	GenerateWithPlan(plan *routing.Plan, nodes []model.Node, user *model.User, baseURL, token string) (content string, contentType string, err error)
 }
 
 // GetGenerator 根据格式名称返回对应的生成器

@@ -18,7 +18,7 @@ func (g *ClashGenerator) Generate(nodes []model.Node, user *model.User, baseURL 
 }
 
 // GenerateWithPlan 基于预构建的 routing.Plan 渲染 Clash 订阅。
-func (g *ClashGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node, user *model.User, baseURL string) (string, string, error) {
+func (g *ClashGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node, user *model.User, baseURL, token string) (string, string, error) {
 	var b strings.Builder
 
 	// 收集节点名
