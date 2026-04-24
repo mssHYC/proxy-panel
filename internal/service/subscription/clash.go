@@ -152,7 +152,7 @@ func renderClashRoutingFromPlan(plan *routing.Plan, allNodeNames []string) (
 			rules = append(rules, fmt.Sprintf("RULE-SET,%s,%s", t, out))
 		}
 		for _, t := range r.IPTags {
-			rules = append(rules, fmt.Sprintf("RULE-SET,%s-ip,%s", t, out))
+			rules = append(rules, fmt.Sprintf("RULE-SET,%s-ip,%s,no-resolve", t, out))
 		}
 		for _, v := range r.DomainSuffix {
 			rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", v, out))
@@ -161,7 +161,7 @@ func renderClashRoutingFromPlan(plan *routing.Plan, allNodeNames []string) (
 			rules = append(rules, fmt.Sprintf("DOMAIN-KEYWORD,%s,%s", v, out))
 		}
 		for _, v := range r.IPCIDR {
-			rules = append(rules, fmt.Sprintf("IP-CIDR,%s,%s", v, out))
+			rules = append(rules, fmt.Sprintf("IP-CIDR,%s,%s,no-resolve", v, out))
 		}
 		for _, v := range r.SrcIPCIDR {
 			rules = append(rules, fmt.Sprintf("SRC-IP-CIDR,%s,%s", v, out))
