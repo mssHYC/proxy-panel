@@ -52,6 +52,10 @@ func (h *SettingHandler) Get(c *gin.Context) {
 	if _, ok := settings["firewall_backend"]; !ok {
 		settings["firewall_backend"] = h.cfg.Firewall.Backend
 	}
+	// Deprecated routing keys — always return empty for backward compatibility
+	settings["custom_rules"] = ""
+	settings["custom_rules_mode"] = ""
+	c.Header("X-Deprecated-Settings", "custom_rules,custom_rules_mode")
 	c.JSON(http.StatusOK, settings)
 }
 
@@ -63,6 +67,16 @@ func (h *SettingHandler) Update(c *gin.Context) {
 	if err := c.ShouldBindJSON(&settings); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误", "code": "ERR_BAD_REQUEST"})
 		return
+	}
+
+	// Deprecated routing keys — ignore writes; surface warning
+	deprecated := []string{"custom_rules", "custom_rules_mode"}
+	warnings := []string{}
+	for _, k := range deprecated {
+		if _, ok := settings[k]; ok {
+			delete(settings, k)
+			warnings = append(warnings, "routing.legacy_ignored:"+k)
+		}
 	}
 
 	// 预校验调度相关键
@@ -132,5 +146,9 @@ func (h *SettingHandler) Update(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "保存成功"})
+	resp := gin.H{"message": "保存成功"}
+	if len(warnings) > 0 {
+		resp["warnings"] = warnings
+	}
+	c.JSON(http.StatusOK, resp)
 }
