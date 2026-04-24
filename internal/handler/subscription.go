@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"proxy-panel/internal/database"
 	"proxy-panel/internal/service"
+	"proxy-panel/internal/service/routing"
 	"proxy-panel/internal/service/subscription"
 
 	"github.com/gin-gonic/gin"
@@ -97,21 +97,29 @@ func (h *SubscriptionHandler) serve(c *gin.Context, userID int64, deprecated boo
 
 	baseURL := fmt.Sprintf("%s://%s", scheme(c), c.Request.Host)
 
-	var customRulesStr, customRulesMode string
-	h.db.QueryRow("SELECT value FROM settings WHERE key = 'custom_rules'").Scan(&customRulesStr)
-	h.db.QueryRow("SELECT value FROM settings WHERE key = 'custom_rules_mode'").Scan(&customRulesMode)
-	if customRulesStr != "" {
-		subscription.SetCustomRules(strings.Split(customRulesStr, "\n"))
-	} else {
-		subscription.SetCustomRules(nil)
-	}
-	subscription.SetCustomRulesMode(customRulesMode)
-
 	gen := subscription.GetGenerator(format)
-	content, contentType, err := gen.Generate(nodes, user, baseURL)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成订阅失败"})
-		return
+	var content, contentType string
+	if ra, ok := gen.(subscription.RoutingAwareGenerator); ok {
+		plan, err := routing.BuildPlan(c.Request.Context(), h.db, routing.BuildOptions{
+			PresetOverride: c.Query("preset"),
+			ClientFormat:   format,
+		})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "构建分流规划失败: " + err.Error()})
+			return
+		}
+		content, contentType, err = ra.GenerateWithPlan(plan, nodes, user, baseURL)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "生成订阅失败"})
+			return
+		}
+	} else {
+		var err error
+		content, contentType, err = gen.Generate(nodes, user, baseURL)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "生成订阅失败"})
+			return
+		}
 	}
 
 	userinfo := fmt.Sprintf("upload=%d; download=%d; total=%d",
