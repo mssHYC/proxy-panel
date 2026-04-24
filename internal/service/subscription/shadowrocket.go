@@ -19,7 +19,7 @@ func (g *ShadowrocketGenerator) Generate(nodes []model.Node, user *model.User, b
 }
 
 // GenerateWithPlan 基于预构建的 routing.Plan 渲染 Shadowrocket 订阅。
-func (g *ShadowrocketGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node, user *model.User, baseURL string) (string, string, error) {
+func (g *ShadowrocketGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node, user *model.User, baseURL, token string) (string, string, error) {
 	uris := buildV2RayURIs(nodes, user)
 
 	var allNodeNames []string
@@ -93,6 +93,9 @@ func renderShadowrocketRoutingFromPlan(plan *routing.Plan, allNodeNames []string
 		}
 		for _, v := range r.IPCIDR {
 			rules = append(rules, fmt.Sprintf("IP-CIDR,%s,%s", v, out))
+		}
+		for _, v := range r.SrcIPCIDR {
+			rules = append(rules, fmt.Sprintf("SRC-IP-CIDR,%s,%s", v, out))
 		}
 	}
 	rules = append(rules, fmt.Sprintf("FINAL,%s", shadowrocketOutbound(plan.Final, codeToName)))

@@ -56,10 +56,10 @@ func (h *SubscriptionHandler) doSub(c *gin.Context, tokenStr string, deprecated 
 	}
 
 	h.tokenSvc.TouchAsync(tok.ID, c.ClientIP(), c.GetHeader("User-Agent"))
-	h.serve(c, tok.UserID, deprecated)
+	h.serve(c, tok.UserID, tok.Token, deprecated)
 }
 
-func (h *SubscriptionHandler) serve(c *gin.Context, userID int64, deprecated bool) {
+func (h *SubscriptionHandler) serve(c *gin.Context, userID int64, token string, deprecated bool) {
 	user, err := h.userSvc.GetByID(userID)
 	if err != nil || user == nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "用户不存在"})
@@ -108,7 +108,7 @@ func (h *SubscriptionHandler) serve(c *gin.Context, userID int64, deprecated boo
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "构建分流规划失败: " + err.Error()})
 			return
 		}
-		content, contentType, err = ra.GenerateWithPlan(plan, nodes, user, baseURL)
+		content, contentType, err = ra.GenerateWithPlan(plan, nodes, user, baseURL, token)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "生成订阅失败"})
 			return

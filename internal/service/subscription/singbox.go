@@ -18,7 +18,7 @@ func (g *SingboxGenerator) Generate(nodes []model.Node, user *model.User, baseUR
 }
 
 // GenerateWithPlan 基于预构建的 routing.Plan 渲染 Sing-box 订阅。
-func (g *SingboxGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node, user *model.User, baseURL string) (string, string, error) {
+func (g *SingboxGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node, user *model.User, baseURL, token string) (string, string, error) {
 	var nodeOutbounds []map[string]interface{}
 	var nodeTags []string
 
