@@ -48,6 +48,14 @@ func BuildPlan(ctx context.Context, db DB, opts BuildOptions) (*Plan, error) {
 		})
 	}
 
+	// 面板域名兜底 DIRECT —— 防止客户端把面板流量也走代理导致 hairpin 自环
+	if opts.PanelHost != "" {
+		plan.Rules = append(plan.Rules, Rule{
+			DomainSuffix: []string{opts.PanelHost},
+			Outbound:     "DIRECT",
+		})
+	}
+
 	for _, cr := range customs {
 		outbound := cr.OutboundLiteral
 		if outbound == "" {

@@ -41,6 +41,10 @@ type ProviderURLs struct {
 type BuildOptions struct {
 	PresetOverride string // 'minimal'|'balanced'|'comprehensive'|''
 	ClientFormat   string // 'clash'|'singbox'|'surge'|'v2ray'|'shadowrocket'
+	// PanelHost 是面板自身主机名（从订阅 baseURL 提取）。非空时 BuildPlan 会
+	// 在规则最前面插一条 DOMAIN-SUFFIX,<host>,DIRECT，防止客户端把面板流量
+	// 也走代理而触发 hairpin 自环（服务器内部 dial 自己的公网 IP 失败）。
+	PanelHost string
 }
 
 // IsLiteralOutbound 判断 outbound 是否为字面量（非 group code）。

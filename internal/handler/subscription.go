@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"proxy-panel/internal/database"
 	"proxy-panel/internal/service"
@@ -103,6 +104,7 @@ func (h *SubscriptionHandler) serve(c *gin.Context, userID int64, token string, 
 		plan, err := routing.BuildPlan(c.Request.Context(), h.db, routing.BuildOptions{
 			PresetOverride: c.Query("preset"),
 			ClientFormat:   format,
+			PanelHost:      panelHostFrom(c.Request.Host),
 		})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "构建分流规划失败: " + err.Error()})
@@ -145,4 +147,23 @@ func scheme(c *gin.Context) string {
 		return proto
 	}
 	return "http"
+}
+
+// panelHostFrom 从 Request.Host（形如 "example.com" 或 "example.com:8080"）
+// 截掉端口，返回纯主机名供分流规则使用。IPv6 括号形式会保留括号里的内容。
+func panelHostFrom(hostHeader string) string {
+	if hostHeader == "" {
+		return ""
+	}
+	// IPv6: "[::1]:8080"
+	if hostHeader[0] == '[' {
+		if end := strings.IndexByte(hostHeader, ']'); end > 0 {
+			return hostHeader[1:end]
+		}
+		return hostHeader
+	}
+	if i := strings.IndexByte(hostHeader, ':'); i >= 0 {
+		return hostHeader[:i]
+	}
+	return hostHeader
 }
