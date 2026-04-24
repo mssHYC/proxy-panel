@@ -2,15 +2,23 @@ package subscription
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"proxy-panel/internal/model"
+	"proxy-panel/internal/service/routing"
 )
 
 // ClashGenerator Clash/Mihomo YAML 格式订阅生成器
 type ClashGenerator struct{}
 
+// Generate 旧入口不再使用；需要通过 GenerateWithPlan 消费 routing.Plan。
 func (g *ClashGenerator) Generate(nodes []model.Node, user *model.User, baseURL string) (string, string, error) {
+	return "", "", fmt.Errorf("clash generator requires routing plan; use GenerateWithPlan")
+}
+
+// GenerateWithPlan 基于预构建的 routing.Plan 渲染 Clash 订阅。
+func (g *ClashGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node, user *model.User, baseURL string) (string, string, error) {
 	var b strings.Builder
 
 	// 收集节点名
@@ -20,7 +28,160 @@ func (g *ClashGenerator) Generate(nodes []model.Node, user *model.User, baseURL 
 	}
 
 	// === 全局配置 ===
-	b.WriteString(`log-level: info
+	b.WriteString(clashGlobalPreamble)
+
+	// === proxies ===
+	b.WriteString("proxies:\n")
+	for _, node := range nodes {
+		proxy := g.buildProxy(node, user)
+		if proxy != "" {
+			b.WriteString(proxy)
+		}
+	}
+	b.WriteString("\n")
+
+	providers, groups, rules := renderClashRoutingFromPlan(plan, proxyNames)
+
+	// === rule-providers ===
+	if len(providers) > 0 {
+		b.WriteString("rule-providers:\n")
+		// 稳定输出
+		keys := make([]string, 0, len(providers))
+		for k := range providers {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			p := providers[k].(map[string]any)
+			b.WriteString(fmt.Sprintf("  %s:\n", k))
+			b.WriteString(fmt.Sprintf("    type: %s\n", p["type"]))
+			b.WriteString(fmt.Sprintf("    behavior: %s\n", p["behavior"]))
+			b.WriteString(fmt.Sprintf("    format: %s\n", p["format"]))
+			b.WriteString(fmt.Sprintf("    url: %s\n", p["url"]))
+			b.WriteString(fmt.Sprintf("    interval: %d\n", p["interval"]))
+			b.WriteString(fmt.Sprintf("    path: %s\n", p["path"]))
+		}
+		b.WriteString("\n")
+	}
+
+	// === proxy-groups ===
+	b.WriteString("proxy-groups:\n")
+	for _, group := range groups {
+		b.WriteString(fmt.Sprintf("  - name: %s\n", group["name"]))
+		b.WriteString(fmt.Sprintf("    type: %s\n", group["type"]))
+		if url, ok := group["url"].(string); ok {
+			b.WriteString(fmt.Sprintf("    url: %s\n", url))
+		}
+		if interval, ok := group["interval"].(int); ok {
+			b.WriteString(fmt.Sprintf("    interval: %d\n", interval))
+		}
+		b.WriteString("    proxies:\n")
+		for _, m := range group["proxies"].([]string) {
+			b.WriteString(fmt.Sprintf("      - %s\n", m))
+		}
+	}
+	b.WriteString("\n")
+
+	// === rules ===
+	b.WriteString("rules:\n")
+	for _, r := range rules {
+		b.WriteString(fmt.Sprintf("  - %s\n", r))
+	}
+
+	return b.String(), "text/plain; charset=utf-8", nil
+}
+
+// renderClashRoutingFromPlan 基于 Plan + 节点全名列表生成 3 个 YAML 子结构。
+func renderClashRoutingFromPlan(plan *routing.Plan, allNodeNames []string) (
+	providers map[string]any,
+	groups []map[string]any,
+	rules []string,
+) {
+	providers = map[string]any{}
+	for tag, urls := range plan.Providers.Site {
+		providers[tag] = map[string]any{
+			"type": "http", "behavior": "domain", "format": "mrs",
+			"url": urls.Clash, "interval": 86400,
+			"path": "./rule_provider/site/" + tag + ".mrs",
+		}
+	}
+	for tag, urls := range plan.Providers.IP {
+		providers[tag+"-ip"] = map[string]any{
+			"type": "http", "behavior": "ipcidr", "format": "mrs",
+			"url": urls.Clash, "interval": 86400,
+			"path": "./rule_provider/ip/" + tag + ".mrs",
+		}
+	}
+
+	codeToName := map[string]string{}
+	for _, g := range plan.Groups {
+		codeToName[g.Code] = g.DisplayName
+	}
+
+	for _, g := range plan.Groups {
+		members := []string{}
+		for _, m := range g.Members {
+			switch {
+			case m == "<ALL>":
+				members = append(members, allNodeNames...)
+			case routing.IsLiteralOutbound(m):
+				members = append(members, m)
+			default:
+				if n, ok := codeToName[m]; ok {
+					members = append(members, n)
+				} else {
+					members = append(members, m)
+				}
+			}
+		}
+		group := map[string]any{
+			"name":    g.DisplayName,
+			"type":    g.Type,
+			"proxies": members,
+		}
+		if g.Type == "urltest" {
+			group["url"] = "http://www.gstatic.com/generate_204"
+			group["interval"] = 300
+		}
+		groups = append(groups, group)
+	}
+
+	for _, r := range plan.Rules {
+		out := clashOutboundName(r.Outbound, codeToName)
+		for _, t := range r.SiteTags {
+			rules = append(rules, fmt.Sprintf("RULE-SET,%s,%s", t, out))
+		}
+		for _, t := range r.IPTags {
+			rules = append(rules, fmt.Sprintf("RULE-SET,%s-ip,%s", t, out))
+		}
+		for _, v := range r.DomainSuffix {
+			rules = append(rules, fmt.Sprintf("DOMAIN-SUFFIX,%s,%s", v, out))
+		}
+		for _, v := range r.DomainKeyword {
+			rules = append(rules, fmt.Sprintf("DOMAIN-KEYWORD,%s,%s", v, out))
+		}
+		for _, v := range r.IPCIDR {
+			rules = append(rules, fmt.Sprintf("IP-CIDR,%s,%s", v, out))
+		}
+		for _, v := range r.SrcIPCIDR {
+			rules = append(rules, fmt.Sprintf("SRC-IP-CIDR,%s,%s", v, out))
+		}
+	}
+	rules = append(rules, fmt.Sprintf("MATCH,%s", clashOutboundName(plan.Final, codeToName)))
+	return
+}
+
+func clashOutboundName(codeOrLiteral string, codeToName map[string]string) string {
+	if routing.IsLiteralOutbound(codeOrLiteral) {
+		return codeOrLiteral
+	}
+	if n, ok := codeToName[codeOrLiteral]; ok {
+		return n
+	}
+	return codeOrLiteral
+}
+
+const clashGlobalPreamble = `log-level: info
 mode: rule
 ipv6: true
 mixed-port: 7890
@@ -75,264 +236,7 @@ dns:
       - https://doh.pub/dns-query
       - https://dns.alidns.com/dns-query
 
-`)
-
-	// === proxies ===
-	b.WriteString("proxies:\n")
-	for _, node := range nodes {
-		proxy := g.buildProxy(node, user)
-		if proxy != "" {
-			b.WriteString(proxy)
-		}
-	}
-	b.WriteString("\n")
-
-	// === proxy-groups ===
-	b.WriteString("proxy-groups:\n")
-
-	// 手动切换
-	b.WriteString("  - name: 手动切换\n    type: select\n    proxies:\n")
-	for _, n := range proxyNames {
-		b.WriteString(fmt.Sprintf("      - %s\n", n))
-	}
-
-	// 自动选择
-	b.WriteString("  - name: 自动选择\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies:\n")
-	for _, n := range proxyNames {
-		b.WriteString(fmt.Sprintf("      - %s\n", n))
-	}
-
-	// 全球代理
-	b.WriteString("  - name: 全球代理\n    type: select\n    proxies:\n      - 手动切换\n      - 自动选择\n")
-	for _, n := range proxyNames {
-		b.WriteString(fmt.Sprintf("      - %s\n", n))
-	}
-
-	// 流媒体
-	b.WriteString("  - name: 流媒体\n    type: select\n    proxies:\n      - 手动切换\n      - 自动选择\n      - DIRECT\n")
-	for _, n := range proxyNames {
-		b.WriteString(fmt.Sprintf("      - %s\n", n))
-	}
-
-	// DNS_Proxy
-	b.WriteString("  - name: DNS_Proxy\n    type: select\n    proxies:\n      - 自动选择\n      - 手动切换\n      - DIRECT\n")
-	for _, n := range proxyNames {
-		b.WriteString(fmt.Sprintf("      - %s\n", n))
-	}
-
-	// 各服务组 (引用手动切换+自动选择)
-	for _, svc := range []string{"Telegram", "Google", "YouTube", "Bing", "OpenAI", "ClaudeAI", "GitHub"} {
-		b.WriteString(fmt.Sprintf("  - name: %s\n    type: select\n    proxies:\n      - 手动切换\n      - 自动选择\n", svc))
-		for _, n := range proxyNames {
-			b.WriteString(fmt.Sprintf("      - %s\n", n))
-		}
-		if svc == "Google" || svc == "GitHub" {
-			b.WriteString("      - DIRECT\n")
-		}
-	}
-
-	// 流媒体子组
-	for _, svc := range []string{"Netflix", "HBO", "Disney"} {
-		b.WriteString(fmt.Sprintf("  - name: %s\n    type: select\n    proxies:\n      - 流媒体\n      - 手动切换\n      - 自动选择\n", svc))
-		for _, n := range proxyNames {
-			b.WriteString(fmt.Sprintf("      - %s\n", n))
-		}
-	}
-
-	// Spotify (含 DIRECT)
-	b.WriteString("  - name: Spotify\n    type: select\n    proxies:\n      - 流媒体\n      - 手动切换\n      - 自动选择\n      - DIRECT\n")
-	for _, n := range proxyNames {
-		b.WriteString(fmt.Sprintf("      - %s\n", n))
-	}
-
-	// 国内媒体
-	b.WriteString("  - name: 国内媒体\n    type: select\n    proxies:\n      - DIRECT\n")
-	for _, n := range proxyNames {
-		b.WriteString(fmt.Sprintf("      - %s\n", n))
-	}
-
-	// 本地直连
-	b.WriteString("  - name: 本地直连\n    type: select\n    proxies:\n      - DIRECT\n      - 自动选择\n")
-	for _, n := range proxyNames {
-		b.WriteString(fmt.Sprintf("      - %s\n", n))
-	}
-
-	// 漏网之鱼
-	b.WriteString("  - name: 漏网之鱼\n    type: select\n    proxies:\n      - DIRECT\n      - 手动切换\n      - 自动选择\n")
-	for _, n := range proxyNames {
-		b.WriteString(fmt.Sprintf("      - %s\n", n))
-	}
-	b.WriteString("\n")
-
-	// === rule-providers (override 模式下跳过) ===
-	if !IsOverrideMode() {
-	b.WriteString(`rule-providers:
-  lan:
-    type: http
-    behavior: classical
-    interval: 86400
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Lan/Lan.yaml
-    path: ./Rules/lan.yaml
-  reject:
-    type: http
-    behavior: domain
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/reject.txt
-    path: ./ruleset/reject.yaml
-    interval: 86400
-  proxy:
-    type: http
-    behavior: domain
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/proxy.txt
-    path: ./ruleset/proxy.yaml
-    interval: 86400
-  direct:
-    type: http
-    behavior: domain
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/direct.txt
-    path: ./ruleset/direct.yaml
-    interval: 86400
-  private:
-    type: http
-    behavior: domain
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/private.txt
-    path: ./ruleset/private.yaml
-    interval: 86400
-  gfw:
-    type: http
-    behavior: domain
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/gfw.txt
-    path: ./ruleset/gfw.yaml
-    interval: 86400
-  telegramcidr:
-    type: http
-    behavior: ipcidr
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/telegramcidr.txt
-    path: ./ruleset/telegramcidr.yaml
-    interval: 86400
-  applications:
-    type: http
-    behavior: classical
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/Loyalsoldier/clash-rules/release/applications.txt
-    path: ./ruleset/applications.yaml
-    interval: 86400
-  Disney:
-    type: http
-    behavior: classical
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Disney/Disney.yaml
-    path: ./ruleset/disney.yaml
-    interval: 86400
-  Netflix:
-    type: http
-    behavior: classical
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Netflix/Netflix.yaml
-    path: ./ruleset/netflix.yaml
-    interval: 86400
-  YouTube:
-    type: http
-    behavior: classical
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/YouTube/YouTube.yaml
-    path: ./ruleset/youtube.yaml
-    interval: 86400
-  HBO:
-    type: http
-    behavior: classical
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/HBO/HBO.yaml
-    path: ./ruleset/hbo.yaml
-    interval: 86400
-  OpenAI:
-    type: http
-    behavior: classical
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/OpenAI/OpenAI.yaml
-    path: ./ruleset/openai.yaml
-    interval: 86400
-  ClaudeAI:
-    type: http
-    behavior: classical
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Claude/Claude.yaml
-    path: ./ruleset/claudeai.yaml
-    interval: 86400
-  Bing:
-    type: http
-    behavior: classical
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Bing/Bing.yaml
-    path: ./ruleset/bing.yaml
-    interval: 86400
-  Google:
-    type: http
-    behavior: classical
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Google/Google.yaml
-    path: ./ruleset/google.yaml
-    interval: 86400
-  GitHub:
-    type: http
-    behavior: classical
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/GitHub/GitHub.yaml
-    path: ./ruleset/github.yaml
-    interval: 86400
-  Spotify:
-    type: http
-    behavior: classical
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Spotify/Spotify.yaml
-    path: ./ruleset/spotify.yaml
-    interval: 86400
-  ChinaMaxDomain:
-    type: http
-    behavior: domain
-    interval: 86400
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax/ChinaMax_Domain.yaml
-    path: ./Rules/ChinaMaxDomain.yaml
-  ChinaMaxIPNoIPv6:
-    type: http
-    behavior: ipcidr
-    interval: 86400
-    url: https://gh-proxy.com/https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax/ChinaMax_IP_No_IPv6.yaml
-    path: ./Rules/ChinaMaxIPNoIPv6.yaml
-
-`)
-	} // end if !IsOverrideMode() for rule-providers
-
-	// === rules ===
-	b.WriteString("rules:\n")
-	if IsOverrideMode() {
-		// 完全使用自定义规则
-		for _, rule := range customRules {
-			rule = strings.TrimSpace(rule)
-			if rule != "" && !strings.HasPrefix(rule, "#") {
-				b.WriteString(fmt.Sprintf("  - %s\n", rule))
-			}
-		}
-	} else {
-		// 自定义规则优先，然后是默认规则
-		for _, rule := range customRules {
-			rule = strings.TrimSpace(rule)
-			if rule != "" && !strings.HasPrefix(rule, "#") {
-				b.WriteString(fmt.Sprintf("  - %s\n", rule))
-			}
-		}
-		b.WriteString(`  - RULE-SET,YouTube,YouTube,no-resolve
-  - RULE-SET,Google,Google,no-resolve
-  - RULE-SET,GitHub,GitHub
-  - RULE-SET,telegramcidr,Telegram,no-resolve
-  - RULE-SET,Spotify,Spotify,no-resolve
-  - RULE-SET,Netflix,Netflix
-  - RULE-SET,HBO,HBO
-  - RULE-SET,Bing,Bing
-  - RULE-SET,OpenAI,OpenAI
-  - RULE-SET,ClaudeAI,ClaudeAI
-  - RULE-SET,Disney,Disney
-  - RULE-SET,proxy,全球代理
-  - RULE-SET,gfw,全球代理
-  - RULE-SET,applications,本地直连
-  - RULE-SET,ChinaMaxDomain,本地直连
-  - RULE-SET,ChinaMaxIPNoIPv6,本地直连,no-resolve
-  - RULE-SET,lan,本地直连,no-resolve
-  - GEOIP,CN,本地直连
-  - MATCH,漏网之鱼
-`)
-	}
-
-	return b.String(), "text/plain; charset=utf-8", nil
-}
+`
 
 func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 	s := parseSettings(node)
