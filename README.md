@@ -136,22 +136,15 @@ proxy-panel/
 | POST | `/api/auth/2fa/enable` | 启用 2FA |
 | POST | `/api/auth/2fa/disable` | 关闭 2FA |
 
-## 订阅规则
+## 分流配置
 
-内置 18 组代理策略和完整的 rule-provider 分流规则：
-
-```
-手动切换 / 自动选择 / 全球代理 / 流媒体
-Telegram / Google / YouTube / Netflix / Spotify / HBO
-Bing / OpenAI / ClaudeAI / Disney / GitHub
-国内媒体 / 本地直连 / 漏网之鱼
-```
-
-支持两种自定义规则模式：
-- **追加模式** — 自定义规则优先匹配，再走默认规则
-- **完全自定义** — 仅使用自定义规则，忽略所有默认规则
-
-自定义规则通过面板设置页面配置，持久化存储，Clash / Surge / Sing-box 三端同步生效。
+- **18 个内置规则分类** — Google / YouTube / Telegram / AI 服务 / CN / 流媒体 等，支持用户自定义分类
+- **18 个内置出站组** — 🚀 手动切换 / ⚡ 自动选择 / 🎬 流媒体 等，支持用户自定义组，类型可选 selector 或 urltest
+- **结构化自定义规则** — site_tags / ip_tags / domain_suffix / domain_keyword / ip_cidr 等字段，替代原有多行文本
+- **3 个预设方案** — `minimal` / `balanced` / `comprehensive`；可一键覆盖当前启用分类，或在订阅 URL 上加 `?preset=balanced` 即时覆盖
+- **rule-provider URL 前缀可覆写** — Clash / Sing-box 各自独立，方便切 gh-proxy 镜像
+- **支持客户端格式** — Clash / Sing-box / Surge / V2Ray / Shadowrocket；V2Ray 用 URI base64（无法承载路由），其他四端消费统一 IR 后按各自语法渲染
+- **首次升级自动导入** — 老 `settings.custom_rules` 文本自动导入到结构化规则表
 
 ## 部署脚本
 
