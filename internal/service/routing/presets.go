@@ -70,7 +70,7 @@ var SystemCategories = []SystemCategory{
 	{Code: "ad_block", DisplayName: "广告拦截", SiteTags: []string{"category-ads-all"}, DefaultGroupCode: "fallback", Enabled: false, SortOrder: 30},
 	{Code: "ai_services", DisplayName: "AI 服务", SiteTags: []string{"openai", "anthropic", "gemini", "category-ai-chat-!cn"}, DefaultGroupCode: "openai", Enabled: true, SortOrder: 40},
 	{Code: "bilibili", DisplayName: "Bilibili", SiteTags: []string{"bilibili"}, DefaultGroupCode: "cn_media", Enabled: false, SortOrder: 50},
-	{Code: "youtube", DisplayName: "YouTube", SiteTags: []string{"youtube"}, IPTags: []string{"google"}, DefaultGroupCode: "youtube", Enabled: true, SortOrder: 60},
+	{Code: "youtube", DisplayName: "YouTube", SiteTags: []string{"youtube"}, DefaultGroupCode: "youtube", Enabled: true, SortOrder: 60},
 	{Code: "google", DisplayName: "Google", SiteTags: []string{"google"}, IPTags: []string{"google"}, DefaultGroupCode: "google", Enabled: true, SortOrder: 70},
 	{Code: "telegram", DisplayName: "Telegram", SiteTags: []string{"telegram"}, IPTags: []string{"telegram"}, DefaultGroupCode: "telegram", Enabled: true, SortOrder: 80},
 	{Code: "github", DisplayName: "GitHub", SiteTags: []string{"github"}, DefaultGroupCode: "github", Enabled: true, SortOrder: 90},
