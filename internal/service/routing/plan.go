@@ -17,8 +17,6 @@ type Rule struct {
 	DomainKeyword []string
 	IPCIDR        []string
 	SrcIPCIDR     []string
-	Protocol      []string
-	Port          []string
 	Outbound      string // group code 或 'DIRECT'/'REJECT'
 }
 

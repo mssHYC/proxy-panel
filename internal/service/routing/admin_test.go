@@ -28,6 +28,23 @@ func TestCustomRuleInput_Validate(t *testing.T) {
 	}
 }
 
+func TestCustomRuleInput_Validate_Literal(t *testing.T) {
+	in := routing.CustomRuleInput{OutboundLiteral: "BOGUS"}
+	if err := in.Validate(); !errors.Is(err, routing.ErrInvalidOutbound) {
+		t.Errorf("bogus literal: want ErrInvalidOutbound, got %v", err)
+	}
+}
+
+func TestCustomRuleInput_Validate_BadCIDR(t *testing.T) {
+	in := routing.CustomRuleInput{
+		OutboundLiteral: "DIRECT",
+		IPCIDR:          []string{"not-a-cidr"},
+	}
+	if err := in.Validate(); err == nil {
+		t.Error("want error for bad CIDR, got nil")
+	}
+}
+
 func TestDeleteGroup_SystemImmutable(t *testing.T) {
 	db := setupTestDB(t) // reused from builder_test.go (same routing_test package)
 	if err := routing.DeleteGroup(context.Background(), db, 1); !errors.Is(err, routing.ErrSystemImmutable) {

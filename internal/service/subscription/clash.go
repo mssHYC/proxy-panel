@@ -53,13 +53,13 @@ func (g *ClashGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node
 		sort.Strings(keys)
 		for _, k := range keys {
 			p := providers[k].(map[string]any)
-			b.WriteString(fmt.Sprintf("  %s:\n", k))
+			b.WriteString(fmt.Sprintf("  %q:\n", k))
 			b.WriteString(fmt.Sprintf("    type: %s\n", p["type"]))
 			b.WriteString(fmt.Sprintf("    behavior: %s\n", p["behavior"]))
 			b.WriteString(fmt.Sprintf("    format: %s\n", p["format"]))
-			b.WriteString(fmt.Sprintf("    url: %s\n", p["url"]))
+			b.WriteString(fmt.Sprintf("    url: %q\n", p["url"]))
 			b.WriteString(fmt.Sprintf("    interval: %d\n", p["interval"]))
-			b.WriteString(fmt.Sprintf("    path: %s\n", p["path"]))
+			b.WriteString(fmt.Sprintf("    path: %q\n", p["path"]))
 		}
 		b.WriteString("\n")
 	}
@@ -67,17 +67,17 @@ func (g *ClashGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node
 	// === proxy-groups ===
 	b.WriteString("proxy-groups:\n")
 	for _, group := range groups {
-		b.WriteString(fmt.Sprintf("  - name: %s\n", group["name"]))
+		b.WriteString(fmt.Sprintf("  - name: %q\n", group["name"]))
 		b.WriteString(fmt.Sprintf("    type: %s\n", group["type"]))
 		if url, ok := group["url"].(string); ok {
-			b.WriteString(fmt.Sprintf("    url: %s\n", url))
+			b.WriteString(fmt.Sprintf("    url: %q\n", url))
 		}
 		if interval, ok := group["interval"].(int); ok {
 			b.WriteString(fmt.Sprintf("    interval: %d\n", interval))
 		}
 		b.WriteString("    proxies:\n")
 		for _, m := range group["proxies"].([]string) {
-			b.WriteString(fmt.Sprintf("      - %s\n", m))
+			b.WriteString(fmt.Sprintf("      - %q\n", m))
 		}
 	}
 	b.WriteString("\n")
@@ -85,7 +85,7 @@ func (g *ClashGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node
 	// === rules ===
 	b.WriteString("rules:\n")
 	for _, r := range rules {
-		b.WriteString(fmt.Sprintf("  - %s\n", r))
+		b.WriteString(fmt.Sprintf("  - %q\n", r))
 	}
 
 	return b.String(), "text/plain; charset=utf-8", nil

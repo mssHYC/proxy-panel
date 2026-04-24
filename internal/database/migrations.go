@@ -317,19 +317,27 @@ func (db *DB) seedRouting() error {
 // importLegacyRules 读取老 custom_rules 文本，解析后写入 custom_rules 表。
 // override 模式则把所有系统分类 enabled 置 0。完成后删除老键。
 func (db *DB) importLegacyRules() error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	var text, mode string
-	db.QueryRow(`SELECT value FROM settings WHERE key = 'custom_rules'`).Scan(&text)
-	db.QueryRow(`SELECT value FROM settings WHERE key = 'custom_rules_mode'`).Scan(&mode)
+	tx.QueryRow(`SELECT value FROM settings WHERE key = 'custom_rules'`).Scan(&text)
+	tx.QueryRow(`SELECT value FROM settings WHERE key = 'custom_rules_mode'`).Scan(&mode)
 	if strings.TrimSpace(text) == "" {
-		_, _ = db.Exec(`DELETE FROM settings WHERE key IN ('custom_rules', 'custom_rules_mode')`)
-		return nil
+		if _, err := tx.Exec(`DELETE FROM settings WHERE key IN ('custom_rules', 'custom_rules_mode')`); err != nil {
+			return err
+		}
+		return tx.Commit()
 	}
 	rules, err := routing.ParseLegacyRules(text)
 	if err != nil {
 		return err
 	}
 	groupIDByCode := map[string]int64{}
-	gRows, err := db.Query(`SELECT code, id FROM outbound_groups`)
+	gRows, err := tx.Query(`SELECT code, id FROM outbound_groups`)
 	if err != nil {
 		return err
 	}
@@ -364,7 +372,7 @@ func (db *DB) importLegacyRules() error {
 		if len(name) > 64 {
 			name = name[:64]
 		}
-		if _, err := db.Exec(`INSERT INTO custom_rules
+		if _, err := tx.Exec(`INSERT INTO custom_rules
 			(name, site_tags, ip_tags, domain_suffix, domain_keyword, ip_cidr, src_ip_cidr, protocol, port, outbound_group_id, outbound_literal, sort_order)
 			VALUES (?, ?, ?, ?, ?, ?, '[]', '', '', ?, ?, ?)`,
 			name, string(siteJSON), string(ipJSON), string(dsJSON), string(dkJSON), string(icJSON),
@@ -374,10 +382,12 @@ func (db *DB) importLegacyRules() error {
 	}
 
 	if strings.TrimSpace(mode) == "override" {
-		if _, err := db.Exec(`UPDATE rule_categories SET enabled = 0 WHERE kind = 'system'`); err != nil {
+		if _, err := tx.Exec(`UPDATE rule_categories SET enabled = 0 WHERE kind = 'system'`); err != nil {
 			return err
 		}
 	}
-	_, err = db.Exec(`DELETE FROM settings WHERE key IN ('custom_rules', 'custom_rules_mode')`)
-	return err
+	if _, err := tx.Exec(`DELETE FROM settings WHERE key IN ('custom_rules', 'custom_rules_mode')`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

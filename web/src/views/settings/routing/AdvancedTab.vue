@@ -43,7 +43,7 @@
 </template>
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
+import { reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { importLegacy } from '../../../api/routing'
 import { updateSettings } from '../../../api/setting'
@@ -52,6 +52,11 @@ import type { RoutingConfig } from './types'
 const props = defineProps<{ config: RoutingConfig }>()
 const emit = defineEmits<{ (e: 'refresh'): void }>()
 const s = reactive<Record<string, string>>({ ...props.config.settings })
+watch(
+  () => props.config.settings,
+  (v) => { Object.assign(s, v) },
+  { deep: true },
+)
 const legacyText = ref('')
 const legacyMode = ref<'prepend' | 'override'>('prepend')
 
