@@ -118,28 +118,22 @@ func TestClashGenerator_DirectChinaIPRulesUseNoResolveAndValidYAML(t *testing.T)
 	}
 }
 
-func TestClashGenerator_DNSKeepsForeignDoHAsDefaultToAvoidHealthCheckTimeout(t *testing.T) {
+func TestClashGenerator_NoCustomDNSBlock(t *testing.T) {
+	// 面板不再为客户端注入 DNS 配置；让 Mihomo 用其内置默认 DNS。
 	content := clashGlobalPreamble
-
-	mustContain := []string{
-		"nameserver:\n    - https://1.1.1.1/dns-query\n    - https://8.8.8.8/dns-query",
-		"nameserver-policy:\n    \"geosite:cn,private\":\n      - https://doh.pub/dns-query\n      - https://dns.alidns.com/dns-query",
-		"proxy-server-nameserver:\n    - https://223.5.5.5/dns-query\n    - https://1.12.12.12/dns-query",
-	}
-	for _, s := range mustContain {
-		if !strings.Contains(content, s) {
-			t.Errorf("DNS 配置缺少稳定片段 %q\n配置:\n%s", s, content)
-		}
-	}
-
 	mustNotContain := []string{
+		"\ndns:",
+		"nameserver:",
+		"nameserver-policy:",
+		"proxy-server-nameserver:",
+		"fallback:",
 		"fallback-filter:",
-		"fallback:\n    - https://1.1.1.1/dns-query",
-		"nameserver:\n    - https://dns.alidns.com/dns-query\n    - https://doh.pub/dns-query",
+		"fake-ip-range",
+		"enhanced-mode",
 	}
 	for _, s := range mustNotContain {
 		if strings.Contains(content, s) {
-			t.Errorf("DNS 配置不应再包含可能导致健康检查/国外域名 timeout 的片段 %q\n配置:\n%s", s, content)
+			t.Errorf("preamble 不应包含 DNS 自定义片段 %q\n preamble:\n%s", s, content)
 		}
 	}
 }

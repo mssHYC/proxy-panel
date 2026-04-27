@@ -26,8 +26,7 @@ func (g *SurgeGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.Node
 	// [General]
 	b.WriteString("[General]\n")
 	b.WriteString("loglevel = notify\n")
-	b.WriteString("skip-proxy = 127.0.0.1, 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12, 100.64.0.0/10, localhost, *.local\n")
-	b.WriteString("dns-server = 223.5.5.5, 119.29.29.29, system\n\n")
+	b.WriteString("skip-proxy = 127.0.0.1, 192.168.0.0/16, 10.0.0.0/8, 172.16.0.0/12, 100.64.0.0/10, localhost, *.local\n\n")
 
 	// [Proxy]
 	b.WriteString("[Proxy]\n")
