@@ -225,31 +225,6 @@ sniffer:
     HTTP:
       ports: [80]
 
-dns:
-  enable: true
-  prefer-h3: false
-  listen: 0.0.0.0:1053
-  ipv6: true
-  enhanced-mode: fake-ip
-  fake-ip-range: 198.18.0.1/16
-  fake-ip-filter:
-    - "*.lan"
-    - "*.local"
-    - "dns.google"
-    - "localhost.ptlogin2.qq.com"
-  use-hosts: true
-  # 默认 nameserver 保持国外 DoH，避免健康检查地址和国外域名被国内 DNS 污染导致节点全 timeout。
-  nameserver:
-    - https://1.1.1.1/dns-query
-    - https://8.8.8.8/dns-query
-  proxy-server-nameserver:
-    - https://223.5.5.5/dns-query
-    - https://1.12.12.12/dns-query
-  nameserver-policy:
-    "geosite:cn,private":
-      - https://doh.pub/dns-query
-      - https://dns.alidns.com/dns-query
-
 `
 
 func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {

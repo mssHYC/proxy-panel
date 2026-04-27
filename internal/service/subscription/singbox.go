@@ -34,41 +34,18 @@ func (g *SingboxGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.No
 	// 基于 Plan 渲染路由部分
 	ruleSets, groupOutbounds, rules, final := renderSingboxRoutingFromPlan(plan, nodeTags)
 
-	// DNS 劫持规则放在最前
-	dnsHijack := map[string]interface{}{
-		"protocol": "dns",
-		"outbound": "dns-out",
-	}
-	allRules := make([]map[string]interface{}, 0, len(rules)+1)
-	allRules = append(allRules, dnsHijack)
-	allRules = append(allRules, rules...)
-
-	// 系统 outbounds
+	// 系统 outbounds（不再注入 dns-out，让客户端使用系统默认 DNS）
 	directOb := map[string]interface{}{"type": "direct", "tag": "direct"}
 	blockOb := map[string]interface{}{"type": "block", "tag": "block"}
-	dnsOb := map[string]interface{}{"type": "dns", "tag": "dns-out"}
 
 	// 组装完整 outbounds：代理组 + 节点 + 系统
-	allOutbounds := make([]map[string]interface{}, 0, len(groupOutbounds)+len(nodeOutbounds)+3)
+	allOutbounds := make([]map[string]interface{}, 0, len(groupOutbounds)+len(nodeOutbounds)+2)
 	allOutbounds = append(allOutbounds, groupOutbounds...)
 	allOutbounds = append(allOutbounds, nodeOutbounds...)
-	allOutbounds = append(allOutbounds, directOb, blockOb, dnsOb)
-
-	// DNS 配置：使用 Plan final 作为远程 DNS 出站（若为字面量 DIRECT/REJECT 则回退 direct）
-	remoteDNSDetour := final
-	if remoteDNSDetour == "direct" || remoteDNSDetour == "block" {
-		remoteDNSDetour = "direct"
-	}
-	dns := map[string]interface{}{
-		"servers": []map[string]interface{}{
-			{"tag": "dns-remote", "address": "https://1.1.1.1/dns-query", "detour": remoteDNSDetour},
-			{"tag": "dns-direct", "address": "https://223.5.5.5/dns-query", "detour": "direct"},
-			{"tag": "dns-block", "address": "rcode://success"},
-		},
-	}
+	allOutbounds = append(allOutbounds, directOb, blockOb)
 
 	route := map[string]interface{}{
-		"rules":                 allRules,
+		"rules":                 rules,
 		"final":                 final,
 		"auto_detect_interface": true,
 	}
@@ -77,7 +54,6 @@ func (g *SingboxGenerator) GenerateWithPlan(plan *routing.Plan, nodes []model.No
 	}
 
 	config := map[string]interface{}{
-		"dns":       dns,
 		"outbounds": allOutbounds,
 		"route":     route,
 	}
