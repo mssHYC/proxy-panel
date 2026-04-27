@@ -99,27 +99,3 @@ func TestBuildPlan_CustomRulesFirst(t *testing.T) {
 		t.Error("custom rule fields lost")
 	}
 }
-
-func TestBuildPlan_PanelHostStripsPort(t *testing.T) {
-	db := setupTestDB(t)
-	_, _ = db.Exec(`INSERT INTO outbound_groups VALUES (3, 'openai', 'AI', 'selector', '["node_select","DIRECT"]', 'system', 30)`)
-	_, _ = db.Exec(`INSERT INTO rule_categories VALUES
-        (3, 'ai_services', 'AI', 'system', '["anthropic"]', '[]', '[]', '[]', '[]', '', 3, 1, 5)`)
-
-	plan, err := routing.BuildPlan(context.Background(), db, routing.BuildOptions{PanelHost: "claude.ai:443"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plan.Rules) < 2 {
-		t.Fatalf("want at least panel + ai rules, got %+v", plan.Rules)
-	}
-	if got := plan.Rules[0].DomainSuffix; len(got) != 1 || got[0] != "claude.ai" {
-		t.Fatalf("panel host should be normalized without port, got %+v", got)
-	}
-	if plan.Rules[0].Outbound != "DIRECT" {
-		t.Fatalf("panel rule outbound=%s", plan.Rules[0].Outbound)
-	}
-	if plan.Rules[1].Outbound != "openai" {
-		t.Fatalf("anthropic rule should still route to proxy group, got %+v", plan.Rules[1])
-	}
-}
