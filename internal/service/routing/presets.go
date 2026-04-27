@@ -68,7 +68,8 @@ var SystemCategories = []SystemCategory{
 	{Code: "private", DisplayName: "局域网", IPTags: []string{"private"}, DefaultGroupCode: "direct", Enabled: true, SortOrder: 10},
 	{Code: "location_cn", DisplayName: "Location:CN", SiteTags: []string{"cn"}, IPTags: []string{"cn"}, DefaultGroupCode: "direct", Enabled: true, SortOrder: 20},
 	{Code: "ad_block", DisplayName: "广告拦截", SiteTags: []string{"category-ads-all"}, DefaultGroupCode: "fallback", Enabled: false, SortOrder: 30},
-	{Code: "ai_services", DisplayName: "AI 服务", SiteTags: []string{"openai", "anthropic", "gemini", "category-ai-chat-!cn"}, DefaultGroupCode: "openai", Enabled: true, SortOrder: 40},
+	{Code: "claude_ai", DisplayName: "Claude AI", SiteTags: []string{"claude", "anthropic"}, DefaultGroupCode: "claude_ai", Enabled: true, SortOrder: 35},
+	{Code: "ai_services", DisplayName: "AI 服务", SiteTags: []string{"openai", "gemini", "category-ai-chat-!cn"}, DefaultGroupCode: "openai", Enabled: true, SortOrder: 40},
 	{Code: "bilibili", DisplayName: "Bilibili", SiteTags: []string{"bilibili"}, DefaultGroupCode: "cn_media", Enabled: false, SortOrder: 50},
 	{Code: "youtube", DisplayName: "YouTube", SiteTags: []string{"youtube"}, DefaultGroupCode: "youtube", Enabled: true, SortOrder: 60},
 	{Code: "google", DisplayName: "Google", SiteTags: []string{"google"}, IPTags: []string{"google"}, DefaultGroupCode: "google", Enabled: true, SortOrder: 70},
@@ -88,7 +89,7 @@ var SystemCategories = []SystemCategory{
 // SystemPresets 对应 sublink-worker 的 minimal / balanced / comprehensive。
 var SystemPresets = []SystemPreset{
 	{Code: "minimal", DisplayName: "最小规则", EnabledCategories: []string{"private", "location_cn", "non_china"}},
-	{Code: "balanced", DisplayName: "均衡规则", EnabledCategories: []string{"private", "location_cn", "non_china", "github", "google", "youtube", "ai_services", "telegram"}},
+	{Code: "balanced", DisplayName: "均衡规则", EnabledCategories: []string{"private", "location_cn", "non_china", "github", "google", "youtube", "claude_ai", "ai_services", "telegram"}},
 	{Code: "comprehensive", DisplayName: "完整规则", EnabledCategories: allCategoryCodes()},
 }
 
