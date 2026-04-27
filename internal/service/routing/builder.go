@@ -3,6 +3,8 @@ package routing
 import (
 	"context"
 	"fmt"
+	"net"
+	"strings"
 )
 
 // BuildPlan 从 DB 读规范化表 + 应用预设覆盖 → 输出格式无关 Plan。
@@ -48,10 +50,12 @@ func BuildPlan(ctx context.Context, db DB, opts BuildOptions) (*Plan, error) {
 		})
 	}
 
-	// 面板域名兜底 DIRECT —— 防止客户端把面板流量也走代理导致 hairpin 自环
-	if opts.PanelHost != "" {
+	// 面板域名兜底 DIRECT —— 防止客户端把面板流量也走代理导致 hairpin 自环。
+	// 订阅 URL 的 Host 可能带端口，规则域名必须去掉端口，否则 claude.ai:443
+	// 会生成无效的 DOMAIN-SUFFIX 并误伤真实 claude.ai 流量。
+	if panelHost := normalizePanelHost(opts.PanelHost); panelHost != "" {
 		plan.Rules = append(plan.Rules, Rule{
-			DomainSuffix: []string{opts.PanelHost},
+			DomainSuffix: []string{panelHost},
 			Outbound:     "DIRECT",
 		})
 	}
@@ -135,5 +139,20 @@ func collectProviders(plan *Plan, siteTags, ipTags []string) {
 			plan.Providers.IP[t] = ProviderURLs{}
 		}
 	}
+}
+
+func normalizePanelHost(raw string) string {
+	host := strings.TrimSpace(raw)
+	if host == "" {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	} else if i := strings.LastIndex(host, ":"); i > -1 && strings.Count(host, ":") == 1 {
+		host = host[:i]
+	}
+	host = strings.Trim(host, "[]")
+	host = strings.TrimSuffix(host, ".")
+	return strings.ToLower(host)
 }
 
