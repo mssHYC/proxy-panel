@@ -233,50 +233,22 @@ dns:
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
   fake-ip-filter:
-    - "+.lan"
-    - "+.local"
-    - "+.market.xiaomi.com"
+    - "*.lan"
+    - "*.local"
     - "dns.google"
     - "localhost.ptlogin2.qq.com"
-    - "+.msftncsi.com"
-    - "+.msftconnecttest.com"
-    - "+.windowsupdate.com"
   use-hosts: true
-  # default-nameserver 用纯 IP，仅用来引导 DoH 主机名的初次解析
-  default-nameserver:
-    - 223.5.5.5
-    - 119.29.29.29
-    - 1.0.0.1
-  # 主 nameserver：国内 DoH（用来解析国内域名 + 跑 fallback-filter 判定）
+  # 默认 nameserver 保持国外 DoH，避免健康检查地址和国外域名被国内 DNS 污染导致节点全 timeout。
   nameserver:
-    - https://dns.alidns.com/dns-query
-    - https://doh.pub/dns-query
-  # fallback：境外 DoH，与 nameserver 并发查询；fallback-filter 决定何时用 fallback 结果
-  fallback:
     - https://1.1.1.1/dns-query
     - https://8.8.8.8/dns-query
-    - tls://8.8.4.4:853
-  # fallback-filter：当 nameserver 返回值不是 CN IP 或命中污染 IP 时，
-  # 改用 fallback（境外 DoH）的结果。这样国内域名走国内、国外域名走国外。
-  fallback-filter:
-    geoip: true
-    geoip-code: CN
-    geosite:
-      - gfw
-    ipcidr:
-      - 240.0.0.0/4
-      - 0.0.0.0/32
-    domain:
-      - "+.google.com"
-      - "+.facebook.com"
-      - "+.youtube.com"
-      - "+.twitter.com"
-      - "+.instagram.com"
-      - "+.githubusercontent.com"
-  # 解析代理服务器自身主机名一律走国内 DNS（避免循环依赖）
   proxy-server-nameserver:
-    - https://dns.alidns.com/dns-query
-    - https://doh.pub/dns-query
+    - https://223.5.5.5/dns-query
+    - https://1.12.12.12/dns-query
+  nameserver-policy:
+    "geosite:cn,private":
+      - https://doh.pub/dns-query
+      - https://dns.alidns.com/dns-query
 
 `
 

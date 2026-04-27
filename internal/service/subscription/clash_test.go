@@ -117,3 +117,29 @@ func TestClashGenerator_DirectChinaIPRulesUseNoResolveAndValidYAML(t *testing.T)
 		t.Fatalf("direct group should keep DIRECT as the first member, got %#v", firstGroup["proxies"])
 	}
 }
+
+func TestClashGenerator_DNSKeepsForeignDoHAsDefaultToAvoidHealthCheckTimeout(t *testing.T) {
+	content := clashGlobalPreamble
+
+	mustContain := []string{
+		"nameserver:\n    - https://1.1.1.1/dns-query\n    - https://8.8.8.8/dns-query",
+		"nameserver-policy:\n    \"geosite:cn,private\":\n      - https://doh.pub/dns-query\n      - https://dns.alidns.com/dns-query",
+		"proxy-server-nameserver:\n    - https://223.5.5.5/dns-query\n    - https://1.12.12.12/dns-query",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(content, s) {
+			t.Errorf("DNS 配置缺少稳定片段 %q\n配置:\n%s", s, content)
+		}
+	}
+
+	mustNotContain := []string{
+		"fallback-filter:",
+		"fallback:\n    - https://1.1.1.1/dns-query",
+		"nameserver:\n    - https://dns.alidns.com/dns-query\n    - https://doh.pub/dns-query",
+	}
+	for _, s := range mustNotContain {
+		if strings.Contains(content, s) {
+			t.Errorf("DNS 配置不应再包含可能导致健康检查/国外域名 timeout 的片段 %q\n配置:\n%s", s, content)
+		}
+	}
+}
