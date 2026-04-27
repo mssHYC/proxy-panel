@@ -233,21 +233,33 @@ dns:
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
   fake-ip-filter:
-    - "*.lan"
-    - "*.local"
+    - "+.lan"
+    - "+.local"
+    - "+.market.xiaomi.com"
     - "dns.google"
     - "localhost.ptlogin2.qq.com"
+    - "+.msftncsi.com"
+    - "+.msftconnecttest.com"
+    - "+.windowsupdate.com"
   use-hosts: true
+  # default-nameserver 用纯 IP，仅用来引导 DoH 主机名的初次解析
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+    - 1.0.0.1
+  # 主 nameserver 走国内 DoH，避免境外 DoH 被干扰/限速导致整体解析失败
   nameserver:
-    - https://1.1.1.1/dns-query
-    - https://8.8.8.8/dns-query
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  # 解析代理服务器自身主机名一律走国内 DNS
   proxy-server-nameserver:
-    - https://223.5.5.5/dns-query
-    - https://1.12.12.12/dns-query
+    - https://dns.alidns.com/dns-query
+    - https://doh.pub/dns-query
+  # 仅对明确非中国的域名用境外 DoH（geosite.dat 加载完才生效）
   nameserver-policy:
-    "geosite:cn,private":
-      - https://doh.pub/dns-query
-      - https://dns.alidns.com/dns-query
+    "geosite:geolocation-!cn,gfw":
+      - https://1.1.1.1/dns-query
+      - https://8.8.8.8/dns-query
 
 `
 
