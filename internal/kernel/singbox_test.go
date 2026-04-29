@@ -339,6 +339,48 @@ func TestGetSettingBool(t *testing.T) {
 	}
 }
 
+// 回归：inboundUserMap 必须按每节点 linked users 数量决定回退，而不是全局 users 数。
+// 全局多用户但某节点只关联 1 人时，sing-box 1.13 clash_api 缺 inboundUser 字段
+// 时仍要能回退归属；否则该节点流量会被整段跳过。
+func TestSingboxGenerateConfig_InboundUserMapUsesLinkedCount(t *testing.T) {
+	e := NewSingboxEngine("", "", 9090)
+	nodes := []NodeConfig{
+		{ID: 1, Tag: "node-1", Port: 443, Protocol: "hysteria2", Settings: map[string]interface{}{}},
+		{ID: 2, Tag: "node-2", Port: 444, Protocol: "hysteria2", Settings: map[string]interface{}{}},
+	}
+	users := []UserConfig{
+		// 全局有 2 人，但 node-1 只关联 alice；node-2 同时关联 alice & bob。
+		{UUID: "u-a", Email: "alice", Protocol: "hysteria2", NodeIDs: []int64{1, 2}},
+		{UUID: "u-b", Email: "bob", Protocol: "hysteria2", NodeIDs: []int64{2}},
+	}
+	if _, err := e.GenerateConfig(nodes, users); err != nil {
+		t.Fatalf("GenerateConfig: %v", err)
+	}
+
+	if got := e.inboundUser["node-1"]; got != "alice" {
+		t.Errorf("node-1 只有 alice 关联，应回退归属 alice，got %q", got)
+	}
+	if got, ok := e.inboundUser["node-2"]; ok {
+		t.Errorf("node-2 关联多人，不应回退归属（避免错算），got %q", got)
+	}
+}
+
+// 回归：全局只有 1 人但该节点没关联 → 不能错误归属，必须留空。
+func TestSingboxGenerateConfig_InboundUserMapSkipsUnlinkedSingleUser(t *testing.T) {
+	e := NewSingboxEngine("", "", 9090)
+	nodes := []NodeConfig{
+		{ID: 1, Tag: "node-1", Port: 443, Protocol: "hysteria2", Settings: map[string]interface{}{}},
+	}
+	// alice 只关联 node-99；不应被映射到 node-1。
+	users := []UserConfig{{UUID: "u-a", Email: "alice", Protocol: "hysteria2", NodeIDs: []int64{99}}}
+	if _, err := e.GenerateConfig(nodes, users); err != nil {
+		t.Fatalf("GenerateConfig: %v", err)
+	}
+	if got, ok := e.inboundUser["node-1"]; ok {
+		t.Errorf("alice 未关联 node-1，不应映射，got %q", got)
+	}
+}
+
 func TestIsSS2022Method(t *testing.T) {
 	if !isSS2022Method("2022-blake3-aes-256-gcm") {
 		t.Error("should detect 2022-blake3 as SS2022")

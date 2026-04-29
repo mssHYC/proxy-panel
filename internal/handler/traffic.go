@@ -61,3 +61,19 @@ func (h *TrafficHandler) GetHistory(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"history": history})
 }
+
+// GetNodeDistribution 获取按节点维度的流量分布
+func (h *TrafficHandler) GetNodeDistribution(c *gin.Context) {
+	daysStr := c.DefaultQuery("days", "30")
+	days, err := strconv.Atoi(daysStr)
+	if err != nil || days <= 0 {
+		days = 30
+	}
+
+	dist, err := h.trafficSvc.GetNodeDistribution(days)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"distribution": dist})
+}

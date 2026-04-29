@@ -139,6 +139,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 			auth.GET("/traffic/server", trafficHandler.GetServerTraffic)
 			auth.POST("/traffic/server/limit", trafficHandler.SetServerLimit)
 			auth.GET("/traffic/history", trafficHandler.GetHistory)
+			auth.GET("/traffic/by-node", trafficHandler.GetNodeDistribution)
 
 			// 系统设置
 			auth.GET("/settings", settingHandler.Get)

@@ -66,6 +66,60 @@ func TestXrayBuildStreamSettings_TLSWithCamelCaseKeys(t *testing.T) {
 	}
 }
 
+// 回归：AddUser/RemoveUser 必须使用与 GenerateConfig 一致的 email 编码，
+// 否则 stats key 仍是纯 username，采集时落不到 node_id（node_id=0），
+// 移除时也找不到 client 配置。这里只断言编码函数的契约——
+// 实际 exec 调用需要 xray 二进制，留给集成测试。
+func TestXrayClientEmail_Encoding(t *testing.T) {
+	if got := xrayClientEmail("alice", "node-3"); got != "alice|node-3" {
+		t.Errorf("encode: want %q, got %q", "alice|node-3", got)
+	}
+	if got := xrayClientEmail("alice", ""); got != "alice" {
+		t.Errorf("empty tag should fall back to username: got %q", got)
+	}
+	user, tag := parseXrayClientEmail("alice|node-3")
+	if user != "alice" || tag != "node-3" {
+		t.Errorf("decode: want (alice, node-3), got (%q, %q)", user, tag)
+	}
+	user, tag = parseXrayClientEmail("legacy_only")
+	if user != "legacy_only" || tag != "" {
+		t.Errorf("legacy decode: want (legacy_only, \"\"), got (%q, %q)", user, tag)
+	}
+}
+
+// 回归：parseXrayStats 必须把同一用户在不同节点的流量拆分聚合，
+// 不能把它们合到同一条记录。
+func TestParseXrayStats_PerNodeAggregation(t *testing.T) {
+	out := []byte(`{"stat":[
+		{"name":"user>>>alice|node-3>>>traffic>>>uplink","value":100},
+		{"name":"user>>>alice|node-3>>>traffic>>>downlink","value":200},
+		{"name":"user>>>alice|node-7>>>traffic>>>uplink","value":50},
+		{"name":"user>>>bob>>>traffic>>>uplink","value":7}
+	]}`)
+	stats := parseXrayStats(out)
+	if len(stats) != 3 {
+		t.Fatalf("want 3 entries (alice@3, alice@7, bob legacy); got %d: %+v", len(stats), stats)
+	}
+	for _, s := range stats {
+		switch {
+		case s.Username == "alice" && s.NodeTag == "node-3":
+			if s.Upload != 100 || s.Download != 200 {
+				t.Errorf("alice@node-3: want (100,200), got (%d,%d)", s.Upload, s.Download)
+			}
+		case s.Username == "alice" && s.NodeTag == "node-7":
+			if s.Upload != 50 || s.Download != 0 {
+				t.Errorf("alice@node-7: want (50,0), got (%d,%d)", s.Upload, s.Download)
+			}
+		case s.Username == "bob" && s.NodeTag == "":
+			if s.Upload != 7 {
+				t.Errorf("bob legacy: want up 7, got %d", s.Upload)
+			}
+		default:
+			t.Errorf("unexpected entry: %+v", s)
+		}
+	}
+}
+
 func TestGetSettingInt(t *testing.T) {
 	cases := []struct {
 		name     string

@@ -6,6 +6,18 @@ type UserTraffic struct {
 	Download int64
 }
 
+// TrafficStat 单条 (节点 tag, 用户名) 维度的流量增量。
+//
+// NodeTag 为空表示引擎无法把流量归属到具体节点（例如老配置升级后仍存在的纯
+// username 形式 stats key），此时上层会按 node_id=0 记录，可观测但无法做节点
+// 维度统计。Username 与 user_nodes.users.username 一致。
+type TrafficStat struct {
+	NodeTag  string
+	Username string
+	Upload   int64
+	Download int64
+}
+
 // NodeConfig 节点配置
 type NodeConfig struct {
 	ID        int64
@@ -66,8 +78,8 @@ type Engine interface {
 	Restart() error
 	// IsRunning 检查内核是否正在运行
 	IsRunning() bool
-	// GetTrafficStats 获取所有用户的流量统计
-	GetTrafficStats() (map[string]*UserTraffic, error)
+	// GetTrafficStats 获取按 (节点, 用户) 维度的流量增量
+	GetTrafficStats() ([]TrafficStat, error)
 	// AddUser 热添加用户
 	AddUser(tag, uuid, email, protocol string) error
 	// RemoveUser 热移除用户

@@ -49,10 +49,14 @@ func (m *Manager) Status() map[string]bool {
 }
 
 // GetTrafficStats 合并所有运行中引擎的流量统计。单个引擎失败不阻断其他引擎。
-func (m *Manager) GetTrafficStats() (map[string]*UserTraffic, error) {
+//
+// 同一 (用户, 节点) 在不同引擎都被采到时累加——理论上不会发生（同一节点只跑
+// 一种内核），保留聚合是为了对极端配置（同 tag 复用）兜底，避免漏计。
+func (m *Manager) GetTrafficStats() ([]TrafficStat, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	merged := make(map[string]*UserTraffic)
+	type key struct{ user, tag string }
+	merged := make(map[key]*TrafficStat)
 	for _, eng := range m.engines {
 		if !eng.IsRunning() {
 			continue
@@ -62,17 +66,20 @@ func (m *Manager) GetTrafficStats() (map[string]*UserTraffic, error) {
 			log.Printf("[内核管理器] %s 流量采集失败: %v", eng.Name(), err)
 			continue
 		}
-		for email, traffic := range stats {
-			if existing, ok := merged[email]; ok {
-				existing.Upload += traffic.Upload
-				existing.Download += traffic.Download
+		for _, s := range stats {
+			k := key{s.Username, s.NodeTag}
+			if existing, ok := merged[k]; ok {
+				existing.Upload += s.Upload
+				existing.Download += s.Download
 			} else {
-				merged[email] = &UserTraffic{
-					Upload:   traffic.Upload,
-					Download: traffic.Download,
-				}
+				cp := s
+				merged[k] = &cp
 			}
 		}
 	}
-	return merged, nil
+	result := make([]TrafficStat, 0, len(merged))
+	for _, st := range merged {
+		result = append(result, *st)
+	}
+	return result, nil
 }

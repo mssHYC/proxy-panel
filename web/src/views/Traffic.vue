@@ -39,7 +39,7 @@
       <template #header>
         <div class="flex items-center justify-between">
           <span class="font-bold">流量趋势</span>
-          <el-select v-model="days" size="small" style="width: 120px" @change="fetchHistory">
+          <el-select v-model="days" size="small" style="width: 120px" @change="onDaysChange">
             <el-option :value="7" label="最近 7 天" />
             <el-option :value="14" label="最近 14 天" />
             <el-option :value="30" label="最近 30 天" />
@@ -49,6 +49,20 @@
         </div>
       </template>
       <div ref="chartRef" class="w-full" style="height: 350px"></div>
+    </el-card>
+
+    <!-- 节点维度分布 -->
+    <el-card shadow="hover">
+      <template #header>
+        <div class="flex items-center justify-between">
+          <span class="font-bold">节点流量分布</span>
+          <span class="text-xs text-gray-400">最近 {{ days }} 天 · 按 traffic_logs.node_id 聚合</span>
+        </div>
+      </template>
+      <div v-if="!nodeDist.length" class="text-sm text-gray-400 py-6 text-center">
+        暂无节点维度数据。新版采集会写入真实 node_id；如长期为空请检查内核运行状态。
+      </div>
+      <div v-else ref="nodeChartRef" class="w-full" style="height: 320px"></div>
     </el-card>
 
     <!-- 设置限额对话框 -->
@@ -68,10 +82,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
-import { getServerTraffic, setServerLimit, getTrafficHistory } from '../api/traffic'
+import { getServerTraffic, setServerLimit, getTrafficHistory, getTrafficByNode } from '../api/traffic'
 import { formatBytes } from '../utils/format'
 
 const loading = ref(false)
@@ -83,6 +97,9 @@ const settingLimit = ref(false)
 
 const chartRef = ref<HTMLDivElement>()
 let chart: echarts.ECharts
+const nodeChartRef = ref<HTMLDivElement>()
+let nodeChart: echarts.ECharts | null = null
+const nodeDist = ref<{ node_id: number; node_name: string; upload: number; download: number }[]>([])
 
 const usagePercent = computed(() => {
   if (traffic.value.limit_bytes <= 0) return 0
@@ -145,6 +162,59 @@ const fetchHistory = async () => {
   }
 }
 
+const onDaysChange = async () => {
+  await fetchHistory()
+  await fetchNodeDistribution()
+}
+
+const fetchNodeDistribution = async () => {
+  try {
+    const { data } = await getTrafficByNode(days.value)
+    nodeDist.value = data.distribution || []
+    if (!nodeDist.value.length) {
+      nodeChart?.dispose()
+      nodeChart = null
+      return
+    }
+    // 等待 v-if 渲染出 DOM 后再 init
+    await nextTick()
+    if (!nodeChart && nodeChartRef.value) {
+      nodeChart = echarts.init(nodeChartRef.value)
+    }
+    nodeChart?.setOption({
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        formatter: (params: any) => {
+          const name = params[0].axisValue
+          let html = `<div style="font-weight:600">${name}</div>`
+          params.forEach((p: any) => {
+            html += `<div>${p.marker} ${p.seriesName}: ${formatBytes(p.value)}</div>`
+          })
+          return html
+        },
+      },
+      legend: { data: ['上行', '下行'], bottom: 0 },
+      grid: { left: '3%', right: '4%', bottom: '12%', top: '8%', containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: nodeDist.value.map((d) => d.node_name),
+        axisLabel: { rotate: 25, fontSize: 11 },
+      },
+      yAxis: {
+        type: 'value',
+        axisLabel: { formatter: (val: number) => formatBytes(val) },
+      },
+      series: [
+        { name: '上行', type: 'bar', stack: 'n', data: nodeDist.value.map((d) => d.upload), itemStyle: { color: '#409EFF' } },
+        { name: '下行', type: 'bar', stack: 'n', data: nodeDist.value.map((d) => d.download), itemStyle: { color: '#67C23A' } },
+      ],
+    })
+  } catch (e) {
+    console.error('获取节点流量分布失败', e)
+  }
+}
+
 const handleSetLimit = async () => {
   settingLimit.value = true
   try {
@@ -161,17 +231,20 @@ const handleSetLimit = async () => {
 
 const handleResize = () => {
   chart?.resize()
+  nodeChart?.resize()
 }
 
 onMounted(async () => {
   await fetchTraffic()
   chart = echarts.init(chartRef.value!)
   await fetchHistory()
+  await fetchNodeDistribution()
   window.addEventListener('resize', handleResize)
 })
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
   chart?.dispose()
+  nodeChart?.dispose()
 })
 </script>
