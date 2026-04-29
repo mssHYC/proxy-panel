@@ -116,13 +116,13 @@ type clashMetadata struct {
 	Type        string `json:"type"`
 }
 
-// GetTrafficStats 通过 sing-box 的 clash_api /connections 接口按用户聚合流量
+// GetTrafficStats 通过 sing-box 的 clash_api /connections 接口按 (用户, 节点) 聚合流量
 // sing-box 官方二进制通常不带 with_v2ray_api tag，因此改用带 with_clash_api 的通用方案。
 // 注意：短连接在关闭瞬间会从 /connections 列表消失，最后一次增量可能丢失；
 // 对于 hy2 这种长连接为主的协议影响较小。
-func (e *SingboxEngine) GetTrafficStats() (map[string]*UserTraffic, error) {
+func (e *SingboxEngine) GetTrafficStats() ([]TrafficStat, error) {
 	if e.apiPort == 0 || !e.statsEnabled.Load() {
-		return make(map[string]*UserTraffic), nil
+		return nil, nil
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/connections", e.apiPort)
 	resp, err := e.httpClient.Get(url)
@@ -138,21 +138,28 @@ func (e *SingboxEngine) GetTrafficStats() (map[string]*UserTraffic, error) {
 		return nil, fmt.Errorf("解析 clash_api 响应失败: %w", err)
 	}
 
-	result := make(map[string]*UserTraffic)
+	type accKey struct {
+		username, nodeTag string
+	}
+	acc := make(map[accKey]*TrafficStat)
 	e.connMu.Lock()
 	defer e.connMu.Unlock()
 
 	seen := make(map[string]struct{}, len(snap.Connections))
 	for _, c := range snap.Connections {
+		// metadata.type 形如 "hysteria2/node-3"，斜杠后即 inbound tag。
+		// 这同时给我们 (user, node) 维度的归属，无需再依赖 inboundUser。
+		var nodeTag string
+		if _, tag, ok := strings.Cut(c.Metadata.Type, "/"); ok && tag != "" {
+			nodeTag = tag
+		}
 		user := c.Metadata.InboundUser
 		// sing-box 1.13 的 clash_api 不再暴露 inboundUser；回退按 inbound tag 归属
-		// type 格式形如 "hysteria2/node-3"，切片后半部分即 inbound tag
-		if user == "" {
-			if _, tag, ok := strings.Cut(c.Metadata.Type, "/"); ok && tag != "" {
-				e.inboundUserMu.Lock()
-				user = e.inboundUser[tag]
-				e.inboundUserMu.Unlock()
-			}
+		// （仅当该 inbound 唯一一个用户时回退 map 才有效）
+		if user == "" && nodeTag != "" {
+			e.inboundUserMu.Lock()
+			user = e.inboundUser[nodeTag]
+			e.inboundUserMu.Unlock()
 		}
 		if user == "" {
 			continue
@@ -168,11 +175,14 @@ func (e *SingboxEngine) GetTrafficStats() (map[string]*UserTraffic, error) {
 		if deltaDown < 0 {
 			deltaDown = c.Download
 		}
-		if _, ok := result[user]; !ok {
-			result[user] = &UserTraffic{}
+		k := accKey{username: user, nodeTag: nodeTag}
+		st, ok := acc[k]
+		if !ok {
+			st = &TrafficStat{Username: user, NodeTag: nodeTag}
+			acc[k] = st
 		}
-		result[user].Upload += deltaUp
-		result[user].Download += deltaDown
+		st.Upload += deltaUp
+		st.Download += deltaDown
 		e.connSnap[c.ID] = connSnapshot{upload: c.Upload, download: c.Download}
 	}
 	// 清理已关闭的连接
@@ -180,6 +190,10 @@ func (e *SingboxEngine) GetTrafficStats() (map[string]*UserTraffic, error) {
 		if _, ok := seen[id]; !ok {
 			delete(e.connSnap, id)
 		}
+	}
+	result := make([]TrafficStat, 0, len(acc))
+	for _, st := range acc {
+		result = append(result, *st)
 	}
 	return result, nil
 }

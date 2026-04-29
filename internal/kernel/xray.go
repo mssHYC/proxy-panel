@@ -89,8 +89,32 @@ type xrayStatsResponse struct {
 	Stat []xrayStatEntry `json:"stat"`
 }
 
-// GetTrafficStats 通过 xray api 获取用户流量统计
-func (e *XrayEngine) GetTrafficStats() (map[string]*UserTraffic, error) {
+// xrayClientEmail 把 username + 节点 tag 编码为 xray inbound.client.email。
+//
+// Xray Stats 仅按 email 聚合 user>>> 流量；要拿到 (用户, 节点) 维度的增量，唯一
+// 可靠的办法是给每个 inbound 的同一用户设置不同 email。约定的格式 "<username>|<tag>"
+// 让采集时能 split 还原。tag 为空时退化成纯 username，与老行为兼容。
+func xrayClientEmail(username, nodeTag string) string {
+	if nodeTag == "" {
+		return username
+	}
+	return username + "|" + nodeTag
+}
+
+// parseXrayClientEmail 反解 xrayClientEmail 编码的 email。
+//
+// 仅当后缀形如 "|node-<tag>" 时才认为是复合 email——避免把用户名里恰好含 "|" 的
+// 历史 email 误拆。tag 找不到则返回 (email, "")，上层会按 node_id=0 记录。
+func parseXrayClientEmail(email string) (username, nodeTag string) {
+	idx := strings.LastIndex(email, "|node-")
+	if idx < 0 {
+		return email, ""
+	}
+	return email[:idx], email[idx+1:]
+}
+
+// GetTrafficStats 通过 xray api 获取按 (用户, 节点) 维度的流量增量
+func (e *XrayEngine) GetTrafficStats() ([]TrafficStat, error) {
 	server := fmt.Sprintf("127.0.0.1:%d", e.apiPort)
 	// -reset 让 Xray 返回增量并把内部计数器清零，否则每次采集都是累计值会重复累加
 	out, err := exec.Command("xray", "api", "statsquery",
@@ -102,60 +126,65 @@ func (e *XrayEngine) GetTrafficStats() (map[string]*UserTraffic, error) {
 }
 
 // parseXrayStats 解析 xray api statsquery 输出（兼容 JSON 与 protobuf 文本）
-func parseXrayStats(out []byte) map[string]*UserTraffic {
-	result := make(map[string]*UserTraffic)
+func parseXrayStats(out []byte) []TrafficStat {
+	type accKey struct {
+		username, nodeTag string
+	}
+	acc := make(map[accKey]*TrafficStat)
+	add := func(name string, value int64) {
+		parts := strings.Split(name, ">>>")
+		if len(parts) != 4 || parts[0] != "user" || parts[2] != "traffic" {
+			return
+		}
+		username, nodeTag := parseXrayClientEmail(parts[1])
+		k := accKey{username, nodeTag}
+		st, ok := acc[k]
+		if !ok {
+			st = &TrafficStat{Username: username, NodeTag: nodeTag}
+			acc[k] = st
+		}
+		switch parts[3] {
+		case "uplink":
+			st.Upload += value
+		case "downlink":
+			st.Download += value
+		}
+	}
+
 	raw := strings.TrimSpace(string(out))
 	if raw == "" {
-		return result
+		return nil
 	}
 
 	// 优先尝试 JSON 格式
 	var resp xrayStatsResponse
 	if err := json.Unmarshal([]byte(raw), &resp); err == nil && len(resp.Stat) > 0 {
 		for _, s := range resp.Stat {
-			parseStatEntry(result, s.Name, s.Value)
+			add(s.Name, s.Value)
 		}
-		return result
+	} else {
+		// 回退：protobuf 文本格式 name 与 value 分两行
+		var curName string
+		for _, line := range strings.Split(raw, "\n") {
+			line = strings.TrimSpace(line)
+			switch {
+			case strings.HasPrefix(line, "name:"):
+				curName = extractQuoted(line)
+			case strings.HasPrefix(line, "value:") && curName != "":
+				valStr := strings.TrimSpace(strings.TrimPrefix(line, "value:"))
+				if val, err := strconv.ParseInt(valStr, 10, 64); err == nil {
+					add(curName, val)
+				}
+				curName = ""
+			}
+		}
 	}
 
-	// 回退：protobuf 文本格式 name 与 value 分两行，例如：
-	//   stat: <
-	//     name: "user>>>alice>>>traffic>>>uplink"
-	//     value: 12345
-	//   >
-	var curName string
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "name:"):
-			curName = extractQuoted(line)
-		case strings.HasPrefix(line, "value:") && curName != "":
-			valStr := strings.TrimSpace(strings.TrimPrefix(line, "value:"))
-			if val, err := strconv.ParseInt(valStr, 10, 64); err == nil {
-				parseStatEntry(result, curName, val)
-			}
-			curName = ""
-		}
+	result := make([]TrafficStat, 0, len(acc))
+	for _, st := range acc {
+		result = append(result, *st)
 	}
 	return result
-}
-
-// parseStatEntry 解析 "user>>>{email}>>>traffic>>>{uplink|downlink}" 格式并累加
-func parseStatEntry(result map[string]*UserTraffic, name string, value int64) {
-	parts := strings.Split(name, ">>>")
-	if len(parts) != 4 || parts[0] != "user" || parts[2] != "traffic" {
-		return
-	}
-	email := parts[1]
-	if _, ok := result[email]; !ok {
-		result[email] = &UserTraffic{}
-	}
-	switch parts[3] {
-	case "uplink":
-		result[email].Upload += value
-	case "downlink":
-		result[email].Download += value
-	}
 }
 
 // extractQuoted 从字符串中提取双引号内的内容
@@ -297,7 +326,9 @@ func (e *XrayEngine) buildInbound(node NodeConfig, users []UserConfig) map[strin
 			continue
 		}
 		client := map[string]interface{}{
-			"email": u.Email,
+			// 流量采集需要 (用户, 节点) 维度，而 xray Stats 只能按 email 聚合，
+			// 因此这里把节点 tag 编码进 email；采集时由 parseXrayClientEmail 还原。
+			"email": xrayClientEmail(u.Email, node.Tag),
 			"level": 0,
 		}
 		switch node.Protocol {

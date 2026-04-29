@@ -3,12 +3,27 @@ package service
 import (
 	"fmt"
 	"log"
+	"strconv"
+	"strings"
 	"time"
 
 	"proxy-panel/internal/database"
 	"proxy-panel/internal/kernel"
 	"proxy-panel/internal/model"
 )
+
+// parseNodeIDFromTag 从 "node-<id>" 形式的 inbound tag 中解析节点 ID。
+// 不匹配（含空 tag）时返回 0，调用方按 node_id=0 记录，保持可观测但不参与节点维度统计。
+func parseNodeIDFromTag(tag string) int64 {
+	if !strings.HasPrefix(tag, "node-") {
+		return 0
+	}
+	id, err := strconv.ParseInt(tag[len("node-"):], 10, 64)
+	if err != nil || id <= 0 {
+		return 0
+	}
+	return id
+}
 
 // TrafficService 流量管理服务
 type TrafficService struct {
@@ -33,44 +48,55 @@ func (s *TrafficService) Collect() error {
 	// （形如 "2026-04-17 02:04:08 +0000 UTC m=+59.590863369"），SQLite 的
 	// DATE()/strftime() 无法解析，趋势图会拿不到数据。统一格式化成标准字符串。
 	tsStr := now.UTC().Format("2006-01-02 15:04:05")
-	for email, traffic := range stats {
-		if traffic.Upload == 0 && traffic.Download == 0 {
+
+	// 按 username 缓存 user_id，避免同一用户多节点重复查 users 表
+	userIDCache := make(map[string]int64)
+	for _, st := range stats {
+		if st.Upload == 0 && st.Download == 0 {
 			continue
 		}
 
-		// 内核配置里 client.email 使用 username，这里按 username 反查用户
-		var userID int64
-		err := s.db.QueryRow("SELECT id FROM users WHERE username = ?", email).Scan(&userID)
-		if err != nil {
-			log.Printf("查找用户失败 username=%s: %v", email, err)
+		userID, ok := userIDCache[st.Username]
+		if !ok {
+			err := s.db.QueryRow("SELECT id FROM users WHERE username = ?", st.Username).Scan(&userID)
+			if err != nil {
+				log.Printf("查找用户失败 username=%s: %v", st.Username, err)
+				userIDCache[st.Username] = 0 // 负缓存，避免重复查询
+				continue
+			}
+			userIDCache[st.Username] = userID
+		}
+		if userID == 0 {
 			continue
 		}
 
-		// 更新用户流量
+		nodeID := parseNodeIDFromTag(st.NodeTag)
+
+		// 更新用户流量（聚合到用户维度，node 维度只进 traffic_logs）
 		_, err = s.db.Exec(`UPDATE users SET
 			traffic_used = traffic_used + ?,
 			traffic_up = traffic_up + ?,
 			traffic_down = traffic_down + ?,
 			updated_at = ?
 			WHERE id = ?`,
-			traffic.Upload+traffic.Download, traffic.Upload, traffic.Download, tsStr, userID)
+			st.Upload+st.Download, st.Upload, st.Download, tsStr, userID)
 		if err != nil {
 			log.Printf("更新用户流量失败 id=%d: %v", userID, err)
 			continue
 		}
 
-		// 插入流量日志
+		// 插入流量日志（带真实 node_id；解析失败时 node_id=0 仍可观测）
 		_, err = s.db.Exec(`INSERT INTO traffic_logs (user_id, node_id, upload, download, timestamp)
-			VALUES (?, 0, ?, ?, ?)`, userID, traffic.Upload, traffic.Download, tsStr)
+			VALUES (?, ?, ?, ?, ?)`, userID, nodeID, st.Upload, st.Download, tsStr)
 		if err != nil {
-			log.Printf("插入流量日志失败 id=%d: %v", userID, err)
+			log.Printf("插入流量日志失败 user_id=%d node_id=%d: %v", userID, nodeID, err)
 		}
 
 		// 更新服务器全局流量
 		_, err = s.db.Exec(`UPDATE server_traffic SET
 			total_up = total_up + ?,
 			total_down = total_down + ?`,
-			traffic.Upload, traffic.Download)
+			st.Upload, st.Download)
 		if err != nil {
 			log.Printf("更新服务器流量失败: %v", err)
 		}
@@ -226,6 +252,50 @@ func (s *TrafficService) GetHistory(days int) ([]map[string]interface{}, error) 
 	return result, rows.Err()
 }
 
+// GetNodeDistribution 返回最近 N 天按节点聚合的流量分布。
+// 用于"按节点分布"卡片：node_id=0 的归到"未归属"分类，便于发现采集异常。
+func (s *TrafficService) GetNodeDistribution(days int) ([]map[string]interface{}, error) {
+	since := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+	rows, err := s.db.Query(`SELECT
+		t.node_id,
+		COALESCE(n.name, '') AS node_name,
+		SUM(t.upload) AS upload,
+		SUM(t.download) AS download
+		FROM traffic_logs t
+		LEFT JOIN nodes n ON n.id = t.node_id
+		WHERE DATE(t.timestamp) >= ?
+		GROUP BY t.node_id
+		ORDER BY (SUM(t.upload) + SUM(t.download)) DESC`, since)
+	if err != nil {
+		return nil, fmt.Errorf("查询节点流量分布失败: %w", err)
+	}
+	defer rows.Close()
+
+	var result []map[string]interface{}
+	for rows.Next() {
+		var nodeID int64
+		var nodeName string
+		var upload, download int64
+		if err := rows.Scan(&nodeID, &nodeName, &upload, &download); err != nil {
+			return nil, fmt.Errorf("扫描节点流量分布失败: %w", err)
+		}
+		label := nodeName
+		if nodeID == 0 {
+			label = "未归属"
+		} else if label == "" {
+			label = fmt.Sprintf("节点 #%d (已删除)", nodeID)
+		}
+		result = append(result, map[string]interface{}{
+			"node_id":   nodeID,
+			"node_name": label,
+			"upload":    upload,
+			"download":  download,
+			"total":     formatBytes(upload + download),
+		})
+	}
+	return result, rows.Err()
+}
+
 // CleanupLogs 清理过期流量日志 (7天内保留原始, 7-90天按日聚合, 90天以上删除)
 func (s *TrafficService) CleanupLogs() error {
 	// 删除 90 天以上的日志
@@ -240,7 +310,7 @@ func (s *TrafficService) CleanupLogs() error {
 			SELECT MIN(id) FROM traffic_logs
 			WHERE timestamp < datetime('now', '-7 days')
 			AND timestamp >= datetime('now', '-90 days')
-			GROUP BY user_id, DATE(timestamp)
+			GROUP BY user_id, node_id, DATE(timestamp)
 		)`)
 	if err != nil {
 		return fmt.Errorf("聚合7-90天日志失败: %w", err)
