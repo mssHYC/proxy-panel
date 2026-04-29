@@ -521,3 +521,8 @@ func parseIntSafe(s string) (int, error) {
 func (e *SingboxEngine) WriteConfig(data []byte) error {
 	return os.WriteFile(e.configPath, data, 0600)
 }
+
+// ApplyConfig 事务式更新 sing-box 配置（写入 + Restart + 失败回滚）。详见接口定义。
+func (e *SingboxEngine) ApplyConfig(data []byte) error {
+	return applyConfigWithRollback(e.configPath, e.Restart, data)
+}

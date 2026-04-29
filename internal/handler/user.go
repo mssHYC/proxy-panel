@@ -65,7 +65,11 @@ func (h *UserHandler) Create(c *gin.Context) {
 		return
 	}
 
-	h.syncSvc.Trigger()
+	// 新增用户走热路径——所有关联节点都是 xray 时不会重启内核，
+	// 其他用户连接保持不变（P1 验收）。失败会自动 fallback 全量同步。
+	// 异步执行以保持 handler 响应延迟与原 Trigger() 一致。
+	op := service.UserKernelOp{UUID: user.UUID, Username: user.Username, Protocol: user.Protocol, NodeIDs: user.NodeIDs}
+	go func() { _ = h.syncSvc.HotAddUser(op) }()
 	c.JSON(http.StatusCreated, user)
 }
 
@@ -105,12 +109,22 @@ func (h *UserHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	// 快照必须在 DELETE 之前抓取——否则拿不到 UUID/NodeIDs 用于 xray rmi。
+	// snapshot 拿不到（用户不存在）也不影响 svc.Delete 自己的报错路径。
+	snapshot, _ := h.svc.GetByID(id)
+
 	if err := h.svc.Delete(id); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	h.syncSvc.Trigger()
+	if snapshot != nil {
+		op := service.UserKernelOp{UUID: snapshot.UUID, Username: snapshot.Username, Protocol: snapshot.Protocol, NodeIDs: snapshot.NodeIDs}
+		go func() { _ = h.syncSvc.HotRemoveUser(op) }()
+	} else {
+		// 没拿到快照（理论上不会到此分支因为 Delete 已成功），仍触发一次全量兜底。
+		h.syncSvc.Trigger()
+	}
 	c.JSON(http.StatusOK, gin.H{"message": "删除成功"})
 }
 

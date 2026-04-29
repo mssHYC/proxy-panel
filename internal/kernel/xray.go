@@ -465,6 +465,11 @@ func (e *XrayEngine) WriteConfig(data []byte) error {
 	return os.WriteFile(e.configPath, data, 0600)
 }
 
+// ApplyConfig 事务式更新 xray 配置（写入 + Restart + 失败回滚）。详见接口定义。
+func (e *XrayEngine) ApplyConfig(data []byte) error {
+	return applyConfigWithRollback(e.configPath, e.Restart, data)
+}
+
 // getSettingStr 从 Settings 中安全获取字符串值
 func getSettingStr(m map[string]interface{}, key, defaultVal string) string {
 	if m == nil {

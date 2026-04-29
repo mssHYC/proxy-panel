@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -23,11 +24,24 @@ type KernelSyncService struct {
 	debounceMu     sync.Mutex
 	debounceTimer  *time.Timer
 	debounceWindow time.Duration
+
+	// syncMu 串行化 Sync()/HotAddUser/HotRemoveUser，避免并发触发时
+	// "同时写两份配置 + 同时 Restart"互相覆盖导致的端口竞争或半写文件。
+	syncMu sync.Mutex
 }
 
 // NewKernelSyncService 创建内核同步服务
 func NewKernelSyncService(db *database.DB, mgr *kernel.Manager) *KernelSyncService {
 	return &KernelSyncService{db: db, mgr: mgr, debounceWindow: syncDebounceWindow}
+}
+
+// UserKernelOp 描述一次用户级热同步操作所需的最小快照。
+// 必须在 DB 写入前/后立刻捕获——hot path 不再回查数据库以避免与 delete 的并发竞争。
+type UserKernelOp struct {
+	UUID     string
+	Username string
+	Protocol string
+	NodeIDs  []int64
 }
 
 // Trigger 请求一次内核同步；在 debounceWindow 内的多次调用会合并为一次执行。
@@ -61,8 +75,16 @@ func (s *KernelSyncService) SyncNow() error {
 	return s.Sync()
 }
 
-// Sync 从数据库读取所有启用的节点和用户，生成配置并写入文件，重启内核
+// Sync 从数据库读取所有启用的节点和用户，生成配置并通过 ApplyConfig 写入并重启内核。
+// ApplyConfig 失败时引擎会自动回滚到旧配置；这里只把失败汇总成日志，不阻断其他引擎。
 func (s *KernelSyncService) Sync() error {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+	return s.syncLocked()
+}
+
+// syncLocked 必须在 syncMu 加锁后调用。抽出来便于 hot path fallback 复用同一把锁。
+func (s *KernelSyncService) syncLocked() error {
 	nodes, err := s.loadNodes()
 	if err != nil {
 		return fmt.Errorf("加载节点失败: %w", err)
@@ -94,38 +116,31 @@ func (s *KernelSyncService) Sync() error {
 		}
 	}
 
-	// 同步 Xray
-	if eng, err := s.mgr.Get("xray"); err == nil {
-		data, err := eng.GenerateConfig(xrayNodes, users)
+	applyOne := func(name string, eng kernel.Engine, kernelNodes []kernel.NodeConfig, skipEmpty bool) {
+		if skipEmpty && len(kernelNodes) == 0 {
+			return
+		}
+		data, err := eng.GenerateConfig(kernelNodes, users)
 		if err != nil {
-			return fmt.Errorf("生成 Xray 配置失败: %w", err)
+			log.Printf("[内核同步] %s 生成配置失败: %v", name, err)
+			return
 		}
-		if err := eng.WriteConfig(data); err != nil {
-			return fmt.Errorf("写入 Xray 配置失败: %w", err)
+		if err := eng.ApplyConfig(data); err != nil {
+			if errors.Is(err, kernel.ErrConfigRolledBack) {
+				log.Printf("[内核同步] %s 应用新配置失败，已回滚到旧配置: %v", name, err)
+			} else {
+				log.Printf("[内核同步] %s 应用配置失败（无法回滚）: %v", name, err)
+			}
+			return
 		}
-		if err := eng.Restart(); err != nil {
-			log.Printf("[内核同步] Xray 重启失败: %v", err)
-		} else {
-			log.Println("[内核同步] Xray 配置已同步并重启")
-		}
+		log.Printf("[内核同步] %s 配置已同步并重启", name)
 	}
 
-	// 同步 Sing-box
+	if eng, err := s.mgr.Get("xray"); err == nil {
+		applyOne("Xray", eng, xrayNodes, false)
+	}
 	if eng, err := s.mgr.Get("sing-box"); err == nil {
-		if len(singboxNodes) > 0 {
-			data, err := eng.GenerateConfig(singboxNodes, users)
-			if err != nil {
-				return fmt.Errorf("生成 Sing-box 配置失败: %w", err)
-			}
-			if err := eng.WriteConfig(data); err != nil {
-				return fmt.Errorf("写入 Sing-box 配置失败: %w", err)
-			}
-			if err := eng.Restart(); err != nil {
-				log.Printf("[内核同步] Sing-box 重启失败: %v", err)
-			} else {
-				log.Println("[内核同步] Sing-box 配置已同步并重启")
-			}
-		}
+		applyOne("Sing-box", eng, singboxNodes, true)
 	}
 
 	return nil
@@ -204,6 +219,109 @@ func (s *KernelSyncService) loadUsers() ([]kernel.UserConfig, error) {
 		users = append(users, u)
 	}
 	return users, nil
+}
+
+// HotAddUser 尝试以热加载方式将用户注入 xray inbound；不可热加载场景直接退化为全量 Sync。
+//
+// 不可热加载条件（任一命中即 fallback）：
+//   - NodeIDs 为空：兜底语义"可用全部节点"，新用户会出现在每个 inbound（含 sing-box hy2），
+//     这与新增 inbound 等价，必须走全量重启 sing-box。
+//   - 任一关联节点不是 xray：sing-box 不支持热加用户。
+//   - 任一关联节点未启用 / 已删除：当前内核里没有对应 inbound。
+//   - 调用 xray AddUser 失败：保留旧状态语义不一致，回退全量同步保证一致性。
+//
+// hot path 成功时不会重启 xray，正在跑的其他用户连接保持不变（验收 P0）。
+func (s *KernelSyncService) HotAddUser(op UserKernelOp) error {
+	return s.applyUserOp(op, "add")
+}
+
+// HotRemoveUser 见 HotAddUser；额外注意快照必须在 DELETE FROM users 之前捕获，
+// 否则就拿不到 NodeIDs 与 UUID。
+func (s *KernelSyncService) HotRemoveUser(op UserKernelOp) error {
+	return s.applyUserOp(op, "del")
+}
+
+func (s *KernelSyncService) applyUserOp(op UserKernelOp, kind string) error {
+	s.syncMu.Lock()
+	defer s.syncMu.Unlock()
+
+	// 兜底语义：NodeIDs 空 → 全量
+	if len(op.NodeIDs) == 0 {
+		log.Printf("[内核同步] 用户 %s NodeIDs 空，走全量同步", op.Username)
+		return s.syncLocked()
+	}
+
+	nodes, err := s.loadEnabledNodesByIDs(op.NodeIDs)
+	if err != nil {
+		log.Printf("[内核同步] 加载节点失败，回退全量: %v", err)
+		return s.syncLocked()
+	}
+	if len(nodes) != len(op.NodeIDs) {
+		// 有节点已禁用 / 已删除——内核里 inbound 数量跟用户期望不一致；走全量统一。
+		return s.syncLocked()
+	}
+	for _, n := range nodes {
+		if n.kernelType != "xray" {
+			return s.syncLocked()
+		}
+	}
+
+	eng, err := s.mgr.Get("xray")
+	if err != nil {
+		return s.syncLocked()
+	}
+
+	for _, n := range nodes {
+		var apiErr error
+		tag := fmt.Sprintf("node-%d", n.id)
+		switch kind {
+		case "add":
+			apiErr = eng.AddUser(tag, op.UUID, op.Username, n.protocol)
+		case "del":
+			apiErr = eng.RemoveUser(tag, op.UUID, op.Username)
+		}
+		if apiErr != nil {
+			log.Printf("[内核同步] xray %s 用户 %s 失败 tag=%s err=%v，回退全量同步",
+				kind, op.Username, tag, apiErr)
+			return s.syncLocked()
+		}
+	}
+	log.Printf("[内核同步] xray %s 用户 %s 完成，热路径 %d 个 inbound", kind, op.Username, len(nodes))
+	return nil
+}
+
+// loadEnabledNodesByIDs 按 ID 列表加载启用节点。结果数量可能少于入参（节点已删/禁用）。
+func (s *KernelSyncService) loadEnabledNodesByIDs(ids []int64) ([]nodeRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]byte, 0, len(ids)*2)
+	args := make([]interface{}, 0, len(ids))
+	for i, id := range ids {
+		if i > 0 {
+			placeholders = append(placeholders, ',')
+		}
+		placeholders = append(placeholders, '?')
+		args = append(args, id)
+	}
+	q := "SELECT id, port, protocol, transport, kernel_type, settings FROM nodes WHERE enable = 1 AND id IN (" + string(placeholders) + ")"
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []nodeRow
+	for rows.Next() {
+		var n nodeRow
+		var settingsStr string
+		if err := rows.Scan(&n.id, &n.port, &n.protocol, &n.transport, &n.kernelType, &settingsStr); err != nil {
+			return nil, err
+		}
+		n.settings = make(map[string]interface{})
+		json.Unmarshal([]byte(settingsStr), &n.settings)
+		out = append(out, n)
+	}
+	return out, rows.Err()
 }
 
 // loadUserNodeMap 读出 user_nodes 关联表，返回 user_id → []node_id 的映射
