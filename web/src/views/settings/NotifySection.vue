@@ -90,11 +90,10 @@ async function handleTest(channel: 'telegram' | 'wechat') {
   if (channel === 'telegram') testingTg.value = true
   else testingWechat.value = true
   try {
-    await handleSave()
     await testNotify(channel)
     ElMessage.success(`${channel === 'telegram' ? 'Telegram' : '企业微信'} 测试消息发送成功`)
   } catch (e: any) {
-    ElMessage.error(e.response?.data?.error || '测试失败，请检查配置')
+    ElMessage.error(e.response?.data?.error || '测试失败，请先点击"保存通知设置"再测试')
   } finally {
     testingTg.value = false
     testingWechat.value = false
