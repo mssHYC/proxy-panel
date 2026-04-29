@@ -200,10 +200,15 @@ func extractQuoted(s string) string {
 	return s[start+1 : start+1+end]
 }
 
-// AddUser 通过 xray api 热添加用户
+// AddUser 通过 xray api 热添加用户。
+//
+// email 必须是用户原始 username；这里统一用 xrayClientEmail(email, tag) 编码成
+// 与 GenerateConfig 一致的 "<username>|<tag>"，否则 stats key 会落回纯 username，
+// 采集时归不到具体节点（node_id=0）。
 func (e *XrayEngine) AddUser(tag, uuid, email, protocol string) error {
 	server := fmt.Sprintf("127.0.0.1:%d", e.apiPort)
-	args := []string{"api", "adi", "--server=" + server, "-tag", tag, "-email", email}
+	encodedEmail := xrayClientEmail(email, tag)
+	args := []string{"api", "adi", "--server=" + server, "-tag", tag, "-email", encodedEmail}
 
 	switch protocol {
 	case "vless", "vmess":
@@ -221,11 +226,13 @@ func (e *XrayEngine) AddUser(tag, uuid, email, protocol string) error {
 	return nil
 }
 
-// RemoveUser 通过 xray api 热移除用户
+// RemoveUser 通过 xray api 热移除用户。email 同 AddUser 必须做相同编码——
+// 否则 xray 配置里登记的 client 是 "<username>|<tag>"，rmi 传纯 username 找不到。
 func (e *XrayEngine) RemoveUser(tag, uuid, email string) error {
 	server := fmt.Sprintf("127.0.0.1:%d", e.apiPort)
+	encodedEmail := xrayClientEmail(email, tag)
 	out, err := exec.Command("xray", "api", "rmi",
-		"--server="+server, "-tag", tag, "-email", email).CombinedOutput()
+		"--server="+server, "-tag", tag, "-email", encodedEmail).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("xray rmi 失败: %w, output: %s", err, string(out))
 	}

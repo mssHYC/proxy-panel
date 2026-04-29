@@ -217,7 +217,11 @@ func (e *SingboxEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) (
 	}
 
 	inbounds := make([]interface{}, 0)
-	// 收集 inbound tag -> 唯一用户映射，供采集时回退归属
+	// 收集 inbound tag -> 唯一用户映射，供采集时回退归属。
+	// 必须按"该节点真正 linked 的用户数"判定，而不是全局 users 数：
+	// - 全局多用户但某节点只关联 1 人 → 仍可回退归属，否则 sing-box 1.13 缺
+	//   inboundUser 时该节点流量会被整段跳过；
+	// - 全局只有 1 人但该节点未关联 → 不能错误归属，必须留空。
 	inboundUserMap := make(map[string]string)
 	for _, node := range nodes {
 		inbound := e.buildInbound(node, users)
@@ -225,8 +229,14 @@ func (e *SingboxEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) (
 			continue
 		}
 		inbounds = append(inbounds, inbound)
-		if len(users) == 1 {
-			inboundUserMap[node.Tag] = users[0].Email
+		var linked []UserConfig
+		for _, u := range users {
+			if userLinkedToNode(u, node.ID) {
+				linked = append(linked, u)
+			}
+		}
+		if len(linked) == 1 {
+			inboundUserMap[node.Tag] = linked[0].Email
 		}
 	}
 	e.inboundUserMu.Lock()
