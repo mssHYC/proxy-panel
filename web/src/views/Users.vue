@@ -151,13 +151,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, defineAsyncComponent, onMounted } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getUsers, createUser, updateUser, deleteUser, resetTraffic } from '../api/user'
 import { getNodes } from '../api/node'
 import { formatBytes, formatDate } from '../utils/format'
-import SubscriptionDialog from '../components/SubscriptionDialog.vue'
+
+// SubscriptionDialog 引入了 qrcode（vendor-qrcode chunk）。
+// 它只在管理员点击"订阅"按钮时显示，按需加载即可，无需进 Users 首屏 chunk。
+const SubscriptionDialog = defineAsyncComponent(() => import('../components/SubscriptionDialog.vue'))
 
 // ---- 类型 ----
 interface User {

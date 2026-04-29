@@ -108,12 +108,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, defineAsyncComponent, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { getDashboard } from '../api/dashboard'
 import request from '../api/request'
 import { formatBytes } from '../utils/format'
-import TrafficChart from '../components/TrafficChart.vue'
+
+// TrafficChart 拉的是 echarts（vendor-echarts ~1MB）。
+// 用 defineAsyncComponent 延迟加载，让 Dashboard 首屏 chunk 不再绑定 echarts，
+// 图表落入视野时再拉取（与 Traffic 路由共享同一个 vendor-echarts chunk）。
+const TrafficChart = defineAsyncComponent(() => import('../components/TrafficChart.vue'))
 
 const loading = ref(false)
 const restartingKernel = ref('')
