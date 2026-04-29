@@ -24,3 +24,5 @@ docs/
 .claude/
 .worktrees
 .superpowers/
+
+*.local.md
