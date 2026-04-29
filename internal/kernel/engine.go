@@ -1,5 +1,47 @@
 package kernel
 
+import (
+	"errors"
+	"fmt"
+	"os"
+)
+
+// ErrConfigRolledBack 表明 ApplyConfig 已把内核回滚到旧配置；调用方据此区分
+// "新配置失败 + 旧配置仍在跑"和"新旧都跑不起来"两种场景。
+var ErrConfigRolledBack = errors.New("kernel config rolled back to previous version")
+
+// ApplyConfigForTest 暴露 applyConfigWithRollback 给跨包测试用，业务代码勿用。
+func ApplyConfigForTest(configPath string, restart func() error, data []byte) error {
+	return applyConfigWithRollback(configPath, restart, data)
+}
+
+// applyConfigWithRollback 写入 + 重启 + 失败回滚的通用实现。
+// 返回的 error 在已经成功回滚时会 Wrap ErrConfigRolledBack，便于日志/指标识别。
+// hadBackup=false（首次同步）时无可回滚——直接把原始 restart 错误返回。
+func applyConfigWithRollback(configPath string, restart func() error, data []byte) error {
+	var backup []byte
+	hadBackup := false
+	if old, err := os.ReadFile(configPath); err == nil {
+		backup = old
+		hadBackup = true
+	}
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
+		return fmt.Errorf("写入配置失败: %w", err)
+	}
+	if err := restart(); err != nil {
+		if !hadBackup {
+			return fmt.Errorf("重启失败（无旧配置可回滚）: %w", err)
+		}
+		if rbErr := os.WriteFile(configPath, backup, 0600); rbErr != nil {
+			return fmt.Errorf("重启失败且回滚写入也失败: restart=%v, rollback=%w", err, rbErr)
+		}
+		// 尝试用旧配置重启；失败也不再覆盖原始错误信息。
+		_ = restart()
+		return fmt.Errorf("%w: %v", ErrConfigRolledBack, err)
+	}
+	return nil
+}
+
 // UserTraffic 用户流量统计
 type UserTraffic struct {
 	Upload   int64
@@ -88,4 +130,8 @@ type Engine interface {
 	GenerateConfig(nodes []NodeConfig, users []UserConfig) ([]byte, error)
 	// WriteConfig 将配置写入文件
 	WriteConfig(data []byte) error
+	// ApplyConfig 事务式更新内核：备份旧配置 → 写入新配置 → Restart；
+	// Restart 失败时把旧配置回写并尝试再次 Restart（best-effort），返回带回滚标记的错误。
+	// 与 WriteConfig + Restart 的差别在于失败语义——单独失败的写入或重启不会留下损坏的运行态。
+	ApplyConfig(data []byte) error
 }
