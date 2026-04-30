@@ -65,7 +65,22 @@ var SystemGroups = []SystemGroup{
 
 // SystemCategories 定义 18 个内置分类。site_tags / ip_tags 与 MetaCubeX/meta-rules-dat 的 geosite/geoip 文件名对齐。
 var SystemCategories = []SystemCategory{
-	{Code: "private", DisplayName: "局域网", IPTags: []string{"private"}, DefaultGroupCode: "direct", Enabled: true, SortOrder: 10},
+	// 故意不使用 geoip:private —— MetaCubeX private.mrs 包含 198.18.0.0/15 (RFC2544),
+	// 与 Mihomo fake-ip 默认段重叠,会让 fake-ip 流量在 DOMAIN 规则之前就被识别为局域网走 DIRECT。
+	{Code: "private", DisplayName: "局域网", InlineIPCIDR: []string{
+		"0.0.0.0/8",
+		"10.0.0.0/8",
+		"100.64.0.0/10",
+		"127.0.0.0/8",
+		"169.254.0.0/16",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"224.0.0.0/4",
+		"255.255.255.255/32",
+		"::1/128",
+		"fc00::/7",
+		"fe80::/10",
+	}, DefaultGroupCode: "direct", Enabled: true, SortOrder: 10},
 	{Code: "location_cn", DisplayName: "Location:CN", SiteTags: []string{"cn"}, IPTags: []string{"cn"}, DefaultGroupCode: "direct", Enabled: true, SortOrder: 20},
 	{Code: "ad_block", DisplayName: "广告拦截", SiteTags: []string{"category-ads-all"}, DefaultGroupCode: "fallback", Enabled: false, SortOrder: 30},
 	{Code: "claude_ai", DisplayName: "Claude AI", SiteTags: []string{"anthropic"}, InlineDomainSuffix: []string{"claude.ai", "claude.com", "anthropic.com", "clau.de", "claudeusercontent.com", "claudemcpclient.com"}, DefaultGroupCode: "claude_ai", Enabled: true, SortOrder: 35},
