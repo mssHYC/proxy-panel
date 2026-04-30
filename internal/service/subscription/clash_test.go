@@ -118,6 +118,82 @@ func TestClashGenerator_DirectChinaIPRulesUseNoResolveAndValidYAML(t *testing.T)
 	}
 }
 
+// 防止 seed 退回 IPTags:["private"]：MetaCubeX private.mrs 含 198.18.0.0/15
+// (RFC2544)，与 Mihomo fake-ip 默认段重叠，会让 fake-ip 流量在 DOMAIN 规则
+// 之前就被识别为局域网走 DIRECT。系统预置必须用显式 InlineIPCIDR 列表。
+func TestSystemCategories_PrivateAvoidsFakeIPRange(t *testing.T) {
+	var private *routing.SystemCategory
+	for i := range routing.SystemCategories {
+		if routing.SystemCategories[i].Code == "private" {
+			private = &routing.SystemCategories[i]
+			break
+		}
+	}
+	if private == nil {
+		t.Fatalf("system category 'private' not found")
+	}
+	if len(private.IPTags) > 0 {
+		t.Errorf("private category must not use geoip rule-set IPTags (含 198.18.0.0/15)，got %v", private.IPTags)
+	}
+	if len(private.InlineIPCIDR) == 0 {
+		t.Fatalf("private category should declare InlineIPCIDR explicitly")
+	}
+	for _, c := range private.InlineIPCIDR {
+		if c == "198.18.0.0/15" || c == "198.18.0.0/16" {
+			t.Errorf("private CIDR list must not include fake-ip range %s", c)
+		}
+	}
+	mustHave := []string{"10.0.0.0/8", "127.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
+	for _, want := range mustHave {
+		found := false
+		for _, c := range private.InlineIPCIDR {
+			if c == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("private CIDR list missing %s", want)
+		}
+	}
+}
+
+// 配套渲染回归：当 plan 用 InlineIPCIDR 描述 private 时，Clash 输出必须是
+// IP-CIDR 行，而不是 RULE-SET,private-ip,... —— 后者会因 geoip:private 含
+// fake-ip 段把 claude.ai/claude.com 等 fake-ip 流量劫持到 DIRECT。
+func TestClashGenerator_PrivateRendersAsInlineCIDR(t *testing.T) {
+	g := &ClashGenerator{}
+	plan := &routing.Plan{
+		Groups: []routing.OutboundGroup{
+			{Code: "direct", DisplayName: "本地直连", Type: "selector", Members: []string{"DIRECT"}},
+			{Code: "node_select", DisplayName: "手动切换", Type: "selector", Members: []string{"DIRECT"}},
+		},
+		Rules: []routing.Rule{
+			{IPCIDR: []string{"10.0.0.0/8", "127.0.0.0/8", "192.168.0.0/16"}, Outbound: "direct"},
+		},
+		Final: "node_select",
+	}
+	content, _, err := g.GenerateWithPlan(plan, nil, &model.User{UUID: "00000000-0000-0000-0000-000000000000"}, "", "")
+	if err != nil {
+		t.Fatalf("GenerateWithPlan: %v", err)
+	}
+	if strings.Contains(content, "RULE-SET,private-ip") {
+		t.Errorf("rendered config must not contain RULE-SET,private-ip (会引入 198.18.0.0/15)\n%s", content)
+	}
+	if strings.Contains(content, "198.18.0.0/15") || strings.Contains(content, "198.18.0.0/16") {
+		t.Errorf("rendered config must not contain fake-ip range\n%s", content)
+	}
+	for _, want := range []string{
+		"IP-CIDR,10.0.0.0/8,本地直连,no-resolve",
+		"IP-CIDR,127.0.0.0/8,本地直连,no-resolve",
+		"IP-CIDR,192.168.0.0/16,本地直连,no-resolve",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("missing %q\n%s", want, content)
+		}
+	}
+}
+
 func TestClashGenerator_NoCustomDNSBlock(t *testing.T) {
 	// 面板不再为客户端注入 DNS 配置；让 Mihomo 用其内置默认 DNS。
 	content := clashGlobalPreamble
