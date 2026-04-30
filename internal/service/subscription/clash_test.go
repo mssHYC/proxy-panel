@@ -194,22 +194,23 @@ func TestClashGenerator_PrivateRendersAsInlineCIDR(t *testing.T) {
 	}
 }
 
-func TestClashGenerator_NoCustomDNSBlock(t *testing.T) {
-	// 面板不再为客户端注入 DNS 配置；让 Mihomo 用其内置默认 DNS。
+// TUN 模式下,Mihomo 必须靠 fake-ip + 反查映射才能让 DOMAIN 规则命中——
+// 没有 dns 块的话,fake-ip 反查不工作,流量按 IP 走规则,DOMAIN-SUFFIX
+// 永远跳过,常见症状是 claude.ai/claude.com 这类 fake-ip 流量在嗅探来不及
+// 时被某条 IP 规则带去 DIRECT。这里 pin 住几条关键字段,防止之后回退。
+func TestClashGenerator_DNSBlockEnablesFakeIPForTUN(t *testing.T) {
 	content := clashGlobalPreamble
-	mustNotContain := []string{
+	mustContain := []string{
 		"\ndns:",
-		"nameserver:",
-		"nameserver-policy:",
+		"enable: true",
+		"enhanced-mode: fake-ip",
+		"respect-rules: true",
 		"proxy-server-nameserver:",
-		"fallback:",
-		"fallback-filter:",
-		"fake-ip-range",
-		"enhanced-mode",
+		"nameserver-policy:",
 	}
-	for _, s := range mustNotContain {
-		if strings.Contains(content, s) {
-			t.Errorf("preamble 不应包含 DNS 自定义片段 %q\n preamble:\n%s", s, content)
+	for _, s := range mustContain {
+		if !strings.Contains(content, s) {
+			t.Errorf("preamble 缺少必要 DNS 字段 %q\npreamble:\n%s", s, content)
 		}
 	}
 }
