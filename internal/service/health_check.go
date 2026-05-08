@@ -14,7 +14,12 @@ import (
 	notify "proxy-panel/internal/service/notify"
 )
 
-const healthFailThreshold = 3
+const (
+	healthFailThreshold = 3
+	// healthCheckConcurrency 限制单轮探测的并发数，避免大量节点（尤其是 Hy2/TUIC
+	// QUIC 握手）瞬间挤爆 UDP socket / CPU / 出网带宽。
+	healthCheckConcurrency = 16
+)
 
 // HealthChecker 节点 TCP 健康检查
 type HealthChecker struct {
@@ -41,17 +46,14 @@ func (h *HealthChecker) CheckAll(ctx context.Context) error {
 		return fmt.Errorf("列出启用节点失败: %w", err)
 	}
 
+	sem := make(chan struct{}, healthCheckConcurrency)
 	var wg sync.WaitGroup
 	for i := range nodes {
-		// UDP/QUIC 协议无法通过 TCP 可靠探测（closed port 不回 ICMP 亦视为可达），
-		// 跳过以避免误报离线；前端按 protocol 显示为 "UDP"。
-		if isUDPProtocol(nodes[i].Protocol) {
-			h.clearStatus(nodes[i].ID)
-			continue
-		}
 		wg.Add(1)
+		sem <- struct{}{}
 		go func(n model.Node) {
 			defer wg.Done()
+			defer func() { <-sem }()
 			h.checkOne(ctx, &n)
 		}(nodes[i])
 	}
@@ -67,24 +69,26 @@ func isUDPProtocol(p string) bool {
 	return false
 }
 
-// clearStatus 把 UDP 类节点的历史误报清零，避免保留旧的 offline 状态。
-func (h *HealthChecker) clearStatus(id int64) {
-	if _, err := h.db.Exec(`UPDATE nodes
-		SET last_check_at = NULL, last_check_ok = 0, last_check_err = '', fail_count = 0
-		WHERE id = ? AND (last_check_at IS NOT NULL OR fail_count > 0)`, id); err != nil {
-		log.Printf("[健康检查] 清理 UDP 节点 %d 历史状态失败: %v", id, err)
+// dialOne 按协议执行一次探测：UDP 协议走 QUIC 握手，其余走 TCP connect。
+func (h *HealthChecker) dialOne(ctx context.Context, n *model.Node) error {
+	dctx, cancel := context.WithTimeout(ctx, h.timeout)
+	defer cancel()
+	if isUDPProtocol(n.Protocol) {
+		return probeQUIC(dctx, n.Host, n.Port)
 	}
+	dialer := &net.Dialer{Timeout: h.timeout}
+	addr := net.JoinHostPort(n.Host, strconv.Itoa(n.Port))
+	conn, err := dialer.DialContext(dctx, "tcp", addr)
+	if err != nil {
+		return err
+	}
+	conn.Close()
+	return nil
 }
 
 func (h *HealthChecker) checkOne(ctx context.Context, n *model.Node) {
-	dialer := &net.Dialer{Timeout: h.timeout}
-	addr := net.JoinHostPort(n.Host, strconv.Itoa(n.Port))
-	dctx, cancel := context.WithTimeout(ctx, h.timeout)
-	defer cancel()
-
-	conn, err := dialer.DialContext(dctx, "tcp", addr)
+	err := h.dialOne(ctx, n)
 	if err == nil {
-		conn.Close()
 		if _, uerr := h.db.Exec(`UPDATE nodes
 			SET last_check_at = ?, last_check_ok = 1, last_check_err = '', fail_count = 0
 			WHERE id = ?`, time.Now(), n.ID); uerr != nil {
