@@ -90,10 +90,20 @@ func (h *SubscriptionHandler) serve(c *gin.Context, userID int64, token string, 
 		return
 	}
 	if len(nodes) == 0 {
-		nodes, err = h.nodeSvc.ListEnabled()
-		if err != nil {
+		// 仅当用户从未配置任何显式授权（无套餐、user_nodes 空）时，回退到
+		// "全部启用节点"老兼容语义。已分配套餐 / 有过 user_nodes 的用户即便
+		// 解析后为空，也保持"无可用节点"，避免套餐失效 / 节点组为空等场景导致权限扩大。
+		hasAuth, herr := h.userSvc.HasExplicitNodeAuth(user.ID)
+		if herr != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "获取节点失败"})
 			return
+		}
+		if !hasAuth {
+			nodes, err = h.nodeSvc.ListEnabled()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "获取节点失败"})
+				return
+			}
 		}
 	}
 

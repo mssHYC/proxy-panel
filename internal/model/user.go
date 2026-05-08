@@ -23,4 +23,5 @@ type User struct {
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 	NodeIDs      []int64    `json:"node_ids"`
+	PlanID       *int64     `json:"plan_id"`
 }

@@ -48,6 +48,22 @@ func NewUserService(db *database.DB) *UserService {
 	return &UserService{db: db}
 }
 
+// HasExplicitNodeAuth 判断用户是否存在显式授权来源（曾被分配过套餐或
+// user_nodes 关联）。订阅 / kernel sync 据此区分"老部署兼容（NodeIDs 空 →
+// 全部节点）"与"已显式配置授权但解析为空（应当无可用节点）"。
+//
+// 读 users.restricted 列：该列在分配套餐 / 设置 user_nodes 时被置 1，
+// 而且永远不会被重置回 0——即使后续套餐被删除 / user_nodes 被清空，
+// 用户也不会重新落入老兼容"全部节点"兜底。
+func (s *UserService) HasExplicitNodeAuth(userID int64) (bool, error) {
+	var v bool
+	err := s.db.QueryRow(`SELECT restricted = 1 FROM users WHERE id = ?`, userID).Scan(&v)
+	if err != nil {
+		return false, err
+	}
+	return v, nil
+}
+
 // getNodeIDs 获取用户关联的节点 ID 列表
 func (s *UserService) getNodeIDs(userID int64) ([]int64, error) {
 	rows, err := s.db.Query("SELECT node_id FROM user_nodes WHERE user_id = ?", userID)
@@ -66,13 +82,20 @@ func (s *UserService) getNodeIDs(userID int64) ([]int64, error) {
 	return ids, nil
 }
 
-// setNodeIDs 设置用户关联的节点（先删后插）
+// setNodeIDs 设置用户关联的节点（先删后插）。
+// 当传入非空列表时永久置 users.restricted = 1，与套餐分配语义一致：
+// "曾经显式授权过节点"的用户不再退回到老兼容"全部节点"兜底。
 func (s *UserService) setNodeIDs(userID int64, nodeIDs []int64) error {
 	if _, err := s.db.Exec("DELETE FROM user_nodes WHERE user_id = ?", userID); err != nil {
 		return err
 	}
 	for _, nid := range nodeIDs {
 		if _, err := s.db.Exec("INSERT INTO user_nodes (user_id, node_id) VALUES (?, ?)", userID, nid); err != nil {
+			return err
+		}
+	}
+	if len(nodeIDs) > 0 {
+		if _, err := s.db.Exec("UPDATE users SET restricted = 1 WHERE id = ? AND restricted = 0", userID); err != nil {
 			return err
 		}
 	}
@@ -95,7 +118,7 @@ func (s *UserService) fillNodeIDs(users []model.User) error {
 func (s *UserService) List() ([]model.User, error) {
 	rows, err := s.db.Query(`SELECT id, uuid, username, password, email, protocol,
 		traffic_limit, traffic_used, traffic_up, traffic_down, speed_limit,
-		reset_day, reset_cron, enable, expires_at, warn_sent, created_at, updated_at
+		reset_day, reset_cron, enable, expires_at, warn_sent, plan_id, created_at, updated_at
 		FROM users ORDER BY id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("查询用户列表失败: %w", err)
@@ -123,7 +146,7 @@ func (s *UserService) List() ([]model.User, error) {
 func (s *UserService) GetByID(id int64) (*model.User, error) {
 	row := s.db.QueryRow(`SELECT id, uuid, username, password, email, protocol,
 		traffic_limit, traffic_used, traffic_up, traffic_down, speed_limit,
-		reset_day, reset_cron, enable, expires_at, warn_sent, created_at, updated_at
+		reset_day, reset_cron, enable, expires_at, warn_sent, plan_id, created_at, updated_at
 		FROM users WHERE id = ?`, id)
 
 	var u model.User
@@ -142,7 +165,7 @@ func (s *UserService) GetByID(id int64) (*model.User, error) {
 func (s *UserService) GetByUUID(uid string) (*model.User, error) {
 	row := s.db.QueryRow(`SELECT id, uuid, username, password, email, protocol,
 		traffic_limit, traffic_used, traffic_up, traffic_down, speed_limit,
-		reset_day, reset_cron, enable, expires_at, warn_sent, created_at, updated_at
+		reset_day, reset_cron, enable, expires_at, warn_sent, plan_id, created_at, updated_at
 		FROM users WHERE uuid = ?`, uid)
 
 	var u model.User
@@ -380,10 +403,18 @@ type scanner interface {
 }
 
 func scanUserFromScanner(s scanner, u *model.User) error {
-	return s.Scan(&u.ID, &u.UUID, &u.Username, &u.Password, &u.Email, &u.Protocol,
+	var planID sql.NullInt64
+	if err := s.Scan(&u.ID, &u.UUID, &u.Username, &u.Password, &u.Email, &u.Protocol,
 		&u.TrafficLimit, &u.TrafficUsed, &u.TrafficUp, &u.TrafficDown, &u.SpeedLimit,
-		&u.ResetDay, &u.ResetCron, &u.Enable, &u.ExpiresAt, &u.WarnSent,
-		&u.CreatedAt, &u.UpdatedAt)
+		&u.ResetDay, &u.ResetCron, &u.Enable, &u.ExpiresAt, &u.WarnSent, &planID,
+		&u.CreatedAt, &u.UpdatedAt); err != nil {
+		return err
+	}
+	if planID.Valid {
+		v := planID.Int64
+		u.PlanID = &v
+	}
+	return nil
 }
 
 func scanUser(rows *sql.Rows, u *model.User) error {

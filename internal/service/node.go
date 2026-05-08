@@ -281,15 +281,25 @@ func (s *NodeService) Count() (total int, enabled int, err error) {
 	return
 }
 
-// ListByUserID 获取用户关联的已启用节点（用于订阅生成）
+// ListByUserID 获取用户关联的已启用节点（用于订阅生成）。
+// 可见性 = user_nodes 直接关联 ∪ 套餐授权（user.plan_id → plan_node_groups → node_group_members）。
 func (s *NodeService) ListByUserID(userID int64) ([]model.Node, error) {
-	rows, err := s.db.Query(`SELECT n.id, n.name, n.host, n.port, n.protocol, n.transport,
+	rows, err := s.db.Query(`SELECT DISTINCT n.id, n.name, n.host, n.port, n.protocol, n.transport,
 		n.kernel_type, n.settings, n.enable, n.sort_order, n.created_at, n.updated_at,
 		n.last_check_at, n.last_check_ok, n.last_check_err, n.fail_count
 		FROM nodes n
-		INNER JOIN user_nodes un ON un.node_id = n.id
-		WHERE un.user_id = ? AND n.enable = 1
-		ORDER BY n.sort_order ASC, n.id ASC`, userID)
+		WHERE n.enable = 1 AND (
+			n.id IN (SELECT node_id FROM user_nodes WHERE user_id = ?)
+			OR n.id IN (
+				SELECT ngm.node_id
+				FROM users u
+				JOIN plans p ON p.id = u.plan_id AND p.enabled = 1
+				JOIN plan_node_groups png ON png.plan_id = p.id
+				JOIN node_group_members ngm ON ngm.node_group_id = png.node_group_id
+				WHERE u.id = ?
+			)
+		)
+		ORDER BY n.sort_order ASC, n.id ASC`, userID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("查询用户节点失败: %w", err)
 	}

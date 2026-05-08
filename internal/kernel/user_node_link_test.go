@@ -104,6 +104,13 @@ func TestUserLinkedToNode_Semantics(t *testing.T) {
 	if userLinkedToNode(linked, 7) {
 		t.Errorf("NodeIDs 不含 7 应为 false")
 	}
+
+	// Restricted=true 的用户即便 NodeIDs 空也不再兜底为 true，
+	// 否则套餐失效 / 节点组为空时会扩大权限。
+	restricted := UserConfig{UUID: "x", Restricted: true}
+	if userLinkedToNode(restricted, 5) {
+		t.Errorf("Restricted=true + NodeIDs 空必须为 false（无可用节点）")
+	}
 }
 
 // 回归：v1.1.15 引入的"NodeIDs 空 → false"导致老部署（user_nodes 表空）升级后

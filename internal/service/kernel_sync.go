@@ -188,8 +188,12 @@ func (s *KernelSyncService) loadNodes() ([]nodeRow, error) {
 //
 // 内核的 buildInbound 会据此只把用户注入到他关联的节点 inbound，严格对齐订阅
 // 侧的 ListByUserID(user_nodes JOIN) 可见性，避免跨协议节点 clients 为 null。
+//
+// Restricted 直接读 users.restricted 列：该列由 PlanService.AssignToUser /
+// UserService.setNodeIDs 在显式配置授权时永久置 1，删套餐 / 清空 user_nodes
+// 都不会回退，从根本上避免权限收紧后再次跌回"NodeIDs 空 → 全部节点"兜底。
 func (s *KernelSyncService) loadUsers() ([]kernel.UserConfig, error) {
-	rows, err := s.db.Query(`SELECT id, uuid, username, protocol, speed_limit
+	rows, err := s.db.Query(`SELECT id, uuid, username, protocol, speed_limit, restricted = 1
 		FROM users WHERE enable = 1`)
 	if err != nil {
 		return nil, err
@@ -204,7 +208,7 @@ func (s *KernelSyncService) loadUsers() ([]kernel.UserConfig, error) {
 	for rows.Next() {
 		var uid int64
 		var u kernel.UserConfig
-		if err := rows.Scan(&uid, &u.UUID, &u.Email, &u.Protocol, &u.SpeedLimit); err != nil {
+		if err := rows.Scan(&uid, &u.UUID, &u.Email, &u.Protocol, &u.SpeedLimit, &u.Restricted); err != nil {
 			return nil, err
 		}
 		list = append(list, userWithID{id: uid, conf: u})
@@ -331,9 +335,18 @@ func (s *KernelSyncService) loadEnabledNodesByIDs(ids []int64) ([]nodeRow, error
 	return out, rows.Err()
 }
 
-// loadUserNodeMap 读出 user_nodes 关联表，返回 user_id → []node_id 的映射
+// loadUserNodeMap 读出 user_nodes 直接关联 ∪ 套餐授权（user.plan_id → plan_node_groups → node_group_members）
+// 后的可见节点映射，返回 user_id → []node_id。同一节点重复出现会被去重。
 func (s *KernelSyncService) loadUserNodeMap() (map[int64][]int64, error) {
-	rows, err := s.db.Query(`SELECT user_id, node_id FROM user_nodes`)
+	rows, err := s.db.Query(`
+		SELECT user_id, node_id FROM user_nodes
+		UNION
+		SELECT u.id, ngm.node_id
+		FROM users u
+		JOIN plans p ON p.id = u.plan_id AND p.enabled = 1
+		JOIN plan_node_groups png ON png.plan_id = p.id
+		JOIN node_group_members ngm ON ngm.node_group_id = png.node_group_id
+	`)
 	if err != nil {
 		return nil, err
 	}

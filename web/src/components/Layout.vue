@@ -22,6 +22,14 @@
           <el-icon><Connection /></el-icon>
           <span>节点管理</span>
         </el-menu-item>
+        <el-menu-item index="/node-groups">
+          <el-icon><Grid /></el-icon>
+          <span>节点分组</span>
+        </el-menu-item>
+        <el-menu-item index="/plans">
+          <el-icon><Box /></el-icon>
+          <span>套餐管理</span>
+        </el-menu-item>
         <el-menu-item index="/traffic">
           <el-icon><DataLine /></el-icon>
           <span>流量统计</span>
@@ -56,7 +64,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Odometer, User, Connection, DataLine, Setting, SwitchButton, Document } from '@element-plus/icons-vue'
+import { Odometer, User, Connection, DataLine, Setting, SwitchButton, Document, Grid, Box } from '@element-plus/icons-vue'
 import { useAuthStore } from '../stores/auth'
 
 const route = useRoute()
@@ -67,6 +75,8 @@ const titleMap: Record<string, string> = {
   Dashboard: '仪表盘',
   Users: '用户管理',
   Nodes: '节点管理',
+  NodeGroups: '节点分组',
+  Plans: '套餐管理',
   Traffic: '流量统计',
   AuditLogs: '审计日志',
   Settings: '系统设置',

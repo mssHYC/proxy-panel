@@ -169,6 +169,37 @@ func (db *DB) migrate() error {
 			enabled_categories TEXT NOT NULL DEFAULT '[]'
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_custom_rules_sort ON custom_rules(sort_order)`,
+		`CREATE TABLE IF NOT EXISTS node_groups (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			sort_order INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS node_group_members (
+			node_group_id INTEGER NOT NULL,
+			node_id INTEGER NOT NULL,
+			PRIMARY KEY (node_group_id, node_id),
+			FOREIGN KEY (node_group_id) REFERENCES node_groups(id) ON DELETE CASCADE,
+			FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS plans (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			traffic_limit INTEGER NOT NULL DEFAULT 0,
+			duration_days INTEGER NOT NULL DEFAULT 0,
+			sort_order INTEGER NOT NULL DEFAULT 0,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS plan_node_groups (
+			plan_id INTEGER NOT NULL,
+			node_group_id INTEGER NOT NULL,
+			PRIMARY KEY (plan_id, node_group_id),
+			FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE CASCADE,
+			FOREIGN KEY (node_group_id) REFERENCES node_groups(id) ON DELETE CASCADE
+		)`,
 	}
 
 	for _, q := range queries {
@@ -199,6 +230,24 @@ func (db *DB) migrate() error {
 		return err
 	}
 	if err := db.addColumnIfNotExists("nodes", "fail_count", "INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfNotExists("users", "plan_id", "INTEGER"); err != nil {
+		return err
+	}
+	// users.restricted 持久化记录"该用户曾经被显式授权过节点"。
+	// 一旦置 1 就保留为 1（即使套餐被删除、user_nodes 被清空），避免老兼容
+	// "NodeIDs 空 → 全部节点" 兜底语义在权限收紧后再次生效导致权限扩大。
+	if err := db.addColumnIfNotExists("users", "restricted", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	// 幂等回填：当前 plan_id 非空、或在 user_nodes 中有过关联的用户都视为 restricted。
+	// 只把 0 升到 1，不会回退，对已是 1 的行是 no-op。
+	if _, err := db.Exec(`UPDATE users SET restricted = 1
+		WHERE restricted = 0 AND (
+			plan_id IS NOT NULL
+			OR id IN (SELECT DISTINCT user_id FROM user_nodes)
+		)`); err != nil {
 		return err
 	}
 	if err := db.seedRouting(); err != nil {
