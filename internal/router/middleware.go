@@ -39,8 +39,21 @@ func AuditMiddleware(audit *service.AuditService) gin.HandlerFunc {
 			actorStr = s
 		}
 		action := m + " " + path
-		_ = audit.Log(actorStr, action, "", c.Param("id"), c.ClientIP(), "")
+		_ = audit.Log(actorStr, action, deriveTargetType(path), c.Param("id"), c.ClientIP(), "")
 	}
+}
+
+// deriveTargetType 从 URL 路径中粗略提取资源类型，用于审计日志的 target_type 列。
+// e.g. /api/users/3 → "users"; /api/nodes → "nodes"
+func deriveTargetType(path string) string {
+	p := strings.TrimPrefix(path, "/api/")
+	if p == path {
+		return ""
+	}
+	if i := strings.Index(p, "/"); i >= 0 {
+		return p[:i]
+	}
+	return p
 }
 
 // MetricsMiddleware 统计 HTTP 请求数到 Prometheus。为避免标签高基数爆炸，

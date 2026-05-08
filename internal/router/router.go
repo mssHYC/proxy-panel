@@ -162,6 +162,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 
 			// 审计日志
 			auth.GET("/audit-logs", auditHandler.List)
+			auth.GET("/audit-logs/export", auditHandler.Export)
 
 			// 备份/恢复
 			auth.GET("/backup/export", backupHandler.Export)
