@@ -1,6 +1,8 @@
 package service
 
 import (
+	"strings"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -53,18 +55,21 @@ var (
 		Help: "内核同步失败计数",
 	}, []string{"kernel", "reason"})
 
-	// UserTrafficBytes 用户累计上下行字节（由 traffic collector 增量更新）。
-	// direction ∈ up/down
-	UserTrafficBytes = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "proxy_panel_user_traffic_bytes_total",
-		Help: "用户累计流量字节",
-	}, []string{"user", "direction"})
-
-	// NodeTrafficBytes 节点累计上下行字节
+	// NodeTrafficBytes 节点累计上下行字节。
+	// 不导出 username 维度——username 可能是邮箱/手机号/真名，
+	// 暴露到 /metrics 等于把敏感数据扩散到 Prometheus / Grafana；
+	// 同时用户数会随增删改名长期累积，制造高基数 time series。
+	// 节点维度用 node_id 数字，基数与节点数同阶且无敏感信息。
 	NodeTrafficBytes = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "proxy_panel_node_traffic_bytes_total",
 		Help: "节点累计流量字节",
 	}, []string{"node", "direction"})
+
+	// ServerTrafficBytes 全局上下行字节，用作单机/小集群场景下的总量观测
+	ServerTrafficBytes = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "proxy_panel_server_traffic_bytes_total",
+		Help: "面板累计流量字节（所有用户/节点求和）",
+	}, []string{"direction"})
 )
 
 // known subscription client labels（白名单，未识别归一为 unknown 防止标签基数爆炸）。
@@ -77,10 +82,12 @@ var knownSubscriptionClients = map[string]struct{}{
 	"shadowrocket": {},
 }
 
-// NormalizeSubscriptionClient 将订阅 format 字符串归一化为标签值
+// NormalizeSubscriptionClient 将订阅 format 字符串归一化为标签值。
+// 大小写不敏感、自动 trim，未识别归一为 unknown。
 func NormalizeSubscriptionClient(format string) string {
-	if _, ok := knownSubscriptionClients[format]; ok {
-		return format
+	f := strings.ToLower(strings.TrimSpace(format))
+	if _, ok := knownSubscriptionClients[f]; ok {
+		return f
 	}
 	return "unknown"
 }

@@ -110,11 +110,11 @@
     },
     {
       "type": "timeseries",
-      "title": "Top 10 用户流量速率",
+      "title": "面板全局流量速率",
       "datasource": {"type": "prometheus", "uid": "prometheus"},
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 28},
       "targets": [
-        {"expr": "topk(10, sum by (user) (rate(proxy_panel_user_traffic_bytes_total[1m])))", "legendFormat": "{{user}}", "refId": "A"}
+        {"expr": "sum by (direction) (rate(proxy_panel_server_traffic_bytes_total[1m]))", "legendFormat": "{{direction}}", "refId": "A"}
       ],
       "fieldConfig": {"defaults": {"unit": "Bps"}}
     },

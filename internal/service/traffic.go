@@ -92,9 +92,9 @@ func (s *TrafficService) Collect() error {
 			log.Printf("插入流量日志失败 user_id=%d node_id=%d: %v", userID, nodeID, err)
 		}
 
-		// Prometheus 指标：用户 / 节点维度累计字节
-		UserTrafficBytes.WithLabelValues(st.Username, "up").Add(float64(st.Upload))
-		UserTrafficBytes.WithLabelValues(st.Username, "down").Add(float64(st.Download))
+		// Prometheus 指标：节点 / 全局累计字节（不导出 username 标签，避免 PII 与高基数）
+		ServerTrafficBytes.WithLabelValues("up").Add(float64(st.Upload))
+		ServerTrafficBytes.WithLabelValues("down").Add(float64(st.Download))
 		if nodeID > 0 {
 			nodeLabel := strconv.FormatInt(nodeID, 10)
 			NodeTrafficBytes.WithLabelValues(nodeLabel, "up").Add(float64(st.Upload))
