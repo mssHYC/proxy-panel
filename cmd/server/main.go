@@ -84,10 +84,23 @@ func main() {
 	}
 	nodeSvc := service.NewNodeService(db, fwSvc)
 
-	// 设置服务器流量限额
+	// 服务器流量限额：config 仅作首次启动的初始值；
+	// 用 settings.traffic.server_limit_seeded 作为哨兵，确保只 seed 一次，
+	// 之后用户在 UI 改成任何值（包括 0 = 不限速）都不会被 config 覆盖。
 	if cfg.Traffic.ServerLimitGB > 0 {
-		if err := trafficSvc.SetServerLimit(int64(cfg.Traffic.ServerLimitGB)); err != nil {
-			log.Printf("设置服务器流量限额失败: %v", err)
+		var seeded string
+		db.QueryRow(`SELECT value FROM settings WHERE key = 'traffic.server_limit_seeded'`).Scan(&seeded)
+		if seeded != "1" {
+			st, _ := trafficSvc.GetServerTraffic()
+			// 老版本升级：已经在 UI 设置过 limit_bytes>0 的部署，仅补写哨兵，
+			// 不再用 config 覆盖。新部署 limit_bytes=0 则正常 seed。
+			if st != nil && st.LimitBytes > 0 {
+				db.Exec(`INSERT OR REPLACE INTO settings (key, value) VALUES ('traffic.server_limit_seeded', '1')`)
+			} else if err := trafficSvc.SetServerLimit(int64(cfg.Traffic.ServerLimitGB)); err != nil {
+				log.Printf("设置服务器流量限额失败: %v", err)
+			} else {
+				db.Exec(`INSERT OR REPLACE INTO settings (key, value) VALUES ('traffic.server_limit_seeded', '1')`)
+			}
 		}
 	}
 
