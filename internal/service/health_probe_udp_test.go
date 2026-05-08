@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"math/big"
 	"net"
 	"testing"
@@ -86,6 +87,56 @@ func TestProbeQUIC_OnlineALPNMismatch(t *testing.T) {
 	defer cancel()
 	if err := probeQUIC(ctx, "127.0.0.1", addr.Port); err != nil {
 		t.Fatalf("ALPN 不匹配也应识别为在线，但返回错误: %v", err)
+	}
+}
+
+func TestProbeQUIC_OfflineDNSFail(t *testing.T) {
+	// DNS 解析失败应当判离线，而不是因为"非 timeout"被误判在线。
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := probeQUIC(ctx, "no-such-host.invalid.example.test.", 443)
+	if err == nil {
+		t.Fatalf("DNS 失败应返回离线错误")
+	}
+}
+
+func TestIsQUICServerReplyErr_NetworkErrorsAreOffline(t *testing.T) {
+	// *net.OpError / *net.DNSError / 系统级网络错误 / ctx 超时一律判离线。
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"net.OpError dial", &net.OpError{Op: "dial", Net: "udp", Err: errors.New("connection refused")}},
+		{"net.DNSError", &net.DNSError{Err: "no such host", Name: "x.invalid"}},
+		{"plain string err", errors.New("network is unreachable")},
+		{"context deadline", context.DeadlineExceeded},
+		{"context canceled", context.Canceled},
+		{"quic IdleTimeout", &quic.IdleTimeoutError{}},
+		{"quic HandshakeTimeout", &quic.HandshakeTimeoutError{}},
+	}
+	for _, tc := range cases {
+		if isQUICServerReplyErr(tc.err) {
+			t.Errorf("%s 应判离线，但被识别为在线: %v", tc.name, tc.err)
+		}
+	}
+}
+
+func TestIsQUICServerReplyErr_QUICReplyErrorsAreOnline(t *testing.T) {
+	// 真正来自服务器的 QUIC 错误必须识别为在线。
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"TransportError remote", &quic.TransportError{Remote: true, ErrorCode: 0x178}}, // CRYPTO_ERROR + alert
+		{"TransportError local crypto", &quic.TransportError{Remote: false, ErrorCode: 0x100}},
+		{"ApplicationError", &quic.ApplicationError{Remote: true, ErrorCode: 1}},
+		{"VersionNegotiationError", &quic.VersionNegotiationError{}},
+		{"StatelessResetError", &quic.StatelessResetError{}},
+	}
+	for _, tc := range cases {
+		if !isQUICServerReplyErr(tc.err) {
+			t.Errorf("%s 应判在线，但被识别为离线: %v", tc.name, tc.err)
+		}
 	}
 }
 

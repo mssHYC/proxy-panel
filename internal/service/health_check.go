@@ -14,7 +14,12 @@ import (
 	notify "proxy-panel/internal/service/notify"
 )
 
-const healthFailThreshold = 3
+const (
+	healthFailThreshold = 3
+	// healthCheckConcurrency 限制单轮探测的并发数，避免大量节点（尤其是 Hy2/TUIC
+	// QUIC 握手）瞬间挤爆 UDP socket / CPU / 出网带宽。
+	healthCheckConcurrency = 16
+)
 
 // HealthChecker 节点 TCP 健康检查
 type HealthChecker struct {
@@ -41,11 +46,14 @@ func (h *HealthChecker) CheckAll(ctx context.Context) error {
 		return fmt.Errorf("列出启用节点失败: %w", err)
 	}
 
+	sem := make(chan struct{}, healthCheckConcurrency)
 	var wg sync.WaitGroup
 	for i := range nodes {
 		wg.Add(1)
+		sem <- struct{}{}
 		go func(n model.Node) {
 			defer wg.Done()
+			defer func() { <-sem }()
 			h.checkOne(ctx, &n)
 		}(nodes[i])
 	}

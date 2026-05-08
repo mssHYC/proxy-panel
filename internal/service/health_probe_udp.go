@@ -12,9 +12,13 @@ import (
 
 // probeQUIC 探测目标是否在监听 QUIC（Hysteria2 / TUIC）。
 //
-// 思路：发起一次最小握手，所有"服务器有回包"的结果都视为在线，包括 ALPN 不匹配、
-// 证书拒绝等 CRYPTO 错误；只有 idle / handshake timeout / ctx 超时才视为离线。
-// 这样可以在不知道 server cert / ALPN 的前提下判断 QUIC 端口可达性。
+// 仅当能正向证明"服务器有 QUIC 回包"（握手成功 / 远端发回 CRYPTO_ERROR / 应用层
+// CONNECTION_CLOSE / Version Negotiation / Stateless Reset）时返回 nil；
+// 其余错误（idle/handshake timeout、ctx 超时、DNS 失败、系统级网络错误如
+// ECONNREFUSED/ENETUNREACH/EHOSTUNREACH）一律视为离线。
+//
+// 注意：QUIC 探测只确认目标 UDP 端口上有 QUIC 服务在响应，不验证 Hy2/TUIC
+// 的账号/密码/业务可用性。
 //
 // 调用方负责传入带 timeout 的 ctx。
 func probeQUIC(ctx context.Context, host string, port int) error {
@@ -34,22 +38,33 @@ func probeQUIC(ctx context.Context, host string, port int) error {
 	return err
 }
 
-// isQUICServerReplyErr 判断 dial 失败是否由"服务器有回包"引起。
-// 仅 IdleTimeout / HandshakeTimeout / context 超时视为无回包（离线）。
+// isQUICServerReplyErr 仅当错误本身能证明"服务器有回包"时才返回 true。
+// 用正向白名单（quic.TransportError / ApplicationError / VersionNegotiationError /
+// StatelessResetError）判断，避免把本地 DNS、network unreachable、UDP port
+// unreachable 等错误误判为在线。
+//
+// TransportError 既覆盖远端 CRYPTO_ERROR（ALPN mismatch、服务器主动 close），
+// 也覆盖本地 TLS 验证产生的 CRYPTO_ERROR；后者意味着我们已经从服务器收到
+// 证书消息，因此同样属于"有回包"。
 func isQUICServerReplyErr(err error) bool {
 	if err == nil {
 		return true
 	}
-	var idle *quic.IdleTimeoutError
-	if errors.As(err, &idle) {
-		return false
+	var tErr *quic.TransportError
+	if errors.As(err, &tErr) {
+		return true
 	}
-	var hs *quic.HandshakeTimeoutError
-	if errors.As(err, &hs) {
-		return false
+	var aErr *quic.ApplicationError
+	if errors.As(err, &aErr) {
+		return true
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return false
+	var vErr *quic.VersionNegotiationError
+	if errors.As(err, &vErr) {
+		return true
 	}
-	return true
+	var sErr *quic.StatelessResetError
+	if errors.As(err, &sErr) {
+		return true
+	}
+	return false
 }

@@ -611,8 +611,12 @@ function getSecurity(row: any): string {
 function protocolColor(p: string) { return ({ vless: '', vmess: 'success', trojan: 'warning', ss: 'danger', hysteria2: 'info' } as any)[p] || '' }
 function healthTooltip(row: any) {
   const t = row.last_check_at ? new Date(row.last_check_at).toLocaleString() : '-'
-  if (row.last_check_ok) return `最近检测: ${t}`
-  return `最近检测: ${t}\n失败次数: ${row.fail_count}\n错误: ${row.last_check_err || '-'}`
+  const isQUIC = row.protocol === 'hysteria2' || row.protocol === 'hy2' || row.protocol === 'tuic'
+  const note = isQUIC
+    ? '\n注: QUIC 仅探测端口可达性，未验证账号/密码/业务可用性'
+    : ''
+  if (row.last_check_ok) return `最近检测: ${t}${note}`
+  return `最近检测: ${t}\n失败次数: ${row.fail_count}\n错误: ${row.last_check_err || '-'}${note}`
 }
 function securityColor(s: string) { return s === 'tls' ? 'success' : s === 'reality' ? 'warning' : 'info' }
 
