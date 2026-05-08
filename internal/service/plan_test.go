@@ -92,13 +92,13 @@ func TestPlanVisibility_UnionUserNodesAndPlanGroups(t *testing.T) {
 func TestKernelSync_RestrictedFlagOnPlanUser(t *testing.T) {
 	db := openSyncTestDB(t)
 
-	// 用户 A：分配了一个空套餐 → NodeIDs 空但 Restricted=true
+	// 用户 A：通过 PlanService.AssignToUser 分配一个空套餐 → NodeIDs 空但 Restricted=true
 	resA, _ := db.Exec(`INSERT INTO users (uuid, username, protocol, enable) VALUES ('a', 'alice', 'vless', 1)`)
 	uidA, _ := resA.LastInsertId()
 	resP, _ := db.Exec(`INSERT INTO plans (name, enabled) VALUES ('p_empty', 1)`)
 	pid, _ := resP.LastInsertId()
-	if _, err := db.Exec(`UPDATE users SET plan_id = ? WHERE id = ?`, pid, uidA); err != nil {
-		t.Fatalf("set plan_id: %v", err)
+	if err := NewPlanService(db).AssignToUser(uidA, &AssignPlanReq{PlanID: &pid}); err != nil {
+		t.Fatalf("AssignToUser: %v", err)
 	}
 
 	// 用户 B：从未配置授权 → Restricted=false（保留老兼容）
@@ -142,6 +142,57 @@ func TestPlanService_DeleteCascadesPlanID(t *testing.T) {
 	}
 	if planID != nil {
 		t.Errorf("删除套餐后 users.plan_id 必须为 NULL，得 %d", *planID)
+	}
+}
+
+// TestPlanService_DeleteDoesNotGrantAllNodes 回归：仅通过套餐授权的用户，
+// 套餐被删除后 plan_id 被 NULL 化，但 users.restricted 必须保留为 1，
+// 避免订阅 / kernel sync 把"plan_id NULL && user_nodes 空"再次解释为
+// 老兼容"全部节点"兜底，重新打开权限扩大通道。
+func TestPlanService_DeleteDoesNotGrantAllNodes(t *testing.T) {
+	db := openSyncTestDB(t)
+	resU, _ := db.Exec(`INSERT INTO users (uuid, username, protocol, enable) VALUES ('u', 'alice', 'vless', 1)`)
+	uid, _ := resU.LastInsertId()
+	resP, _ := db.Exec(`INSERT INTO plans (name, traffic_limit, duration_days, enabled) VALUES ('p1', 0, 0, 1)`)
+	pid, _ := resP.LastInsertId()
+
+	svc := NewPlanService(db)
+	if err := svc.AssignToUser(uid, &AssignPlanReq{PlanID: &pid}); err != nil {
+		t.Fatalf("AssignToUser: %v", err)
+	}
+	if err := svc.Delete(pid); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	// 删套餐后用户应：plan_id NULL、user_nodes 仍为空、但 restricted=1。
+	usrSvc := NewUserService(db)
+	hasAuth, err := usrSvc.HasExplicitNodeAuth(uid)
+	if err != nil {
+		t.Fatalf("HasExplicitNodeAuth: %v", err)
+	}
+	if !hasAuth {
+		t.Fatalf("删套餐后用户的 restricted 标记必须保留，否则会触发 fallback 全部节点")
+	}
+
+	// 同时 kernel sync 也必须把该用户视为 Restricted，NodeIDs 空 → 不再注入任何 inbound。
+	users, err := NewKernelSyncService(db, nil).loadUsers()
+	if err != nil {
+		t.Fatalf("loadUsers: %v", err)
+	}
+	var found bool
+	for _, u := range users {
+		if u.UUID == "u" {
+			found = true
+			if !u.Restricted {
+				t.Errorf("kernel sync 视角下，被删套餐的用户必须保留 Restricted=true，得 %+v", u)
+			}
+			if len(u.NodeIDs) != 0 {
+				t.Errorf("用户应无可用节点，得 %v", u.NodeIDs)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("loadUsers 没返回用户 u")
 	}
 }
 

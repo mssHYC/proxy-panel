@@ -48,14 +48,16 @@ func NewUserService(db *database.DB) *UserService {
 	return &UserService{db: db}
 }
 
-// HasExplicitNodeAuth 判断用户是否存在显式授权来源：分配过套餐 (plan_id != null)
-// 或在 user_nodes 中有任何关联。订阅 / kernel sync 据此区分"老部署兼容
-// （NodeIDs 空 → 全部节点）"与"已显式配置授权但解析为空（应当无可用节点）"。
+// HasExplicitNodeAuth 判断用户是否存在显式授权来源（曾被分配过套餐或
+// user_nodes 关联）。订阅 / kernel sync 据此区分"老部署兼容（NodeIDs 空 →
+// 全部节点）"与"已显式配置授权但解析为空（应当无可用节点）"。
+//
+// 读 users.restricted 列：该列在分配套餐 / 设置 user_nodes 时被置 1，
+// 而且永远不会被重置回 0——即使后续套餐被删除 / user_nodes 被清空，
+// 用户也不会重新落入老兼容"全部节点"兜底。
 func (s *UserService) HasExplicitNodeAuth(userID int64) (bool, error) {
 	var v bool
-	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM user_nodes WHERE user_id = ?)
-		OR EXISTS(SELECT 1 FROM users WHERE id = ? AND plan_id IS NOT NULL)`,
-		userID, userID).Scan(&v)
+	err := s.db.QueryRow(`SELECT restricted = 1 FROM users WHERE id = ?`, userID).Scan(&v)
 	if err != nil {
 		return false, err
 	}
@@ -80,13 +82,20 @@ func (s *UserService) getNodeIDs(userID int64) ([]int64, error) {
 	return ids, nil
 }
 
-// setNodeIDs 设置用户关联的节点（先删后插）
+// setNodeIDs 设置用户关联的节点（先删后插）。
+// 当传入非空列表时永久置 users.restricted = 1，与套餐分配语义一致：
+// "曾经显式授权过节点"的用户不再退回到老兼容"全部节点"兜底。
 func (s *UserService) setNodeIDs(userID int64, nodeIDs []int64) error {
 	if _, err := s.db.Exec("DELETE FROM user_nodes WHERE user_id = ?", userID); err != nil {
 		return err
 	}
 	for _, nid := range nodeIDs {
 		if _, err := s.db.Exec("INSERT INTO user_nodes (user_id, node_id) VALUES (?, ?)", userID, nid); err != nil {
+			return err
+		}
+	}
+	if len(nodeIDs) > 0 {
+		if _, err := s.db.Exec("UPDATE users SET restricted = 1 WHERE id = ? AND restricted = 0", userID); err != nil {
 			return err
 		}
 	}

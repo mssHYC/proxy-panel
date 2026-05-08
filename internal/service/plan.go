@@ -199,7 +199,9 @@ func (s *PlanService) AssignToUser(userID int64, req *AssignPlanReq) error {
 	}
 
 	now := time.Now()
-	sets := []string{"plan_id = ?", "updated_at = ?"}
+	// 一旦分配过套餐，永久置 restricted = 1（即使后续套餐被删 / 解绑，
+	// 也保留"曾经显式授权"语义，避免回退到老兼容"全部节点"兜底）。
+	sets := []string{"plan_id = ?", "restricted = 1", "updated_at = ?"}
 	args := []interface{}{plan.ID, now}
 	if resetTraffic {
 		sets = append(sets, "traffic_limit = ?", "traffic_used = 0", "traffic_up = 0", "traffic_down = 0", "warn_sent = 0")

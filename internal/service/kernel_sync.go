@@ -189,11 +189,11 @@ func (s *KernelSyncService) loadNodes() ([]nodeRow, error) {
 // 内核的 buildInbound 会据此只把用户注入到他关联的节点 inbound，严格对齐订阅
 // 侧的 ListByUserID(user_nodes JOIN) 可见性，避免跨协议节点 clients 为 null。
 //
-// Restricted 标记用户是否存在显式授权来源（plan_id 非空，或 user_nodes 中曾配置过）。
-// 该字段供 userLinkedToNode 在 NodeIDs 为空时区分"老部署兼容（fallback 全部节点）"
-// 与"已分配套餐但无有效授权（显式无可用节点）"。
+// Restricted 直接读 users.restricted 列：该列由 PlanService.AssignToUser /
+// UserService.setNodeIDs 在显式配置授权时永久置 1，删套餐 / 清空 user_nodes
+// 都不会回退，从根本上避免权限收紧后再次跌回"NodeIDs 空 → 全部节点"兜底。
 func (s *KernelSyncService) loadUsers() ([]kernel.UserConfig, error) {
-	rows, err := s.db.Query(`SELECT id, uuid, username, protocol, speed_limit, plan_id IS NOT NULL
+	rows, err := s.db.Query(`SELECT id, uuid, username, protocol, speed_limit, restricted = 1
 		FROM users WHERE enable = 1`)
 	if err != nil {
 		return nil, err
@@ -208,11 +208,9 @@ func (s *KernelSyncService) loadUsers() ([]kernel.UserConfig, error) {
 	for rows.Next() {
 		var uid int64
 		var u kernel.UserConfig
-		var hasPlan bool
-		if err := rows.Scan(&uid, &u.UUID, &u.Email, &u.Protocol, &u.SpeedLimit, &hasPlan); err != nil {
+		if err := rows.Scan(&uid, &u.UUID, &u.Email, &u.Protocol, &u.SpeedLimit, &u.Restricted); err != nil {
 			return nil, err
 		}
-		u.Restricted = hasPlan
 		list = append(list, userWithID{id: uid, conf: u})
 	}
 	if err := rows.Err(); err != nil {
@@ -225,31 +223,10 @@ func (s *KernelSyncService) loadUsers() ([]kernel.UserConfig, error) {
 		return nil, err
 	}
 
-	// 一次性拉所有"在 user_nodes 表里出现过的 user_id"，作为 Restricted 判断的另一个来源。
-	directRows, err := s.db.Query(`SELECT DISTINCT user_id FROM user_nodes`)
-	if err != nil {
-		return nil, err
-	}
-	defer directRows.Close()
-	hasDirect := make(map[int64]bool)
-	for directRows.Next() {
-		var uid int64
-		if err := directRows.Scan(&uid); err != nil {
-			return nil, err
-		}
-		hasDirect[uid] = true
-	}
-	if err := directRows.Err(); err != nil {
-		return nil, err
-	}
-
 	users := make([]kernel.UserConfig, 0, len(list))
 	for _, item := range list {
 		u := item.conf
 		u.NodeIDs = nodeMap[item.id]
-		if hasDirect[item.id] {
-			u.Restricted = true
-		}
 		users = append(users, u)
 	}
 	return users, nil

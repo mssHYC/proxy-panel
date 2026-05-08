@@ -235,6 +235,21 @@ func (db *DB) migrate() error {
 	if err := db.addColumnIfNotExists("users", "plan_id", "INTEGER"); err != nil {
 		return err
 	}
+	// users.restricted 持久化记录"该用户曾经被显式授权过节点"。
+	// 一旦置 1 就保留为 1（即使套餐被删除、user_nodes 被清空），避免老兼容
+	// "NodeIDs 空 → 全部节点" 兜底语义在权限收紧后再次生效导致权限扩大。
+	if err := db.addColumnIfNotExists("users", "restricted", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	// 幂等回填：当前 plan_id 非空、或在 user_nodes 中有过关联的用户都视为 restricted。
+	// 只把 0 升到 1，不会回退，对已是 1 的行是 no-op。
+	if _, err := db.Exec(`UPDATE users SET restricted = 1
+		WHERE restricted = 0 AND (
+			plan_id IS NOT NULL
+			OR id IN (SELECT DISTINCT user_id FROM user_nodes)
+		)`); err != nil {
+		return err
+	}
 	if err := db.seedRouting(); err != nil {
 		return err
 	}
