@@ -331,9 +331,18 @@ func (s *KernelSyncService) loadEnabledNodesByIDs(ids []int64) ([]nodeRow, error
 	return out, rows.Err()
 }
 
-// loadUserNodeMap 读出 user_nodes 关联表，返回 user_id → []node_id 的映射
+// loadUserNodeMap 读出 user_nodes 直接关联 ∪ 套餐授权（user.plan_id → plan_node_groups → node_group_members）
+// 后的可见节点映射，返回 user_id → []node_id。同一节点重复出现会被去重。
 func (s *KernelSyncService) loadUserNodeMap() (map[int64][]int64, error) {
-	rows, err := s.db.Query(`SELECT user_id, node_id FROM user_nodes`)
+	rows, err := s.db.Query(`
+		SELECT user_id, node_id FROM user_nodes
+		UNION
+		SELECT u.id, ngm.node_id
+		FROM users u
+		JOIN plans p ON p.id = u.plan_id AND p.enabled = 1
+		JOIN plan_node_groups png ON png.plan_id = p.id
+		JOIN node_group_members ngm ON ngm.node_group_id = png.node_group_id
+	`)
 	if err != nil {
 		return nil, err
 	}

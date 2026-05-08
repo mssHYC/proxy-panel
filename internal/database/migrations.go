@@ -169,6 +169,37 @@ func (db *DB) migrate() error {
 			enabled_categories TEXT NOT NULL DEFAULT '[]'
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_custom_rules_sort ON custom_rules(sort_order)`,
+		`CREATE TABLE IF NOT EXISTS node_groups (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			sort_order INTEGER NOT NULL DEFAULT 0,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS node_group_members (
+			node_group_id INTEGER NOT NULL,
+			node_id INTEGER NOT NULL,
+			PRIMARY KEY (node_group_id, node_id),
+			FOREIGN KEY (node_group_id) REFERENCES node_groups(id) ON DELETE CASCADE,
+			FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS plans (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			traffic_limit INTEGER NOT NULL DEFAULT 0,
+			duration_days INTEGER NOT NULL DEFAULT 0,
+			sort_order INTEGER NOT NULL DEFAULT 0,
+			enabled INTEGER NOT NULL DEFAULT 1,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS plan_node_groups (
+			plan_id INTEGER NOT NULL,
+			node_group_id INTEGER NOT NULL,
+			PRIMARY KEY (plan_id, node_group_id),
+			FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE CASCADE,
+			FOREIGN KEY (node_group_id) REFERENCES node_groups(id) ON DELETE CASCADE
+		)`,
 	}
 
 	for _, q := range queries {
@@ -199,6 +230,9 @@ func (db *DB) migrate() error {
 		return err
 	}
 	if err := db.addColumnIfNotExists("nodes", "fail_count", "INTEGER DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := db.addColumnIfNotExists("users", "plan_id", "INTEGER"); err != nil {
 		return err
 	}
 	if err := db.seedRouting(); err != nil {

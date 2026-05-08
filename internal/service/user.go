@@ -95,7 +95,7 @@ func (s *UserService) fillNodeIDs(users []model.User) error {
 func (s *UserService) List() ([]model.User, error) {
 	rows, err := s.db.Query(`SELECT id, uuid, username, password, email, protocol,
 		traffic_limit, traffic_used, traffic_up, traffic_down, speed_limit,
-		reset_day, reset_cron, enable, expires_at, warn_sent, created_at, updated_at
+		reset_day, reset_cron, enable, expires_at, warn_sent, plan_id, created_at, updated_at
 		FROM users ORDER BY id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("查询用户列表失败: %w", err)
@@ -123,7 +123,7 @@ func (s *UserService) List() ([]model.User, error) {
 func (s *UserService) GetByID(id int64) (*model.User, error) {
 	row := s.db.QueryRow(`SELECT id, uuid, username, password, email, protocol,
 		traffic_limit, traffic_used, traffic_up, traffic_down, speed_limit,
-		reset_day, reset_cron, enable, expires_at, warn_sent, created_at, updated_at
+		reset_day, reset_cron, enable, expires_at, warn_sent, plan_id, created_at, updated_at
 		FROM users WHERE id = ?`, id)
 
 	var u model.User
@@ -142,7 +142,7 @@ func (s *UserService) GetByID(id int64) (*model.User, error) {
 func (s *UserService) GetByUUID(uid string) (*model.User, error) {
 	row := s.db.QueryRow(`SELECT id, uuid, username, password, email, protocol,
 		traffic_limit, traffic_used, traffic_up, traffic_down, speed_limit,
-		reset_day, reset_cron, enable, expires_at, warn_sent, created_at, updated_at
+		reset_day, reset_cron, enable, expires_at, warn_sent, plan_id, created_at, updated_at
 		FROM users WHERE uuid = ?`, uid)
 
 	var u model.User
@@ -380,10 +380,18 @@ type scanner interface {
 }
 
 func scanUserFromScanner(s scanner, u *model.User) error {
-	return s.Scan(&u.ID, &u.UUID, &u.Username, &u.Password, &u.Email, &u.Protocol,
+	var planID sql.NullInt64
+	if err := s.Scan(&u.ID, &u.UUID, &u.Username, &u.Password, &u.Email, &u.Protocol,
 		&u.TrafficLimit, &u.TrafficUsed, &u.TrafficUp, &u.TrafficDown, &u.SpeedLimit,
-		&u.ResetDay, &u.ResetCron, &u.Enable, &u.ExpiresAt, &u.WarnSent,
-		&u.CreatedAt, &u.UpdatedAt)
+		&u.ResetDay, &u.ResetCron, &u.Enable, &u.ExpiresAt, &u.WarnSent, &planID,
+		&u.CreatedAt, &u.UpdatedAt); err != nil {
+		return err
+	}
+	if planID.Valid {
+		v := planID.Int64
+		u.PlanID = &v
+	}
+	return nil
 }
 
 func scanUser(rows *sql.Rows, u *model.User) error {

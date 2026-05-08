@@ -62,13 +62,23 @@
         </template>
       </el-table-column>
 
-      <el-table-column label="操作" width="240" fixed="right">
+      <el-table-column label="套餐" width="160">
+        <template #default="{ row }">
+          <span v-if="planNameMap[row.plan_id]">{{ planNameMap[row.plan_id] }}</span>
+          <span v-else class="text-gray-400">—</span>
+        </template>
+      </el-table-column>
+
+      <el-table-column label="操作" width="290" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="openSub(row)" title="订阅">
             <el-icon><Link /></el-icon>
           </el-button>
           <el-button size="small" @click="openEdit(row)" title="编辑">
             <el-icon><Edit /></el-icon>
+          </el-button>
+          <el-button size="small" @click="openAssignPlan(row)" title="分配套餐">
+            <el-icon><Box /></el-icon>
           </el-button>
           <el-button size="small" @click="handleResetTraffic(row)" title="重置流量">
             <el-icon><Refresh /></el-icon>
@@ -79,6 +89,29 @@
         </template>
       </el-table-column>
     </el-table>
+
+    <el-dialog v-model="planDialogVisible" title="分配套餐" width="460px" destroy-on-close>
+      <el-form label-width="120px">
+        <el-form-item label="用户">
+          <span>{{ planTarget?.username }}</span>
+        </el-form-item>
+        <el-form-item label="套餐">
+          <el-select v-model="planForm.plan_id" placeholder="选择套餐 (留空可解除套餐)" clearable style="width:100%">
+            <el-option v-for="p in plans" :key="p.id" :label="p.name" :value="p.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="重置流量">
+          <el-switch v-model="planForm.reset_traffic" :disabled="!planForm.plan_id" />
+        </el-form-item>
+        <el-form-item label="按套餐设置过期">
+          <el-switch v-model="planForm.set_expires_at" :disabled="!planForm.plan_id" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="planDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleAssignPlan">确定</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 新增 / 编辑弹窗 -->
     <el-dialog
@@ -156,6 +189,7 @@ import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getUsers, createUser, updateUser, deleteUser, resetTraffic } from '../api/user'
 import { getNodes } from '../api/node'
+import { getPlans, assignPlanToUser } from '../api/plan'
 import { formatBytes, formatDate } from '../utils/format'
 
 // SubscriptionDialog 引入了 qrcode（vendor-qrcode chunk）。
@@ -176,6 +210,7 @@ interface User {
   enable: boolean
   expires_at: string | null
   node_ids: number[]
+  plan_id?: number | null
 }
 
 interface NodeItem {
@@ -215,6 +250,17 @@ const rules: FormRules = {
 // 订阅弹窗
 const subVisible = ref(false)
 const subUser = ref<{ id: number; uuid: string; username: string } | null>(null)
+
+// 套餐分配
+const plans = ref<{ id: number; name: string }[]>([])
+const planNameMap = ref<Record<number, string>>({})
+const planDialogVisible = ref(false)
+const planTarget = ref<User | null>(null)
+const planForm = reactive<{ plan_id: number | null; reset_traffic: boolean; set_expires_at: boolean }>({
+  plan_id: null,
+  reset_traffic: true,
+  set_expires_at: true,
+})
 
 // ---- 工具函数 ----
 function trafficPercent(row: User): number {
@@ -256,10 +302,49 @@ async function fetchUsers() {
   }
 }
 
+async function fetchPlans() {
+  try {
+    const res = await getPlans()
+    const list = res.data?.plans ?? []
+    plans.value = list.map((p: any) => ({ id: p.id, name: p.name }))
+    const map: Record<number, string> = {}
+    for (const p of list) {
+      map[p.id] = p.name
+    }
+    planNameMap.value = map
+  } catch {
+    // 静默
+  }
+}
+
 onMounted(async () => {
-  await fetchNodes()
+  await Promise.all([fetchNodes(), fetchPlans()])
   await fetchUsers()
 })
+
+function openAssignPlan(row: User) {
+  planTarget.value = row
+  planForm.plan_id = row.plan_id ?? null
+  planForm.reset_traffic = true
+  planForm.set_expires_at = true
+  planDialogVisible.value = true
+}
+
+async function handleAssignPlan() {
+  if (!planTarget.value) return
+  try {
+    await assignPlanToUser(planTarget.value.id, {
+      plan_id: planForm.plan_id || null,
+      reset_traffic: planForm.reset_traffic,
+      set_expires_at: planForm.set_expires_at,
+    })
+    ElMessage.success('已应用套餐')
+    planDialogVisible.value = false
+    await fetchUsers()
+  } catch (e: any) {
+    ElMessage.error(e?.response?.data?.error || '操作失败')
+  }
+}
 
 // ---- 新增 / 编辑 ----
 function resetForm() {

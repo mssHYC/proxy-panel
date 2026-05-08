@@ -12,12 +12,14 @@ import './style.css'
 // 仅注册实际用到的 icons，避免把 @element-plus/icons-vue 全量打进包。
 // 新增模板用到的 icon 时，请同步把组件名追加到下面的 import + 注册。
 import {
+  Box,
   Connection,
   CopyDocument,
   DataLine,
   Delete,
   Document,
   Edit,
+  Grid,
   Link,
   Odometer,
   Plus,
@@ -31,12 +33,14 @@ import {
 const app = createApp(App)
 
 const icons = {
+  Box,
   Connection,
   CopyDocument,
   DataLine,
   Delete,
   Document,
   Edit,
+  Grid,
   Link,
   Odometer,
   Plus,

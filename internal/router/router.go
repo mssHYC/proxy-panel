@@ -75,6 +75,10 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	auditHandler := handler.NewAuditHandler(auditSvc)
 	backupHandler := handler.NewBackupHandler(db, dbPath)
 	routingHandler := handler.NewRoutingHandler(db)
+	nodeGroupSvc := service.NewNodeGroupService(db)
+	planSvc := service.NewPlanService(db)
+	nodeGroupHandler := handler.NewNodeGroupHandler(nodeGroupSvc, syncSvc)
+	planHandler := handler.NewPlanHandler(planSvc, syncSvc)
 
 	// 限流器
 	rateLimiter := NewRateLimiter()
@@ -129,6 +133,21 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 			auth.PUT("/nodes/:id", nodeHandler.Update)
 			auth.DELETE("/nodes/:id", nodeHandler.Delete)
 			auth.POST("/nodes/generate-reality-keypair", nodeHandler.GenerateRealityKeypair)
+
+			// 节点分组
+			auth.GET("/node-groups", nodeGroupHandler.List)
+			auth.POST("/node-groups", nodeGroupHandler.Create)
+			auth.GET("/node-groups/:id", nodeGroupHandler.Get)
+			auth.PUT("/node-groups/:id", nodeGroupHandler.Update)
+			auth.DELETE("/node-groups/:id", nodeGroupHandler.Delete)
+
+			// 套餐
+			auth.GET("/plans", planHandler.List)
+			auth.POST("/plans", planHandler.Create)
+			auth.GET("/plans/:id", planHandler.Get)
+			auth.PUT("/plans/:id", planHandler.Update)
+			auth.DELETE("/plans/:id", planHandler.Delete)
+			auth.POST("/users/:id/plan", planHandler.AssignToUser)
 
 			// 内核管理
 			auth.GET("/kernel/status", kernelHandler.Status)
