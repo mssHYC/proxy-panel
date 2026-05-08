@@ -21,12 +21,14 @@ type AuditLog struct {
 
 // AuditFilter 查询过滤器
 type AuditFilter struct {
-	Actor  string
-	Action string
-	From   *time.Time
-	To     *time.Time
-	Offset int
-	Limit  int
+	Actor      string
+	Action     string
+	TargetType string
+	TargetID   string
+	From       *time.Time
+	To         *time.Time
+	Offset     int
+	Limit      int
 }
 
 // AuditService 审计日志服务
@@ -59,8 +61,16 @@ func (s *AuditService) List(f AuditFilter) ([]AuditLog, int, error) {
 		args = append(args, f.Actor)
 	}
 	if f.Action != "" {
-		where += " AND action = ?"
-		args = append(args, f.Action)
+		where += " AND action LIKE ?"
+		args = append(args, "%"+f.Action+"%")
+	}
+	if f.TargetType != "" {
+		where += " AND target_type = ?"
+		args = append(args, f.TargetType)
+	}
+	if f.TargetID != "" {
+		where += " AND target_id = ?"
+		args = append(args, f.TargetID)
 	}
 	if f.From != nil {
 		where += " AND created_at >= ?"
@@ -77,8 +87,14 @@ func (s *AuditService) List(f AuditFilter) ([]AuditLog, int, error) {
 	}
 
 	limit := f.Limit
-	if limit <= 0 || limit > 200 {
+	if limit < 0 {
 		limit = 50
+	}
+	if limit == 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
 	}
 	offset := f.Offset
 	if offset < 0 {
@@ -101,4 +117,53 @@ func (s *AuditService) List(f AuditFilter) ([]AuditLog, int, error) {
 		out = append(out, a)
 	}
 	return out, total, rows.Err()
+}
+
+// exportMaxRows 单次 CSV 导出最多返回的行数，防止过大查询拖垮 SQLite/连接
+const exportMaxRows = 50000
+
+// Export 不分页查询审计日志（用于 CSV 导出），最多返回 exportMaxRows 行
+func (s *AuditService) Export(f AuditFilter) ([]AuditLog, error) {
+	where := "WHERE 1=1"
+	args := []interface{}{}
+	if f.Actor != "" {
+		where += " AND actor = ?"
+		args = append(args, f.Actor)
+	}
+	if f.Action != "" {
+		where += " AND action LIKE ?"
+		args = append(args, "%"+f.Action+"%")
+	}
+	if f.TargetType != "" {
+		where += " AND target_type = ?"
+		args = append(args, f.TargetType)
+	}
+	if f.TargetID != "" {
+		where += " AND target_id = ?"
+		args = append(args, f.TargetID)
+	}
+	if f.From != nil {
+		where += " AND created_at >= ?"
+		args = append(args, *f.From)
+	}
+	if f.To != nil {
+		where += " AND created_at < ?"
+		args = append(args, *f.To)
+	}
+	args = append(args, exportMaxRows)
+	rows, err := s.db.Query(`SELECT id, created_at, actor, action, target_type, target_id, ip, detail
+		FROM audit_logs `+where+` ORDER BY id DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("导出审计日志失败: %w", err)
+	}
+	defer rows.Close()
+	out := []AuditLog{}
+	for rows.Next() {
+		var a AuditLog
+		if err := rows.Scan(&a.ID, &a.CreatedAt, &a.Actor, &a.Action, &a.TargetType, &a.TargetID, &a.IP, &a.Detail); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
