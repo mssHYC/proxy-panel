@@ -209,14 +209,27 @@ func (s *TrafficService) GetServerTraffic() (*model.ServerTraffic, error) {
 	return &st, nil
 }
 
-// SetServerLimit 设置服务器流量限制（单位 GB）
+// SetServerLimit 设置服务器流量限制（单位 GB）。
+// 同步写入 traffic.server_limit_seeded=1 哨兵，避免后续重启被 config 覆盖；
+// 并清掉 fresh 标记，防止用户在首次启动后立即设置时仍然走 seed 分支。
+// 用事务保证两步原子。
 func (s *TrafficService) SetServerLimit(limitGB int64) error {
 	limitBytes := limitGB * 1024 * 1024 * 1024
-	_, err := s.db.Exec("UPDATE server_traffic SET limit_bytes = ?", limitBytes)
+	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("设置服务器流量限制失败: %w", err)
 	}
-	return nil
+	defer tx.Rollback()
+	if _, err := tx.Exec("UPDATE server_traffic SET limit_bytes = ?", limitBytes); err != nil {
+		return fmt.Errorf("设置服务器流量限制失败: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO settings (key, value) VALUES ('traffic.server_limit_seeded', '1')`); err != nil {
+		return fmt.Errorf("写入 seeded 标记失败: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM settings WHERE key = 'traffic.server_traffic_fresh'`); err != nil {
+		return fmt.Errorf("清理 fresh 标记失败: %w", err)
+	}
+	return tx.Commit()
 }
 
 // GetHistory 获取最近 N 天的流量历史（按天聚合）

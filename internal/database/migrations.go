@@ -64,7 +64,6 @@ func (db *DB) migrate() error {
 			limit_sent INTEGER DEFAULT 0,
 			reset_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
-		`INSERT OR IGNORE INTO server_traffic (id, total_up, total_down) VALUES (1, 0, 0)`,
 		`CREATE TABLE IF NOT EXISTS alert_records (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			type TEXT NOT NULL,
@@ -174,6 +173,18 @@ func (db *DB) migrate() error {
 
 	for _, q := range queries {
 		if _, err := db.Exec(q); err != nil {
+			return err
+		}
+	}
+
+	// 显式 seed server_traffic 单行；只有当行真正被插入（DB 全新）时
+	// 才写入 traffic.server_traffic_fresh 标记，供启动逻辑判断是否首次 seed config 限额。
+	res, err := db.Exec(`INSERT OR IGNORE INTO server_traffic (id, total_up, total_down) VALUES (1, 0, 0)`)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		if _, err := db.Exec(`INSERT OR REPLACE INTO settings (key, value) VALUES ('traffic.server_traffic_fresh', '1')`); err != nil {
 			return err
 		}
 	}
