@@ -108,7 +108,25 @@ async function onExport() {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
-    ElMessage.success('已导出 CSV')
+    if (res.headers?.['x-export-truncated'] === '1') {
+      ElMessage.warning(`结果已达上限 ${res.headers['x-export-limit']} 条，请缩小筛选范围`)
+    } else {
+      ElMessage.success('已导出 CSV')
+    }
+  } catch (err: any) {
+    // responseType: 'blob' 时后端 JSON 错误体也是 Blob，需要先读出来
+    const data = err?.response?.data
+    if (data instanceof Blob) {
+      try {
+        const text = await data.text()
+        const parsed = JSON.parse(text)
+        ElMessage.error(parsed.error || parsed.message || '导出失败')
+      } catch {
+        ElMessage.error('导出失败')
+      }
+    } else {
+      ElMessage.error(err?.message || '导出失败')
+    }
   } finally {
     exporting.value = false
   }
