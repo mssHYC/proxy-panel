@@ -37,6 +37,15 @@ func (h *SubscriptionHandler) Subscribe(c *gin.Context) {
 }
 
 func (h *SubscriptionHandler) doSub(c *gin.Context, tokenStr string, deprecated bool) {
+	// 订阅请求计数：解析客户端类型 + 最终状态，写入 prometheus
+	defer func() {
+		client := service.NormalizeSubscriptionClient(c.Query("format"))
+		if client == "unknown" {
+			client = service.NormalizeSubscriptionClient(subscription.SniffFormat(c.GetHeader("User-Agent")))
+		}
+		service.SubscriptionRequestsTotal.WithLabelValues(client, statusClass(c.Writer.Status())).Inc()
+	}()
+
 	tok, err := h.tokenSvc.Validate(tokenStr, c.ClientIP())
 	switch {
 	case errors.Is(err, service.ErrTokenNotFound):
@@ -137,6 +146,20 @@ func (h *SubscriptionHandler) serve(c *gin.Context, userID int64, token string, 
 		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", user.Username))
 	}
 	c.Data(http.StatusOK, contentType, []byte(content))
+}
+
+// statusClass 把 HTTP status code 归一为 2xx/4xx/5xx，限制 prometheus 标签基数
+func statusClass(code int) string {
+	switch {
+	case code >= 200 && code < 300:
+		return "2xx"
+	case code >= 400 && code < 500:
+		return "4xx"
+	case code >= 500:
+		return "5xx"
+	default:
+		return "other"
+	}
 }
 
 func scheme(c *gin.Context) string {

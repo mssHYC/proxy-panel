@@ -120,15 +120,22 @@ func (s *KernelSyncService) syncLocked() error {
 		if skipEmpty && len(kernelNodes) == 0 {
 			return
 		}
+		start := time.Now()
+		defer func() {
+			KernelSyncDuration.WithLabelValues(name).Observe(time.Since(start).Seconds())
+		}()
 		data, err := eng.GenerateConfig(kernelNodes, users)
 		if err != nil {
+			KernelSyncFailuresTotal.WithLabelValues(name, "generate").Inc()
 			log.Printf("[内核同步] %s 生成配置失败: %v", name, err)
 			return
 		}
 		if err := eng.ApplyConfig(data); err != nil {
 			if errors.Is(err, kernel.ErrConfigRolledBack) {
+				KernelSyncFailuresTotal.WithLabelValues(name, "rolled_back").Inc()
 				log.Printf("[内核同步] %s 应用新配置失败，已回滚到旧配置: %v", name, err)
 			} else {
+				KernelSyncFailuresTotal.WithLabelValues(name, "apply").Inc()
 				log.Printf("[内核同步] %s 应用配置失败（无法回滚）: %v", name, err)
 			}
 			return
