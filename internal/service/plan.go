@@ -149,8 +149,21 @@ func (s *PlanService) Update(id int64, req *PlanReq) (*model.Plan, error) {
 	return s.GetByID(id)
 }
 
+// Delete 删除套餐。先把所有引用该套餐的 users.plan_id 置为 NULL，
+// 再删除套餐主表（事务内完成），避免出现"套餐被删但 users.plan_id 悬空"——
+// 配合订阅 fallback 的修复，否则被删套餐用户可能重新落入"全部节点"。
 func (s *PlanService) Delete(id int64) error {
-	res, err := s.db.Exec(`DELETE FROM plans WHERE id = ?`, id)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("删除套餐开启事务失败: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`UPDATE users SET plan_id = NULL, updated_at = ? WHERE plan_id = ?`,
+		time.Now(), id); err != nil {
+		return fmt.Errorf("解除用户套餐绑定失败: %w", err)
+	}
+	res, err := tx.Exec(`DELETE FROM plans WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("删除套餐失败: %w", err)
 	}
@@ -158,7 +171,7 @@ func (s *PlanService) Delete(id int64) error {
 	if rows == 0 {
 		return fmt.Errorf("套餐不存在")
 	}
-	return nil
+	return tx.Commit()
 }
 
 // AssignToUser 把套餐应用到指定用户。
@@ -192,9 +205,15 @@ func (s *PlanService) AssignToUser(userID int64, req *AssignPlanReq) error {
 		sets = append(sets, "traffic_limit = ?", "traffic_used = 0", "traffic_up = 0", "traffic_down = 0", "warn_sent = 0")
 		args = append(args, plan.TrafficLimit)
 	}
-	if setExpires && plan.DurationDays > 0 {
-		sets = append(sets, "expires_at = ?", "enable = 1")
-		args = append(args, now.AddDate(0, 0, plan.DurationDays))
+	if setExpires {
+		// duration_days = 0 语义为"不限期"：清空 expires_at，并把可能因到期被禁用的用户重新启用。
+		// duration_days > 0 时按 now + N 天设置过期。
+		if plan.DurationDays > 0 {
+			sets = append(sets, "expires_at = ?", "enable = 1")
+			args = append(args, now.AddDate(0, 0, plan.DurationDays))
+		} else {
+			sets = append(sets, "expires_at = NULL", "enable = 1")
+		}
 	}
 	args = append(args, userID)
 

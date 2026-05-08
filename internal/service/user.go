@@ -48,6 +48,20 @@ func NewUserService(db *database.DB) *UserService {
 	return &UserService{db: db}
 }
 
+// HasExplicitNodeAuth 判断用户是否存在显式授权来源：分配过套餐 (plan_id != null)
+// 或在 user_nodes 中有任何关联。订阅 / kernel sync 据此区分"老部署兼容
+// （NodeIDs 空 → 全部节点）"与"已显式配置授权但解析为空（应当无可用节点）"。
+func (s *UserService) HasExplicitNodeAuth(userID int64) (bool, error) {
+	var v bool
+	err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM user_nodes WHERE user_id = ?)
+		OR EXISTS(SELECT 1 FROM users WHERE id = ? AND plan_id IS NOT NULL)`,
+		userID, userID).Scan(&v)
+	if err != nil {
+		return false, err
+	}
+	return v, nil
+}
+
 // getNodeIDs 获取用户关联的节点 ID 列表
 func (s *UserService) getNodeIDs(userID int64) ([]int64, error) {
 	rows, err := s.db.Query("SELECT node_id FROM user_nodes WHERE user_id = ?", userID)

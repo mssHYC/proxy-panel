@@ -2,6 +2,8 @@ package service
 
 import (
 	"testing"
+
+	"proxy-panel/internal/kernel"
 )
 
 // TestPlanVisibility_UnionUserNodesAndPlanGroups 验证：
@@ -82,6 +84,92 @@ func TestPlanVisibility_UnionUserNodesAndPlanGroups(t *testing.T) {
 	}
 	if len(nodes) != 1 || nodes[0].ID != n1 {
 		t.Errorf("ListByUserID 期望仅 n1，得到 %+v", nodes)
+	}
+}
+
+// TestKernelSync_RestrictedFlagOnPlanUser 已分配套餐的用户即便授权解析为空也应被
+// 标记 Restricted=true，避免 inbound 侧把 NodeIDs 空误解释为"全部节点"。
+func TestKernelSync_RestrictedFlagOnPlanUser(t *testing.T) {
+	db := openSyncTestDB(t)
+
+	// 用户 A：分配了一个空套餐 → NodeIDs 空但 Restricted=true
+	resA, _ := db.Exec(`INSERT INTO users (uuid, username, protocol, enable) VALUES ('a', 'alice', 'vless', 1)`)
+	uidA, _ := resA.LastInsertId()
+	resP, _ := db.Exec(`INSERT INTO plans (name, enabled) VALUES ('p_empty', 1)`)
+	pid, _ := resP.LastInsertId()
+	if _, err := db.Exec(`UPDATE users SET plan_id = ? WHERE id = ?`, pid, uidA); err != nil {
+		t.Fatalf("set plan_id: %v", err)
+	}
+
+	// 用户 B：从未配置授权 → Restricted=false（保留老兼容）
+	resB, _ := db.Exec(`INSERT INTO users (uuid, username, protocol, enable) VALUES ('b', 'bob', 'vless', 1)`)
+	_, _ = resB.LastInsertId()
+
+	sync := NewKernelSyncService(db, nil)
+	users, err := sync.loadUsers()
+	if err != nil {
+		t.Fatalf("loadUsers: %v", err)
+	}
+	got := map[string]kernel.UserConfig{}
+	for _, u := range users {
+		got[u.UUID] = u
+	}
+	if !got["a"].Restricted {
+		t.Errorf("已分配套餐的用户应 Restricted=true，得 %+v", got["a"])
+	}
+	if got["b"].Restricted {
+		t.Errorf("无任何授权来源的用户应 Restricted=false，得 %+v", got["b"])
+	}
+}
+
+// TestPlanService_DeleteCascadesPlanID 删除套餐应同步把 users.plan_id 置 NULL。
+func TestPlanService_DeleteCascadesPlanID(t *testing.T) {
+	db := openSyncTestDB(t)
+	resU, _ := db.Exec(`INSERT INTO users (uuid, username, protocol) VALUES ('u', 'alice', 'vless')`)
+	uid, _ := resU.LastInsertId()
+	resP, _ := db.Exec(`INSERT INTO plans (name, enabled) VALUES ('p1', 1)`)
+	pid, _ := resP.LastInsertId()
+	if _, err := db.Exec(`UPDATE users SET plan_id = ? WHERE id = ?`, pid, uid); err != nil {
+		t.Fatalf("set plan_id: %v", err)
+	}
+
+	if err := NewPlanService(db).Delete(pid); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	var planID *int64
+	if err := db.QueryRow(`SELECT plan_id FROM users WHERE id = ?`, uid).Scan(&planID); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if planID != nil {
+		t.Errorf("删除套餐后 users.plan_id 必须为 NULL，得 %d", *planID)
+	}
+}
+
+// TestPlanService_AssignDurationZero duration_days=0 视为不限期：
+// 清空 expires_at，并把已禁用用户重新启用。
+func TestPlanService_AssignDurationZero(t *testing.T) {
+	db := openSyncTestDB(t)
+	resU, _ := db.Exec(`INSERT INTO users (uuid, username, protocol, enable, expires_at)
+		VALUES ('u', 'alice', 'vless', 0, '2020-01-01 00:00:00')`)
+	uid, _ := resU.LastInsertId()
+
+	resP, _ := db.Exec(`INSERT INTO plans (name, traffic_limit, duration_days, enabled)
+		VALUES ('forever', 0, 0, 1)`)
+	pid, _ := resP.LastInsertId()
+
+	if err := NewPlanService(db).AssignToUser(uid, &AssignPlanReq{PlanID: &pid}); err != nil {
+		t.Fatalf("AssignToUser: %v", err)
+	}
+	var enable int
+	var exp *string
+	if err := db.QueryRow(`SELECT enable, expires_at FROM users WHERE id = ?`, uid).Scan(&enable, &exp); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if enable != 1 {
+		t.Errorf("不限期套餐应重新启用用户，enable=%d", enable)
+	}
+	if exp != nil {
+		t.Errorf("不限期套餐应清空 expires_at，得 %v", *exp)
 	}
 }
 
