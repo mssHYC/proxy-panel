@@ -59,7 +59,7 @@ func TestProbeQUIC_Online(t *testing.T) {
 	addr := ln.Addr().(*net.UDPAddr)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := probeQUIC(ctx, "127.0.0.1", addr.Port); err != nil {
+	if err := probeQUIC(ctx, "127.0.0.1", addr.Port, quicProbeOpts{}); err != nil {
 		t.Fatalf("expected online, got err: %v", err)
 	}
 }
@@ -85,7 +85,7 @@ func TestProbeQUIC_OnlineALPNMismatch(t *testing.T) {
 	addr := ln.Addr().(*net.UDPAddr)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := probeQUIC(ctx, "127.0.0.1", addr.Port); err != nil {
+	if err := probeQUIC(ctx, "127.0.0.1", addr.Port, quicProbeOpts{}); err != nil {
 		t.Fatalf("ALPN 不匹配也应识别为在线，但返回错误: %v", err)
 	}
 }
@@ -94,7 +94,7 @@ func TestProbeQUIC_OfflineDNSFail(t *testing.T) {
 	// DNS 解析失败应当判离线，而不是因为"非 timeout"被误判在线。
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	err := probeQUIC(ctx, "no-such-host.invalid.example.test.", 443)
+	err := probeQUIC(ctx, "no-such-host.invalid.example.test.", 443, quicProbeOpts{})
 	if err == nil {
 		t.Fatalf("DNS 失败应返回离线错误")
 	}
@@ -151,7 +151,7 @@ func TestProbeQUIC_Offline(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
-	if err := probeQUIC(ctx, "127.0.0.1", port); err == nil {
+	if err := probeQUIC(ctx, "127.0.0.1", port, quicProbeOpts{}); err == nil {
 		t.Fatalf("expected offline error, got nil")
 	}
 }

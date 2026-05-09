@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -69,12 +70,28 @@ func isUDPProtocol(p string) bool {
 	return false
 }
 
+// parseObfsFromSettings 从 settings JSON 里读出 obfs / obfs_password。
+// 解析失败或字段缺失时返回空串，调用方自然回落到裸 QUIC。
+func parseObfsFromSettings(settings string) (kind, password string) {
+	if settings == "" {
+		return "", ""
+	}
+	var s map[string]interface{}
+	if err := json.Unmarshal([]byte(settings), &s); err != nil {
+		return "", ""
+	}
+	kind, _ = s["obfs"].(string)
+	password, _ = s["obfs_password"].(string)
+	return kind, password
+}
+
 // dialOne 按协议执行一次探测：UDP 协议走 QUIC 握手，其余走 TCP connect。
 func (h *HealthChecker) dialOne(ctx context.Context, n *model.Node) error {
 	dctx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
 	if isUDPProtocol(n.Protocol) {
-		return probeQUIC(dctx, n.Host, n.Port)
+		kind, pwd := parseObfsFromSettings(n.Settings)
+		return probeQUIC(dctx, n.Host, n.Port, quicProbeOpts{obfsKind: kind, obfsPassword: pwd})
 	}
 	dialer := &net.Dialer{Timeout: h.timeout}
 	addr := net.JoinHostPort(n.Host, strconv.Itoa(n.Port))

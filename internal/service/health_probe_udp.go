@@ -4,11 +4,20 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"strconv"
 
 	"github.com/quic-go/quic-go"
 )
+
+// quicProbeOpts 让调用方传入与节点 settings 对应的混淆参数。obfsKind 为空时
+// 走裸 QUIC；obfsKind="salamander" 时按 Hysteria2 salamander 规则封装 UDP 包，
+// 否则当作未识别混淆，直接判离线（盲发裸包必然超时，没必要再等）。
+type quicProbeOpts struct {
+	obfsKind     string
+	obfsPassword string
+}
 
 // probeQUIC 探测目标是否在监听 QUIC（Hysteria2 / TUIC）。
 //
@@ -21,13 +30,41 @@ import (
 // 的账号/密码/业务可用性。
 //
 // 调用方负责传入带 timeout 的 ctx。
-func probeQUIC(ctx context.Context, host string, port int) error {
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
+func probeQUIC(ctx context.Context, host string, port int, opts quicProbeOpts) error {
 	tlsConf := &tls.Config{
 		InsecureSkipVerify: true,
 		NextProtos:         []string{"h3", "tuic"},
 	}
-	conn, err := quic.DialAddr(ctx, addr, tlsConf, &quic.Config{})
+
+	if opts.obfsKind == "" {
+		addr := net.JoinHostPort(host, strconv.Itoa(port))
+		conn, err := quic.DialAddr(ctx, addr, tlsConf, &quic.Config{})
+		if err == nil {
+			conn.CloseWithError(0, "")
+			return nil
+		}
+		if isQUICServerReplyErr(err) {
+			return nil
+		}
+		return err
+	}
+
+	if opts.obfsKind != "salamander" {
+		return fmt.Errorf("unsupported obfs %q", opts.obfsKind)
+	}
+
+	udpAddr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		return err
+	}
+	pc, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		return err
+	}
+	defer pc.Close()
+	wrapped := newObfsPacketConn(pc, newSalamander(opts.obfsPassword))
+
+	conn, err := quic.Dial(ctx, wrapped, udpAddr, tlsConf, &quic.Config{})
 	if err == nil {
 		conn.CloseWithError(0, "")
 		return nil
