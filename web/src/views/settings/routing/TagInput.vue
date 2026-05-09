@@ -1,16 +1,27 @@
 <template>
-  <div :class="['ti', { 'ti--disabled': disabled }]" @click="focus">
+  <!-- Read-only: render as inline pill list, no input affordance. -->
+  <div v-if="disabled" class="ti-ro">
     <Tag
       v-for="(t, i) in modelValue"
       :key="i + t"
       :mono="false"
-      :closable="!disabled"
+      class="ti-ro__tag"
+    >{{ t }}</Tag>
+    <span v-if="!modelValue.length" class="ti-ro__empty">—</span>
+  </div>
+
+  <!-- Editable: tags + freeform input -->
+  <div v-else class="ti" @click="focus">
+    <Tag
+      v-for="(t, i) in modelValue"
+      :key="i + t"
+      :mono="false"
+      closable
       @close="remove(i)"
     >{{ t }}</Tag>
     <input
       ref="inp"
-      :placeholder="modelValue.length === 0 ? placeholder : ''"
-      :disabled="disabled"
+      :placeholder="modelValue.length === 0 ? (placeholder || '输入并回车添加') : ''"
       v-model="text"
       class="ti__input"
       @keydown.enter.prevent="commit"
@@ -61,6 +72,25 @@ function onBackspace() {
 </script>
 
 <style scoped>
+/* Read-only inline pill list */
+.ti-ro {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  min-height: 28px;
+  padding: 2px 0;
+}
+.ti-ro__tag {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-ink-faint);
+}
+.ti-ro__empty {
+  color: var(--color-ink-soft);
+  font-size: 13px;
+}
+
+/* Editable input */
 .ti {
   display: flex;
   flex-wrap: wrap;
@@ -79,7 +109,6 @@ function onBackspace() {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 3px oklch(0.48 0.13 28 / 0.18);
 }
-.ti--disabled { background: var(--color-surface-sunken); opacity: 0.7; cursor: not-allowed; }
 
 .ti__input {
   flex: 1;
