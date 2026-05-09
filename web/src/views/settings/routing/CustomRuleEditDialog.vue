@@ -1,55 +1,50 @@
 <template>
-  <el-dialog
-    :model-value="!!modelValue"
-    title="编辑自定义规则"
-    width="720px"
-    @update:model-value="$emit('update:modelValue', null)"
-  >
-    <el-form v-if="modelValue" label-width="140px">
-      <el-form-item label="名称">
-        <el-input v-model="modelValue.Name" />
-      </el-form-item>
-      <el-form-item label="Site Tags">
-        <el-select v-model="modelValue.SiteTags" multiple filterable allow-create style="width: 100%" />
-      </el-form-item>
-      <el-form-item label="IP Tags">
-        <el-select v-model="modelValue.IPTags" multiple filterable allow-create style="width: 100%" />
-      </el-form-item>
-      <el-form-item label="Domain Suffix">
-        <el-select v-model="modelValue.DomainSuffix" multiple filterable allow-create style="width: 100%" />
-      </el-form-item>
-      <el-form-item label="Domain Keyword">
-        <el-select v-model="modelValue.DomainKeyword" multiple filterable allow-create style="width: 100%" />
-      </el-form-item>
-      <el-form-item label="IP CIDR">
-        <el-select v-model="modelValue.IPCIDR" multiple filterable allow-create style="width: 100%" />
-      </el-form-item>
-      <el-form-item label="出站">
-        <el-radio-group v-model="outboundMode">
-          <el-radio label="group">出站组</el-radio>
-          <el-radio label="literal">字面量</el-radio>
-        </el-radio-group>
-        <el-select v-if="outboundMode === 'group'" v-model="modelValue.OutboundGroupID" style="width: 100%; margin-top: 8px">
-          <el-option v-for="g in groups" :key="g.ID" :label="g.DisplayName" :value="g.ID" />
-        </el-select>
-        <el-select v-else v-model="modelValue.OutboundLiteral" style="width: 100%; margin-top: 8px">
-          <el-option label="DIRECT" value="DIRECT" />
-          <el-option label="REJECT" value="REJECT" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="排序">
-        <el-input-number v-model="modelValue.SortOrder" />
-      </el-form-item>
-    </el-form>
-    <template #footer>
-      <el-button @click="$emit('update:modelValue', null)">取消</el-button>
-      <el-button type="primary" @click="onSave">保存</el-button>
+  <Modal :open="!!modelValue" :width="720" title="编辑自定义规则" @update:open="(v) => !v && emit('update:modelValue', null)">
+    <template v-if="modelValue">
+      <Field label="名称" layout="row">
+        <Input v-model="modelValue.Name" />
+      </Field>
+      <Field label="Site Tags" layout="row"><TagInput v-model="modelValue.SiteTags" /></Field>
+      <Field label="IP Tags" layout="row"><TagInput v-model="modelValue.IPTags" /></Field>
+      <Field label="Domain Suffix" layout="row"><TagInput v-model="modelValue.DomainSuffix" /></Field>
+      <Field label="Domain Keyword" layout="row"><TagInput v-model="modelValue.DomainKeyword" /></Field>
+      <Field label="IP CIDR" layout="row"><TagInput v-model="modelValue.IPCIDR" /></Field>
+      <Field label="出站" layout="row">
+        <RadioGroup
+          :model-value="outboundMode"
+          :options="[{ label: '出站组', value: 'group' }, { label: '字面量', value: 'literal' }]"
+          @update:model-value="(v) => (outboundMode = v as 'group' | 'literal')"
+        />
+        <div class="outbound-pick">
+          <Select
+            v-if="outboundMode === 'group'"
+            :model-value="modelValue.OutboundGroupID"
+            :options="groups.map(g => ({ label: g.DisplayName, value: g.ID }))"
+            @update:model-value="(v) => (modelValue!.OutboundGroupID = v as number)"
+          />
+          <Select
+            v-else
+            :model-value="modelValue.OutboundLiteral"
+            :options="[{ label: 'DIRECT', value: 'DIRECT' }, { label: 'REJECT', value: 'REJECT' }]"
+            @update:model-value="(v) => (modelValue!.OutboundLiteral = String(v))"
+          />
+        </div>
+      </Field>
+      <Field label="排序" layout="row">
+        <NumberInput v-model="modelValue.SortOrder" />
+      </Field>
     </template>
-  </el-dialog>
+    <template #footer>
+      <Button @click="emit('update:modelValue', null)">取消</Button>
+      <Button variant="primary" @click="onSave">保存</Button>
+    </template>
+  </Modal>
 </template>
 
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { Button, Input, NumberInput, Select, RadioGroup, Modal, Field } from '../../../ui'
+import TagInput from './TagInput.vue'
 import type { CustomRule, Group } from './types'
 
 const props = defineProps<{ modelValue: CustomRule | null; groups: Group[] }>()
@@ -76,3 +71,7 @@ function onSave() {
   emit('save', v)
 }
 </script>
+
+<style scoped>
+.outbound-pick { margin-top: 8px; }
+</style>

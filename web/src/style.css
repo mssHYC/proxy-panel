@@ -1,1 +1,411 @@
 @import "tailwindcss";
+
+/* ============================================================
+   ProxyPanel — design tokens
+   See DESIGN.md for definitions and rationale.
+   ============================================================ */
+
+@theme {
+  --font-sans:  'Inter', 'PingFang SC', 'Hiragino Sans GB', system-ui, sans-serif;
+  --font-serif: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', ui-serif, serif;
+  --font-mono:  'JetBrains Mono', ui-monospace, 'SFMono-Regular', 'Cascadia Code', monospace;
+
+  --color-surface-base:    oklch(0.985 0.003 80);
+  --color-surface-raised:  oklch(0.995 0.003 80);
+  --color-surface-sunken:  oklch(0.965 0.004 80);
+
+  --color-ink-strong: oklch(0.22 0.01 80);
+  --color-ink-base:   oklch(0.32 0.008 80);
+  --color-ink-muted:  oklch(0.52 0.008 80);
+  --color-ink-soft:   oklch(0.68 0.006 80);
+  --color-ink-faint:  oklch(0.86 0.004 80);
+
+  --color-accent:      oklch(0.48 0.13 28);
+  --color-accent-soft: oklch(0.94 0.025 28);
+  --color-accent-ink:  oklch(0.30 0.10 28);
+
+  --color-status-ok:        oklch(0.55 0.10 155);
+  --color-status-warn:      oklch(0.68 0.13 70);
+  --color-status-crit:      oklch(0.50 0.16 28);
+  --color-status-info:      oklch(0.55 0.07 235);
+  --color-status-ok-soft:   oklch(0.94 0.025 155);
+  --color-status-warn-soft: oklch(0.94 0.04  70);
+  --color-status-crit-soft: oklch(0.94 0.025 28);
+}
+
+:root {
+  color-scheme: light;
+  --shadow-raised:
+    0 1px 2px oklch(0.2 0.01 80 / 0.04),
+    0 8px 24px oklch(0.2 0.01 80 / 0.06);
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* ============================================================
+   Base
+   ============================================================ */
+
+html, body {
+  background: var(--color-surface-base);
+  color: var(--color-ink-base);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.55;
+  font-feature-settings: "ss01", "tnum", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-ink);
+}
+
+/* Numbers, identifiers, code: tabular mono everywhere */
+code, kbd, samp, .mono, .num,
+.uuid, .port, .ts, .ip, .domain {
+  font-family: var(--font-mono);
+  font-feature-settings: "tnum", "ss01";
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================
+   Reusable utilities (CSS-only — no @apply needed)
+   ============================================================ */
+
+.eyebrow {
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-ink-muted);
+}
+
+.serif-display {
+  font-family: var(--font-serif);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-ink-strong);
+}
+
+.tnum { font-variant-numeric: tabular-nums; }
+
+.divider-h {
+  height: 1px;
+  background: var(--color-ink-faint);
+  border: 0;
+}
+
+/* Status dot */
+.status-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-ink-soft);
+  vertical-align: middle;
+  margin-right: 8px;
+  position: relative;
+  top: -1px;
+}
+.status-dot[data-state="ok"]   { background: var(--color-status-ok); }
+.status-dot[data-state="warn"] { background: var(--color-status-warn); }
+.status-dot[data-state="crit"] { background: var(--color-status-crit); }
+.status-dot[data-state="info"] { background: var(--color-status-info); }
+.status-dot[data-state="off"]  { background: var(--color-ink-soft); }
+
+.status-dot--pulse[data-state="ok"]::after,
+.status-dot--pulse[data-state="warn"]::after,
+.status-dot--pulse[data-state="crit"]::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 999px;
+  background: inherit;
+  opacity: 0.4;
+  animation: dot-pulse 2.4s var(--ease-out) infinite;
+}
+@keyframes dot-pulse {
+  0%   { transform: scale(0.6); opacity: 0.5; }
+  70%  { transform: scale(1.6); opacity: 0; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+/* Section heading row */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.section-head__title {
+  font-size: 18px;
+  line-height: 26px;
+  font-weight: 600;
+  color: var(--color-ink-strong);
+  letter-spacing: -0.005em;
+}
+.section-head__hint {
+  font-size: 13px;
+  color: var(--color-ink-muted);
+}
+
+/* Skeleton row */
+.skeleton-row {
+  height: 44px;
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-sunken) 0%,
+    oklch(0.97 0.004 80) 50%,
+    var(--color-surface-sunken) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-slide 1.4s var(--ease-out) infinite;
+  border-bottom: 1px solid var(--color-ink-faint);
+}
+@keyframes skeleton-slide {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Page transitions */
+.fade-enter-active, .fade-leave-active { transition: opacity 120ms var(--ease-out); }
+.fade-enter-from, .fade-leave-to       { opacity: 0; }
+
+/* ============================================================
+   Restore pointer-events for portaled poppers when a Reka Dialog
+   is open. Reka sets pointer-events:none on body for its modal
+   scrim; popovers teleported to body must opt back in.
+   ============================================================ */
+.dp__outer_menu_wrap,
+.dp__menu,
+.dp-menu,
+.sel__pop,
+.ms__pop,
+.tt,
+[data-sonner-toaster],
+[data-reka-popper-content-wrapper] {
+  pointer-events: auto !important;
+}
+
+/* ============================================================
+   Settings primitives — Surge / Things 3 style sectioned forms
+   Use on settings sub-sections. No cards. No EP labels widths.
+   ============================================================ */
+
+.s-blocks { display: flex; flex-direction: column; gap: 48px; }
+
+.s-block { display: flex; flex-direction: column; gap: 16px; }
+.s-block__head { display: flex; flex-direction: column; gap: 4px; }
+.s-block__title {
+  font-family: var(--font-serif);
+  font-size: 20px;
+  line-height: 1.3;
+  font-weight: 600;
+  color: var(--color-ink-strong);
+  margin: 0;
+  letter-spacing: -0.005em;
+}
+.s-block__hint { font-size: 13px; color: var(--color-ink-muted); margin: 0; max-width: 60ch; }
+
+/* A row inside a block: label / control / hint */
+.s-row {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  column-gap: 24px;
+  align-items: start;
+  padding: 14px 0;
+  border-top: 1px solid var(--color-ink-faint);
+}
+.s-row:last-child { border-bottom: 1px solid var(--color-ink-faint); }
+.s-row__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-ink-strong);
+  padding-top: 8px;
+}
+.s-row__label small {
+  display: block;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--color-ink-muted);
+  margin-top: 2px;
+}
+.s-row__control { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.s-row__hint { font-size: 12px; color: var(--color-ink-muted); margin: 2px 0 0; }
+.s-row--inline .s-row__control { flex-direction: row; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+/* Footer action bar inside a settings pane */
+.s-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 16px;
+}
+
+/* Inline alert — quieter than el-alert */
+.s-note {
+  display: flex;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--color-surface-sunken);
+  border-left: 0;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--color-ink-base);
+  line-height: 1.55;
+}
+.s-note[data-tone="info"] { background: oklch(0.96 0.02 235); color: var(--color-ink-base); }
+.s-note[data-tone="warn"] { background: var(--color-status-warn-soft); color: oklch(0.42 0.10 70); }
+
+/* ============================================================
+   Empty state — used when a list/table is genuinely empty
+   ============================================================ */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 64px 24px;
+  border-top: 1px solid var(--color-ink-faint);
+}
+.empty-state__title {
+  font-family: var(--font-serif);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--color-ink-strong);
+  margin: 0 0 6px;
+  letter-spacing: -0.005em;
+}
+.empty-state__hint { font-size: 13px; color: var(--color-ink-muted); margin: 0 0 20px; max-width: 44ch; }
+
+/* ============================================================
+   Sub-tabs — pill group for in-page tab navigation
+   ============================================================ */
+.subtabs {
+  display: inline-flex;
+  background: var(--color-surface-sunken);
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+}
+.subtabs__tab {
+  background: transparent;
+  border: 0;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-ink-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
+}
+.subtabs__tab:hover { color: var(--color-ink-strong); }
+.subtabs__tab.is-active {
+  background: var(--color-surface-raised);
+  color: var(--color-ink-strong);
+  font-weight: 600;
+  box-shadow: 0 1px 2px oklch(0.2 0.01 80 / 0.06);
+}
+
+/* ============================================================
+   Native data table — used in place of el-table.
+   Apply class .dt to a <table>. Headers in <thead>, rows in <tbody>.
+   ============================================================ */
+
+.dt {
+  width: 100%;
+  border-collapse: collapse;
+  background: transparent;
+  font-size: 14px;
+  color: var(--color-ink-base);
+  table-layout: auto;
+}
+
+.dt thead th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-ink-muted);
+  border-bottom: 1px solid var(--color-ink-faint);
+  padding: 10px 12px;
+  white-space: nowrap;
+}
+.dt thead th:first-child { padding-left: 4px; }
+.dt thead th:last-child  { padding-right: 4px; }
+.dt thead th.is-numeric  { text-align: right; }
+
+.dt tbody td {
+  border-bottom: 1px solid var(--color-ink-faint);
+  padding: 12px;
+  vertical-align: middle;
+  color: var(--color-ink-base);
+}
+.dt tbody td:first-child { padding-left: 4px; }
+.dt tbody td:last-child  { padding-right: 4px; }
+.dt tbody td.is-numeric  { text-align: right; font-family: var(--font-mono); font-feature-settings: 'tnum'; }
+
+.dt tbody tr { transition: background 100ms var(--ease-out); }
+.dt tbody tr:hover td { background: var(--color-surface-sunken); }
+.dt tbody tr.is-selected td { background: var(--color-accent-soft); }
+
+/* Compact size */
+.dt--compact thead th { padding: 8px 10px; }
+.dt--compact tbody td { padding: 8px 10px; }
+
+/* Row actions */
+.row-actions {
+  display: inline-flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+.row-actions__btn {
+  width: 28px; height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: transparent;
+  border: 0;
+  color: var(--color-ink-muted);
+  cursor: pointer;
+  transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
+}
+.row-actions__btn:hover { background: var(--color-surface-sunken); color: var(--color-ink-strong); }
+.row-actions__btn--danger:hover { background: var(--color-status-crit-soft); color: var(--color-status-crit); }
+.row-actions__btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+
+/* Toolbar above tables */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.toolbar__hint { margin: 0; font-size: 13px; color: var(--color-ink-muted); }
+.toolbar__hint .num { color: var(--color-ink-strong); font-weight: 600; font-family: var(--font-mono); }
+.toolbar__actions { display: inline-flex; gap: 8px; }
+
+/* Generic inline-loading state */
+.is-loading-overlay {
+  position: relative;
+}
+.is-loading-overlay::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: oklch(0.99 0.003 80 / 0.6);
+  backdrop-filter: blur(2px);
+  pointer-events: none;
+}
+
+/* Form helpers */
+.form-hint { font-size: 12px; color: var(--color-ink-muted); }

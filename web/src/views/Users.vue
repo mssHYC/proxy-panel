@@ -1,293 +1,235 @@
 <template>
-  <div class="p-6">
-    <!-- 顶部栏 -->
-    <div class="flex items-center justify-between mb-6">
-      <h2 class="text-2xl font-bold">用户管理</h2>
-      <el-button type="primary" @click="openCreate">
-        <el-icon class="mr-1"><Plus /></el-icon>
-        新增用户
-      </el-button>
+  <div class="users" :class="{ 'is-loading-overlay': loading }">
+    <div class="toolbar">
+      <p class="toolbar__hint">
+        共 <span class="num">{{ users.length }}</span> 位用户，其中
+        <span class="num">{{ enabledCount }}</span> 启用。
+      </p>
+      <Button variant="primary" @click="openCreate">
+        <Plus :size="14" :stroke-width="2" /> 新增用户
+      </Button>
     </div>
 
-    <!-- 用户表格 -->
-    <el-table :data="users" v-loading="loading" stripe border class="w-full">
-      <el-table-column prop="username" label="用户名" min-width="120" />
-
-      <el-table-column label="节点" min-width="200">
-        <template #default="{ row }">
-          <template v-if="row.node_ids && row.node_ids.length">
-            <el-tag
-              v-for="nid in row.node_ids"
-              :key="nid"
-              size="small"
-              class="mr-1 mb-1"
-            >
-              {{ nodeNameMap[nid] || `节点#${nid}` }}
-            </el-tag>
-          </template>
-          <el-tag v-else size="small" type="info">全部节点</el-tag>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="流量" min-width="200">
-        <template #default="{ row }">
-          <div class="flex flex-col gap-1">
-            <el-progress
-              :percentage="trafficPercent(row)"
-              :stroke-width="10"
-              :color="trafficPercent(row) > 90 ? '#f56c6c' : '#409eff'"
-            />
-            <span class="text-xs text-gray-500">
-              {{ formatBytes(row.traffic_used || 0) }} /
-              {{ row.traffic_limit ? formatBytes(row.traffic_limit) : '无限制' }}
+    <table v-if="users.length || loading" class="dt">
+      <thead>
+        <tr>
+          <th>用户</th>
+          <th>节点访问</th>
+          <th>流量</th>
+          <th>状态</th>
+          <th>到期</th>
+          <th>套餐</th>
+          <th class="is-numeric">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="row in users" :key="row.id">
+          <td>
+            <div class="cell-user">
+              <span class="cell-user__name">{{ row.username }}</span>
+              <span v-if="row.email" class="cell-user__email">{{ row.email }}</span>
+            </div>
+          </td>
+          <td>
+            <template v-if="row.node_ids && row.node_ids.length">
+              <Tag v-for="nid in row.node_ids" :key="nid" :mono="false" class="mr-1">
+                {{ nodeNameMap[nid] || `节点#${nid}` }}
+              </Tag>
+            </template>
+            <span v-else class="cell-allnodes">全部节点</span>
+          </td>
+          <td>
+            <div class="cell-traffic">
+              <div class="cell-traffic__row">
+                <span class="num">{{ formatBytes(row.traffic_used || 0) }}</span>
+                <span class="cell-traffic__sep">/</span>
+                <span class="num cell-traffic__limit">
+                  {{ row.traffic_limit ? formatBytes(row.traffic_limit) : '∞' }}
+                </span>
+              </div>
+              <ProgressBar
+                v-if="row.traffic_limit"
+                :percent="trafficPercent(row)"
+                :thresholds="{ warn: 80, crit: 95 }"
+              />
+            </div>
+          </td>
+          <td>
+            <Switch :model-value="row.enable" @update:model-value="(v) => handleToggle(row, v)" />
+          </td>
+          <td>
+            <span class="cell-expire" :data-soon="isExpiringSoon(row.expires_at) ? '1' : null">
+              <span class="num">{{ formatDate(row.expires_at) || '—' }}</span>
             </span>
-          </div>
-        </template>
-      </el-table-column>
+          </td>
+          <td>
+            <span v-if="planNameMap[row.plan_id ?? -1]">{{ planNameMap[row.plan_id ?? -1] }}</span>
+            <span v-else class="cell-none">—</span>
+          </td>
+          <td class="is-numeric">
+            <div class="row-actions">
+              <button class="row-actions__btn" @click="openSub(row)" title="订阅链接">
+                <Link :size="14" :stroke-width="1.6" />
+              </button>
+              <button class="row-actions__btn" @click="openEdit(row)" title="编辑">
+                <Pencil :size="14" :stroke-width="1.6" />
+              </button>
+              <button class="row-actions__btn" @click="openAssignPlan(row)" title="分配套餐">
+                <Package :size="14" :stroke-width="1.6" />
+              </button>
+              <button class="row-actions__btn" @click="handleResetTraffic(row)" title="重置流量">
+                <RotateCcw :size="14" :stroke-width="1.6" />
+              </button>
+              <button class="row-actions__btn row-actions__btn--danger" @click="handleDelete(row)" title="删除">
+                <Trash2 :size="14" :stroke-width="1.6" />
+              </button>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
 
-      <el-table-column label="状态" width="90" align="center">
-        <template #default="{ row }">
-          <el-switch
-            :model-value="row.enable"
-            @change="(val: boolean) => handleToggle(row, val)"
-          />
-        </template>
-      </el-table-column>
+    <div v-if="!loading && !users.length" class="empty-state">
+      <p class="empty-state__title">还没有用户</p>
+      <p class="empty-state__hint">添加第一个用户后，可以为 ta 生成订阅链接，分发到 Surge / Clash / Sing-box 等客户端。</p>
+      <Button variant="primary" @click="openCreate">
+        <Plus :size="14" :stroke-width="2" /> 添加第一个用户
+      </Button>
+    </div>
 
-      <el-table-column label="到期时间" width="140">
-        <template #default="{ row }">
-          <span :class="{ 'text-orange-500 font-medium': isExpiringSoon(row.expires_at) }">
-            {{ formatDate(row.expires_at) }}
-          </span>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="套餐" width="160">
-        <template #default="{ row }">
-          <span v-if="planNameMap[row.plan_id]">{{ planNameMap[row.plan_id] }}</span>
-          <span v-else class="text-gray-400">—</span>
-        </template>
-      </el-table-column>
-
-      <el-table-column label="操作" width="290" fixed="right">
-        <template #default="{ row }">
-          <el-button size="small" @click="openSub(row)" title="订阅">
-            <el-icon><Link /></el-icon>
-          </el-button>
-          <el-button size="small" @click="openEdit(row)" title="编辑">
-            <el-icon><Edit /></el-icon>
-          </el-button>
-          <el-button size="small" @click="openAssignPlan(row)" title="分配套餐">
-            <el-icon><Box /></el-icon>
-          </el-button>
-          <el-button size="small" @click="handleResetTraffic(row)" title="重置流量">
-            <el-icon><Refresh /></el-icon>
-          </el-button>
-          <el-button size="small" type="danger" @click="handleDelete(row)" title="删除">
-            <el-icon><Delete /></el-icon>
-          </el-button>
-        </template>
-      </el-table-column>
-    </el-table>
-
-    <el-dialog v-model="planDialogVisible" title="分配套餐" width="460px" destroy-on-close>
-      <el-form label-width="120px">
-        <el-form-item label="用户">
-          <span>{{ planTarget?.username }}</span>
-        </el-form-item>
-        <el-form-item label="套餐">
-          <el-select v-model="planForm.plan_id" placeholder="选择套餐 (留空可解除套餐)" clearable style="width:100%">
-            <el-option v-for="p in plans" :key="p.id" :label="p.name" :value="p.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="重置流量">
-          <el-switch v-model="planForm.reset_traffic" :disabled="!planForm.plan_id" />
-        </el-form-item>
-        <el-form-item label="按套餐设置过期">
-          <el-switch v-model="planForm.set_expires_at" :disabled="!planForm.plan_id" />
-        </el-form-item>
-      </el-form>
+    <Modal v-model:open="planDialogVisible" title="分配套餐" :width="480">
+      <Field label="用户" layout="row">
+        <span class="plan-user">{{ planTarget?.username }}</span>
+      </Field>
+      <Field label="套餐" layout="row">
+        <Select
+          :model-value="planForm.plan_id"
+          :options="plans.map(p => ({ label: p.name, value: p.id }))"
+          placeholder="留空可解除套餐"
+          @update:model-value="(v) => (planForm.plan_id = v as number | null)"
+        />
+      </Field>
+      <Field label="重置流量" hint="按套餐重新计算可用流量" layout="row">
+        <Switch v-model="planForm.reset_traffic" :disabled="!planForm.plan_id" />
+      </Field>
+      <Field label="设置过期" hint="按套餐有效期推算到期时间" layout="row">
+        <Switch v-model="planForm.set_expires_at" :disabled="!planForm.plan_id" />
+      </Field>
       <template #footer>
-        <el-button @click="planDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleAssignPlan">确定</el-button>
+        <Button @click="planDialogVisible = false">取消</Button>
+        <Button variant="primary" @click="handleAssignPlan">保存</Button>
       </template>
-    </el-dialog>
+    </Modal>
 
-    <!-- 新增 / 编辑弹窗 -->
-    <el-dialog
-      v-model="dialogVisible"
-      :title="isEdit ? '编辑用户' : '新增用户'"
-      width="520px"
-      destroy-on-close
-    >
-      <el-form
-        ref="formRef"
-        :model="form"
-        :rules="rules"
-        label-width="100px"
-      >
-        <el-form-item label="用户名" prop="username">
-          <el-input v-model="form.username" placeholder="请输入用户名" />
-        </el-form-item>
-        <el-form-item label="邮箱" prop="email">
-          <el-input v-model="form.email" placeholder="请输入邮箱" />
-        </el-form-item>
-        <el-form-item label="节点">
-          <el-select
-            v-model="form.node_ids"
-            multiple
-            placeholder="请选择节点 (不选则可访问全部)"
-            class="w-full"
-            collapse-tags
-            collapse-tags-tooltip
-          >
-            <el-option
-              v-for="node in allNodes"
-              :key="node.id"
-              :label="node.name"
-              :value="node.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="流量限额 GB">
-          <el-input-number v-model="form.traffic_limit_gb" :min="0" :precision="1" controls-position="right" />
-          <span class="ml-2 text-xs text-gray-400">0 = 无限制</span>
-        </el-form-item>
-        <el-form-item label="限速 Mbps">
-          <el-tooltip placement="top" content="仅在该用户独享某 hy2 节点时严格生效；多用户共用同一节点时退化为节点级总带宽限制。">
-            <el-input-number v-model="form.speed_limit" :min="0" controls-position="right" />
-          </el-tooltip>
-          <span class="ml-2 text-xs text-gray-400">0 = 无限制（仅对 hy2 协议，且仅单用户场景）</span>
-        </el-form-item>
-        <el-form-item label="重置日">
-          <el-input-number v-model="form.reset_day" :min="1" :max="31" controls-position="right" />
-        </el-form-item>
-        <el-form-item label="到期时间">
-          <el-date-picker
-            v-model="form.expires_at"
-            type="date"
-            placeholder="选择到期时间"
-            value-format="YYYY-MM-DD"
-            class="w-full"
-          />
-        </el-form-item>
-      </el-form>
+    <Modal v-model:open="dialogVisible" :title="isEdit ? '编辑用户' : '新增用户'" :width="540">
+      <Field label="用户名" :error="errors.username" layout="row">
+        <Input v-model="form.username" placeholder="例如 alice" />
+      </Field>
+      <Field label="邮箱" hint="可选，用于通知" layout="row">
+        <Input v-model="form.email" />
+      </Field>
+      <Field label="节点" layout="row">
+        <MultiSelect
+          v-model="form.node_ids"
+          :options="allNodes.map(n => ({ label: n.name, value: n.id }))"
+          placeholder="不选则可访问全部节点"
+        />
+      </Field>
+      <Field label="流量限额" hint="GB · 0 为无限制" layout="row">
+        <NumberInput v-model="form.traffic_limit_gb" :min="0" :precision="1" />
+      </Field>
+      <Field label="限速" hint="Mbps · 仅 hy2 单用户场景" layout="row">
+        <NumberInput v-model="form.speed_limit" :min="0" />
+      </Field>
+      <Field label="重置日" hint="每月此日重置流量" layout="row">
+        <NumberInput v-model="form.reset_day" :min="1" :max="31" />
+      </Field>
+      <Field label="到期时间" layout="row">
+        <DateInput v-model="form.expires_at" placeholder="选择日期" />
+      </Field>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSubmit">确定</el-button>
+        <Button @click="dialogVisible = false">取消</Button>
+        <Button variant="primary" :loading="submitting" @click="handleSubmit">
+          {{ isEdit ? '保存' : '创建' }}
+        </Button>
       </template>
-    </el-dialog>
+    </Modal>
 
-    <!-- 订阅链接弹窗 -->
     <SubscriptionDialog v-model:visible="subVisible" :user="subUser" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, defineAsyncComponent, onMounted } from 'vue'
-import type { FormInstance, FormRules } from 'element-plus'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref, reactive, computed, defineAsyncComponent, onMounted } from 'vue'
+import { Plus, Pencil, Trash2, Link, RotateCcw, Package } from 'lucide-vue-next'
+import {
+  Button, Input, NumberInput, Select, MultiSelect, Switch, Modal, Field, Tag, ProgressBar, DateInput,
+  toast, confirm,
+} from '../ui'
 import { getUsers, createUser, updateUser, deleteUser, resetTraffic } from '../api/user'
 import { getNodes } from '../api/node'
 import { getPlans, assignPlanToUser } from '../api/plan'
 import { formatBytes, formatDate } from '../utils/format'
 
-// SubscriptionDialog 引入了 qrcode（vendor-qrcode chunk）。
-// 它只在管理员点击"订阅"按钮时显示，按需加载即可，无需进 Users 首屏 chunk。
 const SubscriptionDialog = defineAsyncComponent(() => import('../components/SubscriptionDialog.vue'))
 
-// ---- 类型 ----
 interface User {
-  id: number
-  uuid: string
-  username: string
-  email: string
-  protocol: string
-  traffic_used: number
-  traffic_limit: number
-  speed_limit: number
-  reset_day: number
-  enable: boolean
-  expires_at: string | null
-  node_ids: number[]
-  plan_id?: number | null
+  id: number; uuid: string; username: string; email: string; protocol: string
+  traffic_used: number; traffic_limit: number; speed_limit: number; reset_day: number
+  enable: boolean; expires_at: string | null; node_ids: number[]; plan_id?: number | null
 }
 
-interface NodeItem {
-  id: number
-  name: string
-}
-
-// ---- 状态 ----
 const loading = ref(false)
 const users = ref<User[]>([])
-const allNodes = ref<NodeItem[]>([])
+const allNodes = ref<{ id: number; name: string }[]>([])
 const nodeNameMap = ref<Record<number, string>>({})
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const editingId = ref<number | null>(null)
 const submitting = ref(false)
-const formRef = ref<FormInstance>()
+const errors = reactive<{ username?: string }>({})
+
+const enabledCount = computed(() => users.value.filter(u => u.enable).length)
 
 const GB = 1024 ** 3
-
 const defaultForm = () => ({
-  username: '',
-  email: '',
-  protocol: 'vless',
+  username: '', email: '', protocol: 'vless',
   node_ids: [] as number[],
-  traffic_limit_gb: 0,
-  speed_limit: 0,
-  reset_day: 1,
+  traffic_limit_gb: 0, speed_limit: 0, reset_day: 1,
   expires_at: null as string | null,
 })
 const form = reactive(defaultForm())
 
-const rules: FormRules = {
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-}
-
-// 订阅弹窗
 const subVisible = ref(false)
 const subUser = ref<{ id: number; uuid: string; username: string } | null>(null)
 
-// 套餐分配
 const plans = ref<{ id: number; name: string }[]>([])
 const planNameMap = ref<Record<number, string>>({})
 const planDialogVisible = ref(false)
 const planTarget = ref<User | null>(null)
 const planForm = reactive<{ plan_id: number | null; reset_traffic: boolean; set_expires_at: boolean }>({
-  plan_id: null,
-  reset_traffic: true,
-  set_expires_at: true,
+  plan_id: null, reset_traffic: true, set_expires_at: true,
 })
 
-// ---- 工具函数 ----
 function trafficPercent(row: User): number {
-  if (!row.traffic_limit || row.traffic_limit === 0) return 0
+  if (!row.traffic_limit) return 0
   return Math.min(100, Math.round((row.traffic_used / row.traffic_limit) * 100))
 }
-
 function isExpiringSoon(date: string | null): boolean {
   if (!date) return false
   const diff = new Date(date).getTime() - Date.now()
-  return diff > 0 && diff < 7 * 24 * 3600 * 1000 // 7 天内
+  return diff > 0 && diff < 7 * 24 * 3600 * 1000
 }
 
-// ---- 数据加载 ----
 async function fetchNodes() {
   try {
     const res = await getNodes()
     const list = res.data?.nodes ?? []
     allNodes.value = list.map((n: any) => ({ id: n.id, name: n.name }))
     const map: Record<number, string> = {}
-    for (const n of list) {
-      map[n.id] = n.name
-    }
+    for (const n of list) map[n.id] = n.name
     nodeNameMap.value = map
-  } catch {
-    // 静默失败
-  }
+  } catch {/* silent */}
 }
 
 async function fetchUsers() {
@@ -295,11 +237,8 @@ async function fetchUsers() {
   try {
     const res = await getUsers()
     users.value = res.data?.users ?? []
-  } catch {
-    ElMessage.error('加载用户列表失败')
-  } finally {
-    loading.value = false
-  }
+  } catch { toast.error('加载用户列表失败') }
+  finally { loading.value = false }
 }
 
 async function fetchPlans() {
@@ -308,13 +247,9 @@ async function fetchPlans() {
     const list = res.data?.plans ?? []
     plans.value = list.map((p: any) => ({ id: p.id, name: p.name }))
     const map: Record<number, string> = {}
-    for (const p of list) {
-      map[p.id] = p.name
-    }
+    for (const p of list) map[p.id] = p.name
     planNameMap.value = map
-  } catch {
-    // 静默
-  }
+  } catch {/* silent */}
 }
 
 onMounted(async () => {
@@ -322,45 +257,18 @@ onMounted(async () => {
   await fetchUsers()
 })
 
-function openAssignPlan(row: User) {
-  planTarget.value = row
-  planForm.plan_id = row.plan_id ?? null
-  planForm.reset_traffic = true
-  planForm.set_expires_at = true
-  planDialogVisible.value = true
-}
-
-async function handleAssignPlan() {
-  if (!planTarget.value) return
-  try {
-    await assignPlanToUser(planTarget.value.id, {
-      plan_id: planForm.plan_id || null,
-      reset_traffic: planForm.reset_traffic,
-      set_expires_at: planForm.set_expires_at,
-    })
-    ElMessage.success('已应用套餐')
-    planDialogVisible.value = false
-    await fetchUsers()
-  } catch (e: any) {
-    ElMessage.error(e?.response?.data?.error || '操作失败')
-  }
-}
-
-// ---- 新增 / 编辑 ----
-function resetForm() {
-  Object.assign(form, defaultForm())
-}
+function resetForm() { Object.assign(form, defaultForm()) }
 
 function openCreate() {
-  isEdit.value = false
-  editingId.value = null
+  isEdit.value = false; editingId.value = null
+  errors.username = ''
   resetForm()
   dialogVisible.value = true
 }
 
 function openEdit(row: User) {
-  isEdit.value = true
-  editingId.value = row.id
+  isEdit.value = true; editingId.value = row.id
+  errors.username = ''
   Object.assign(form, {
     username: row.username,
     email: row.email || '',
@@ -388,73 +296,104 @@ function buildPayload() {
 }
 
 async function handleSubmit() {
-  if (!formRef.value) return
-  await formRef.value.validate()
+  if (!form.username.trim()) { errors.username = '请输入用户名'; return }
+  errors.username = ''
   submitting.value = true
   try {
     const payload = buildPayload()
-    if (isEdit.value && editingId.value !== null) {
-      await updateUser(editingId.value, payload)
-      ElMessage.success('更新成功')
-    } else {
-      await createUser(payload)
-      ElMessage.success('创建成功')
-    }
+    if (isEdit.value && editingId.value !== null) await updateUser(editingId.value, payload)
+    else await createUser(payload)
+    toast.success(isEdit.value ? '更新成功' : '创建成功')
     dialogVisible.value = false
     await fetchUsers()
-  } catch {
-    ElMessage.error(isEdit.value ? '更新失败' : '创建失败')
-  } finally {
-    submitting.value = false
-  }
+  } catch { toast.error(isEdit.value ? '更新失败' : '创建失败') }
+  finally { submitting.value = false }
 }
 
-// ---- 开关 ----
 async function handleToggle(row: User, val: boolean) {
   try {
     await updateUser(row.id, { enable: val })
     row.enable = val
-    ElMessage.success(val ? '已启用' : '已禁用')
-  } catch {
-    ElMessage.error('操作失败')
-  }
+    toast.success(val ? '已启用' : '已禁用')
+  } catch { toast.error('操作失败') }
 }
 
-// ---- 删除 ----
 async function handleDelete(row: User) {
   try {
-    await ElMessageBox.confirm(`确认删除用户「${row.username}」？`, '提示', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning',
+    await confirm({
+      title: '删除用户',
+      message: `确认删除用户「${row.username}」？`,
+      tone: 'danger',
+      confirmText: '删除',
     })
     await deleteUser(row.id)
-    ElMessage.success('已删除')
+    toast.success('已删除')
     await fetchUsers()
-  } catch {
-    // 用户取消或删除失败
-  }
+  } catch (e) { if (e === 'cancel') return }
 }
 
-// ---- 重置流量 ----
 async function handleResetTraffic(row: User) {
   try {
-    await ElMessageBox.confirm(`确认重置用户「${row.username}」的流量？`, '提示', {
-      confirmButtonText: '确定',
-      cancelButtonText: '取消',
-      type: 'warning',
+    await confirm({
+      title: '重置流量',
+      message: `确认重置用户「${row.username}」的流量？`,
+      confirmText: '重置',
+      tone: 'danger',
     })
     await resetTraffic(row.id)
-    ElMessage.success('流量已重置')
+    toast.success('流量已重置')
     await fetchUsers()
-  } catch {
-    // 用户取消或重置失败
-  }
+  } catch (e) { if (e === 'cancel') return }
 }
 
-// ---- 订阅 ----
 function openSub(row: User) {
   subUser.value = { id: row.id, uuid: row.uuid, username: row.username }
   subVisible.value = true
 }
+
+function openAssignPlan(row: User) {
+  planTarget.value = row
+  planForm.plan_id = row.plan_id ?? null
+  planForm.reset_traffic = true
+  planForm.set_expires_at = true
+  planDialogVisible.value = true
+}
+
+async function handleAssignPlan() {
+  if (!planTarget.value) return
+  try {
+    await assignPlanToUser(planTarget.value.id, {
+      plan_id: planForm.plan_id || null,
+      reset_traffic: planForm.reset_traffic,
+      set_expires_at: planForm.set_expires_at,
+    })
+    toast.success('已应用套餐')
+    planDialogVisible.value = false
+    await fetchUsers()
+  } catch (e: any) {
+    toast.error(e?.response?.data?.error || '操作失败')
+  }
+}
 </script>
+
+<style scoped>
+.users { display: flex; flex-direction: column; gap: 24px; }
+
+.cell-user { display: flex; flex-direction: column; gap: 2px; }
+.cell-user__name { color: var(--color-ink-strong); font-weight: 600; }
+.cell-user__email { font-family: var(--font-mono); font-size: 12px; color: var(--color-ink-muted); }
+
+.cell-allnodes { font-size: 12px; color: var(--color-ink-muted); font-style: italic; }
+.cell-none { color: var(--color-ink-soft); }
+
+.cell-traffic { display: flex; flex-direction: column; gap: 6px; min-width: 180px; }
+.cell-traffic__row { display: flex; align-items: baseline; gap: 6px; font-size: 13px; color: var(--color-ink-strong); }
+.cell-traffic__sep { color: var(--color-ink-soft); }
+.cell-traffic__limit { color: var(--color-ink-muted); }
+
+.cell-expire .num { color: var(--color-ink-base); }
+.cell-expire[data-soon="1"] .num { color: var(--color-status-warn); font-weight: 600; }
+
+.plan-user { font-family: var(--font-serif); font-weight: 600; color: var(--color-ink-strong); }
+.mr-1 { margin-right: 4px; }
+</style>

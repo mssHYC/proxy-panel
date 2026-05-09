@@ -1,90 +1,89 @@
 <template>
-  <div v-loading="loading" class="p-4 space-y-4">
-    <!-- 服务器流量卡片 -->
-    <el-card shadow="hover">
-      <template #header>
-        <div class="flex items-center justify-between">
-          <span class="font-bold">服务器流量</span>
-          <el-button size="small" @click="limitDialogVisible = true">设置限额</el-button>
+  <div class="traffic" :class="{ 'is-loading-overlay': loading }">
+    <section>
+      <header class="section-head">
+        <div>
+          <p class="eyebrow">服务器</p>
+          <h2 class="section-head__title">本周期总量</h2>
         </div>
-      </template>
-      <el-row :gutter="24">
-        <el-col :xs="24" :sm="8">
-          <div class="text-sm text-gray-500 mb-1">上行流量</div>
-          <div class="text-xl font-bold text-blue-500">{{ formatBytes(traffic.total_up) }}</div>
-        </el-col>
-        <el-col :xs="24" :sm="8">
-          <div class="text-sm text-gray-500 mb-1">下行流量</div>
-          <div class="text-xl font-bold text-green-500">{{ formatBytes(traffic.total_down) }}</div>
-        </el-col>
-        <el-col :xs="24" :sm="8">
-          <div class="text-sm text-gray-500 mb-1">流量限额</div>
-          <div class="text-xl font-bold">
-            {{ traffic.limit_bytes > 0 ? formatBytes(traffic.limit_bytes) : '无限制' }}
-          </div>
-        </el-col>
-      </el-row>
-      <div v-if="traffic.limit_bytes > 0" class="mt-4">
-        <el-progress
-          :percentage="usagePercent"
-          :color="usagePercent > 80 ? '#F56C6C' : '#409EFF'"
-          :stroke-width="18"
-          :format="() => usagePercent + '%'"
+        <Button @click="limitDialogVisible = true">设置限额</Button>
+      </header>
+
+      <dl class="traffic-summary">
+        <div>
+          <dt>上行</dt>
+          <dd class="num">{{ formatBytes(traffic.total_up) }}</dd>
+        </div>
+        <div>
+          <dt>下行</dt>
+          <dd class="num">{{ formatBytes(traffic.total_down) }}</dd>
+        </div>
+        <div>
+          <dt>限额</dt>
+          <dd class="num">{{ traffic.limit_bytes > 0 ? formatBytes(traffic.limit_bytes) : '∞' }}</dd>
+        </div>
+      </dl>
+
+      <div v-if="traffic.limit_bytes > 0" class="quota">
+        <ProgressBar :percent="usagePercent" :thresholds="{ warn: 80, crit: 100 }" />
+        <p class="quota__hint">
+          <span class="num" :data-state="quotaState">{{ usagePercent }}%</span>
+          已用 ·
+          剩余 <span class="num">{{ formatBytes(Math.max(traffic.limit_bytes - traffic.total_up - traffic.total_down, 0)) }}</span>
+        </p>
+      </div>
+    </section>
+
+    <hr class="divider-h" />
+
+    <section>
+      <header class="section-head">
+        <div>
+          <p class="eyebrow">趋势</p>
+          <h2 class="section-head__title">流量历史</h2>
+        </div>
+        <Tabs
+          :tabs="rangeOptions.map(o => ({ label: o.label, value: String(o.value) }))"
+          :model-value="String(days)"
+          variant="pill"
+          @update:model-value="(v) => setRange(Number(v))"
         />
-      </div>
-    </el-card>
+      </header>
+      <div ref="chartRef" class="chart-canvas"></div>
+    </section>
 
-    <!-- 流量历史图表 -->
-    <el-card shadow="hover">
-      <template #header>
-        <div class="flex items-center justify-between">
-          <span class="font-bold">流量趋势</span>
-          <el-select v-model="days" size="small" style="width: 120px" @change="onDaysChange">
-            <el-option :value="7" label="最近 7 天" />
-            <el-option :value="14" label="最近 14 天" />
-            <el-option :value="30" label="最近 30 天" />
-            <el-option :value="60" label="最近 60 天" />
-            <el-option :value="90" label="最近 90 天" />
-          </el-select>
-        </div>
-      </template>
-      <div ref="chartRef" class="w-full" style="height: 350px"></div>
-    </el-card>
+    <hr class="divider-h" />
 
-    <!-- 节点维度分布 -->
-    <el-card shadow="hover">
-      <template #header>
-        <div class="flex items-center justify-between">
-          <span class="font-bold">节点流量分布</span>
-          <span class="text-xs text-gray-400">最近 {{ days }} 天 · 按 traffic_logs.node_id 聚合</span>
+    <section>
+      <header class="section-head">
+        <div>
+          <p class="eyebrow">节点</p>
+          <h2 class="section-head__title">流量分布</h2>
         </div>
-      </template>
-      <div v-if="!nodeDist.length" class="text-sm text-gray-400 py-6 text-center">
+        <span class="section-head__hint">最近 <span class="num">{{ days }}</span> 天</span>
+      </header>
+      <p v-if="!nodeDist.length" class="empty">
         暂无节点维度数据。新版采集会写入真实 node_id；如长期为空请检查内核运行状态。
-      </div>
-      <div v-else ref="nodeChartRef" class="w-full" style="height: 320px"></div>
-    </el-card>
+      </p>
+      <div v-else ref="nodeChartRef" class="chart-canvas"></div>
+    </section>
 
-    <!-- 设置限额对话框 -->
-    <el-dialog v-model="limitDialogVisible" title="设置流量限额" width="400px">
-      <el-form label-width="80px">
-        <el-form-item label="限额 (GB)">
-          <el-input-number v-model="limitGB" :min="0" :precision="1" :step="10" style="width: 100%" />
-        </el-form-item>
-        <div class="text-xs text-gray-400">设为 0 表示无限制</div>
-      </el-form>
+    <Modal v-model:open="limitDialogVisible" title="设置流量限额" :width="420">
+      <Field label="限额" hint="GB · 0 为无限制" layout="row">
+        <NumberInput v-model="limitGB" :min="0" :precision="1" :step="10" />
+      </Field>
       <template #footer>
-        <el-button @click="limitDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="settingLimit" @click="handleSetLimit">确定</el-button>
+        <Button @click="limitDialogVisible = false">取消</Button>
+        <Button variant="primary" :loading="settingLimit" @click="handleSetLimit">保存</Button>
       </template>
-    </el-dialog>
+    </Modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import * as echarts from 'echarts'
-import { ElMessage } from 'element-plus'
+import { Button, NumberInput, Modal, Field, ProgressBar, Tabs, toast } from '../ui'
 import { getServerTraffic, setServerLimit, getTrafficHistory, getTrafficByNode } from '../api/traffic'
 import { formatBytes } from '../utils/format'
 
@@ -101,11 +100,80 @@ const nodeChartRef = ref<HTMLDivElement>()
 let nodeChart: echarts.ECharts | null = null
 const nodeDist = ref<{ node_id: number; node_name: string; upload: number; download: number }[]>([])
 
+const rangeOptions = [
+  { label: '7d',  value: 7 },
+  { label: '14d', value: 14 },
+  { label: '30d', value: 30 },
+  { label: '60d', value: 60 },
+  { label: '90d', value: 90 },
+]
+
 const usagePercent = computed(() => {
   if (traffic.value.limit_bytes <= 0) return 0
   const used = traffic.value.total_up + traffic.value.total_down
   return Math.min(100, Math.round((used / traffic.value.limit_bytes) * 100))
 })
+const quotaState = computed(() => {
+  const p = usagePercent.value
+  if (p >= 100) return 'crit'
+  if (p >= 80) return 'warn'
+  return 'ok'
+})
+
+const cssVar = (name: string, fallback = '') => {
+  if (typeof window === 'undefined') return fallback
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+}
+
+function chartTheme() {
+  return {
+    ink:    cssVar('--color-ink-base',  '#3a3a3a'),
+    muted:  cssVar('--color-ink-muted', '#7a7a7a'),
+    faint:  cssVar('--color-ink-faint', '#e3e3e0'),
+    accent: cssVar('--color-accent',    'oklch(0.48 0.13 28)'),
+    soft:   cssVar('--color-ink-soft',  '#a8a8a4'),
+    raised: cssVar('--color-surface-raised', '#fff'),
+    font:   cssVar('--font-mono', 'JetBrains Mono, monospace'),
+  }
+}
+
+function buildOpts(categories: string[], up: number[], down: number[]) {
+  const t = chartTheme()
+  return {
+    textStyle: { color: t.ink, fontFamily: t.font },
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: t.raised, borderColor: t.faint,
+      textStyle: { color: t.ink, fontFamily: t.font },
+      formatter: (params: any) => {
+        const name = params[0].axisValue
+        let html = `<div style="font-weight:600;margin-bottom:4px">${name}</div>`
+        params.forEach((p: any) => {
+          html += `<div>${p.marker} ${p.seriesName}: <b>${formatBytes(p.value)}</b></div>`
+        })
+        return html
+      },
+    },
+    legend: { data: ['上行', '下行'], bottom: 0, textStyle: { color: t.muted, fontFamily: t.font }, itemWidth: 10, itemHeight: 10 },
+    grid: { left: 8, right: 12, bottom: 32, top: 12, containLabel: true },
+    xAxis: {
+      type: 'category', data: categories,
+      axisLine: { lineStyle: { color: t.faint } },
+      axisTick: { show: false },
+      axisLabel: { color: t.muted, fontSize: 11, rotate: 25, fontFamily: t.font },
+    },
+    yAxis: {
+      type: 'value',
+      axisLine: { show: false }, axisTick: { show: false },
+      splitLine: { lineStyle: { color: t.faint, type: 'dashed' } },
+      axisLabel: { color: t.muted, fontSize: 11, fontFamily: t.font, formatter: (v: number) => formatBytes(v) },
+    },
+    series: [
+      { name: '上行', type: 'bar', stack: 'n', data: up, itemStyle: { color: t.accent, borderRadius: [2, 2, 0, 0] }, barWidth: '55%' },
+      { name: '下行', type: 'bar', stack: 'n', data: down, itemStyle: { color: t.soft, borderRadius: [2, 2, 0, 0] }, barWidth: '55%' },
+    ],
+  }
+}
 
 const fetchTraffic = async () => {
   loading.value = true
@@ -124,42 +192,17 @@ const fetchHistory = async () => {
   try {
     const { data } = await getTrafficHistory(days.value)
     const history: { date: string; upload: number; download: number }[] = data.history || []
+    chart?.setOption(buildOpts(
+      history.map((i) => i.date),
+      history.map((i) => i.upload),
+      history.map((i) => i.download),
+    ))
+  } catch (e) { console.error('获取流量历史失败', e) }
+}
 
-    const dates = history.map((item) => item.date)
-    const uploads = history.map((item) => item.upload)
-    const downloads = history.map((item) => item.download)
-
-    chart?.setOption({
-      tooltip: {
-        trigger: 'axis',
-        formatter: (params: any) => {
-          const date = params[0].axisValue
-          let html = `<div style="font-weight:600">${date}</div>`
-          params.forEach((p: any) => {
-            html += `<div>${p.marker} ${p.seriesName}: ${formatBytes(p.value)}</div>`
-          })
-          return html
-        },
-      },
-      legend: { data: ['上行', '下行'], bottom: 0 },
-      grid: { left: '3%', right: '4%', bottom: '12%', top: '8%', containLabel: true },
-      xAxis: {
-        type: 'category',
-        data: dates,
-        axisLabel: { rotate: 30, fontSize: 11 },
-      },
-      yAxis: {
-        type: 'value',
-        axisLabel: { formatter: (val: number) => formatBytes(val) },
-      },
-      series: [
-        { name: '上行', type: 'bar', stack: 'traffic', data: uploads, itemStyle: { color: '#409EFF' } },
-        { name: '下行', type: 'bar', stack: 'traffic', data: downloads, itemStyle: { color: '#67C23A' } },
-      ],
-    })
-  } catch (e) {
-    console.error('获取流量历史失败', e)
-  }
+function setRange(v: number) {
+  days.value = v
+  onDaysChange()
 }
 
 const onDaysChange = async () => {
@@ -171,68 +214,29 @@ const fetchNodeDistribution = async () => {
   try {
     const { data } = await getTrafficByNode(days.value)
     nodeDist.value = data.distribution || []
-    if (!nodeDist.value.length) {
-      nodeChart?.dispose()
-      nodeChart = null
-      return
-    }
-    // 等待 v-if 渲染出 DOM 后再 init
+    if (!nodeDist.value.length) { nodeChart?.dispose(); nodeChart = null; return }
     await nextTick()
-    if (!nodeChart && nodeChartRef.value) {
-      nodeChart = echarts.init(nodeChartRef.value)
-    }
-    nodeChart?.setOption({
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: { type: 'shadow' },
-        formatter: (params: any) => {
-          const name = params[0].axisValue
-          let html = `<div style="font-weight:600">${name}</div>`
-          params.forEach((p: any) => {
-            html += `<div>${p.marker} ${p.seriesName}: ${formatBytes(p.value)}</div>`
-          })
-          return html
-        },
-      },
-      legend: { data: ['上行', '下行'], bottom: 0 },
-      grid: { left: '3%', right: '4%', bottom: '12%', top: '8%', containLabel: true },
-      xAxis: {
-        type: 'category',
-        data: nodeDist.value.map((d) => d.node_name),
-        axisLabel: { rotate: 25, fontSize: 11 },
-      },
-      yAxis: {
-        type: 'value',
-        axisLabel: { formatter: (val: number) => formatBytes(val) },
-      },
-      series: [
-        { name: '上行', type: 'bar', stack: 'n', data: nodeDist.value.map((d) => d.upload), itemStyle: { color: '#409EFF' } },
-        { name: '下行', type: 'bar', stack: 'n', data: nodeDist.value.map((d) => d.download), itemStyle: { color: '#67C23A' } },
-      ],
-    })
-  } catch (e) {
-    console.error('获取节点流量分布失败', e)
-  }
+    if (!nodeChart && nodeChartRef.value) nodeChart = echarts.init(nodeChartRef.value)
+    nodeChart?.setOption(buildOpts(
+      nodeDist.value.map((d) => d.node_name),
+      nodeDist.value.map((d) => d.upload),
+      nodeDist.value.map((d) => d.download),
+    ))
+  } catch (e) { console.error('获取节点流量分布失败', e) }
 }
 
 const handleSetLimit = async () => {
   settingLimit.value = true
   try {
     await setServerLimit(limitGB.value)
-    ElMessage.success('限额设置成功')
+    toast.success('限额设置成功')
     limitDialogVisible.value = false
     await fetchTraffic()
-  } catch (e: any) {
-    ElMessage.error(e.response?.data?.message || '设置失败')
-  } finally {
-    settingLimit.value = false
-  }
+  } catch (e: any) { toast.error(e.response?.data?.message || '设置失败') }
+  finally { settingLimit.value = false }
 }
 
-const handleResize = () => {
-  chart?.resize()
-  nodeChart?.resize()
-}
+const handleResize = () => { chart?.resize(); nodeChart?.resize() }
 
 onMounted(async () => {
   await fetchTraffic()
@@ -248,3 +252,26 @@ onUnmounted(() => {
   nodeChart?.dispose()
 })
 </script>
+
+<style scoped>
+.traffic { display: flex; flex-direction: column; gap: 40px; }
+
+.traffic-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 200px));
+  gap: 32px;
+  margin: 0;
+}
+.traffic-summary div { display: flex; flex-direction: column; gap: 4px; }
+.traffic-summary dt { font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-ink-muted); margin: 0; }
+.traffic-summary dd { margin: 0; font-family: var(--font-mono); font-size: 22px; font-weight: 600; color: var(--color-ink-strong); }
+
+.quota { margin-top: 24px; max-width: 720px; display: flex; flex-direction: column; gap: 8px; }
+.quota__hint { margin: 0; font-size: 13px; color: var(--color-ink-muted); }
+.quota__hint .num { color: var(--color-ink-strong); font-weight: 600; }
+.quota__hint .num[data-state="warn"] { color: var(--color-status-warn); }
+.quota__hint .num[data-state="crit"] { color: var(--color-status-crit); }
+
+.chart-canvas { width: 100%; height: 340px; }
+.empty { font-size: 13px; color: var(--color-ink-muted); padding: 24px 0; }
+</style>

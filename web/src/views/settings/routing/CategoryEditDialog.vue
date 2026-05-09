@@ -1,94 +1,52 @@
 <template>
-  <el-dialog
-    :model-value="!!modelValue"
-    title="编辑分类"
-    width="640px"
-    @update:model-value="$emit('update:modelValue', null)"
-  >
-    <el-form v-if="modelValue" label-width="160px">
-      <el-form-item label="Code">
-        <el-input v-model="modelValue.Code" :disabled="readonly" />
-      </el-form-item>
-      <el-form-item label="显示名">
-        <el-input v-model="modelValue.DisplayName" :disabled="readonly" />
-      </el-form-item>
-      <el-form-item label="Site Tags">
-        <el-select
-          v-model="modelValue.SiteTags"
-          :disabled="readonly"
-          multiple
-          filterable
-          allow-create
-          placeholder="如 google, youtube"
-          style="width: 100%"
+  <Modal :open="!!modelValue" :width="640" title="编辑分类" @update:open="(v) => !v && emit('update:modelValue', null)">
+    <template v-if="modelValue">
+      <Field label="Code" layout="row">
+        <Input v-model="modelValue.Code" :disabled="readonly" />
+      </Field>
+      <Field label="显示名" layout="row">
+        <Input v-model="modelValue.DisplayName" :disabled="readonly" />
+      </Field>
+      <Field label="Site Tags" hint="如 google, youtube" layout="row">
+        <TagInput v-model="modelValue.SiteTags" :disabled="readonly" placeholder="输入并回车添加" />
+      </Field>
+      <Field label="IP Tags" layout="row">
+        <TagInput v-model="modelValue.IPTags" :disabled="readonly" />
+      </Field>
+      <Field label="内联 domain_suffix" layout="row">
+        <TagInput v-model="modelValue.InlineDomainSuffix" :disabled="readonly" />
+      </Field>
+      <Field label="内联 domain_keyword" layout="row">
+        <TagInput v-model="modelValue.InlineDomainKeyword" :disabled="readonly" />
+      </Field>
+      <Field label="内联 ip_cidr" layout="row">
+        <TagInput v-model="modelValue.InlineIPCIDR" :disabled="readonly" />
+      </Field>
+      <Field label="默认出站组" layout="row">
+        <Select
+          :model-value="modelValue.DefaultGroupID"
+          :options="groups.map(g => ({ label: g.DisplayName, value: g.ID }))"
+          @update:model-value="(v) => (modelValue!.DefaultGroupID = v as number)"
         />
-      </el-form-item>
-      <el-form-item label="IP Tags">
-        <el-select
-          v-model="modelValue.IPTags"
-          :disabled="readonly"
-          multiple
-          filterable
-          allow-create
-          style="width: 100%"
-        />
-      </el-form-item>
-      <el-form-item label="内联 domain_suffix">
-        <el-select
-          v-model="modelValue.InlineDomainSuffix"
-          :disabled="readonly"
-          multiple
-          filterable
-          allow-create
-          style="width: 100%"
-        />
-      </el-form-item>
-      <el-form-item label="内联 domain_keyword">
-        <el-select
-          v-model="modelValue.InlineDomainKeyword"
-          :disabled="readonly"
-          multiple
-          filterable
-          allow-create
-          style="width: 100%"
-        />
-      </el-form-item>
-      <el-form-item label="内联 ip_cidr">
-        <el-select
-          v-model="modelValue.InlineIPCIDR"
-          :disabled="readonly"
-          multiple
-          filterable
-          allow-create
-          style="width: 100%"
-        />
-      </el-form-item>
-      <el-form-item label="默认出站组">
-        <el-select v-model="modelValue.DefaultGroupID" style="width: 100%">
-          <el-option v-for="g in groups" :key="g.ID" :label="g.DisplayName" :value="g.ID" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="排序">
-        <el-input-number v-model="modelValue.SortOrder" />
-      </el-form-item>
-    </el-form>
-    <template #footer>
-      <el-button @click="$emit('update:modelValue', null)">取消</el-button>
-      <el-button type="primary" @click="$emit('save', modelValue!)">保存</el-button>
+      </Field>
+      <Field label="排序" layout="row">
+        <NumberInput v-model="modelValue.SortOrder" />
+      </Field>
     </template>
-  </el-dialog>
+    <template #footer>
+      <Button @click="emit('update:modelValue', null)">取消</Button>
+      <Button variant="primary" @click="emit('save', modelValue!)">保存</Button>
+    </template>
+  </Modal>
 </template>
 
 <script setup lang="ts">
+import { Button, Input, NumberInput, Select, Modal, Field } from '../../../ui'
+import TagInput from './TagInput.vue'
 import type { Category, Group } from './types'
 
-defineProps<{
-  modelValue: Category | null
-  readonly: boolean
-  groups: Group[]
-}>()
-
-defineEmits<{
+defineProps<{ modelValue: Category | null; readonly: boolean; groups: Group[] }>()
+const emit = defineEmits<{
   (e: 'update:modelValue', v: Category | null): void
   (e: 'save', v: Category): void
 }>()

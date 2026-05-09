@@ -1,30 +1,33 @@
 <template>
-  <div class="routing-section">
-    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px">
-      <div />
-      <el-button :icon="QuestionFilled" @click="showHelp = true">帮助</el-button>
+  <div class="routing">
+    <div class="routing__head">
+      <Tabs
+        :tabs="tabs"
+        :model-value="active"
+        variant="pill"
+        @update:model-value="(v) => (active = v as TabName)"
+      />
+      <button class="routing__help" @click="showHelp = true">
+        <HelpCircle :size="14" :stroke-width="1.6" />
+        <span>帮助</span>
+      </button>
     </div>
-    <el-tabs v-model="active">
-      <el-tab-pane label="规则分类" name="categories">
-        <CategoriesTab v-if="config" :config="config" @refresh="load" />
-      </el-tab-pane>
-      <el-tab-pane label="出站组" name="groups">
-        <GroupsTab v-if="config" :config="config" @refresh="load" />
-      </el-tab-pane>
-      <el-tab-pane label="自定义规则" name="custom">
-        <CustomRulesTab v-if="config" :config="config" @refresh="load" />
-      </el-tab-pane>
-      <el-tab-pane label="高级" name="advanced">
-        <AdvancedTab v-if="config" :config="config" @refresh="load" />
-      </el-tab-pane>
-    </el-tabs>
+
+    <div class="routing__pane">
+      <CategoriesTab  v-if="active === 'categories' && config" :config="config" @refresh="load" />
+      <GroupsTab      v-else-if="active === 'groups'    && config" :config="config" @refresh="load" />
+      <CustomRulesTab v-else-if="active === 'custom'    && config" :config="config" @refresh="load" />
+      <AdvancedTab    v-else-if="active === 'advanced'  && config" :config="config" @refresh="load" />
+    </div>
+
     <RoutingHelpDrawer v-model="showHelp" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { QuestionFilled } from '@element-plus/icons-vue'
+import { HelpCircle } from 'lucide-vue-next'
+import { Tabs } from '../../../ui'
 import { getRoutingConfig } from '../../../api/routing'
 import type { RoutingConfig } from './types'
 import CategoriesTab from './CategoriesTab.vue'
@@ -33,7 +36,16 @@ import CustomRulesTab from './CustomRulesTab.vue'
 import AdvancedTab from './AdvancedTab.vue'
 import RoutingHelpDrawer from './RoutingHelpDrawer.vue'
 
-const active = ref('categories')
+type TabName = 'categories' | 'groups' | 'custom' | 'advanced'
+
+const tabs = [
+  { label: '规则分类',     value: 'categories' },
+  { label: '出站组',       value: 'groups' },
+  { label: '自定义规则',   value: 'custom' },
+  { label: '高级',         value: 'advanced' },
+]
+
+const active = ref<TabName>('categories')
 const config = ref<RoutingConfig | null>(null)
 const showHelp = ref(false)
 
@@ -43,3 +55,33 @@ async function load() {
 }
 onMounted(load)
 </script>
+
+<style scoped>
+.routing { display: flex; flex-direction: column; gap: 24px; }
+
+.routing__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.routing__help {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid var(--color-ink-faint);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--color-ink-muted);
+  cursor: pointer;
+  transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
+  font-family: inherit;
+}
+.routing__help:hover { background: var(--color-surface-sunken); color: var(--color-ink-strong); }
+
+.routing__pane { min-height: 200px; }
+</style>

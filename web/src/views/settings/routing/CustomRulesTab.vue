@@ -1,44 +1,67 @@
 <template>
-  <div>
-    <el-button @click="onAdd">+ 新增规则</el-button>
-    <el-table :data="config.customRules" border style="margin-top: 12px">
-      <el-table-column prop="Name" label="名称" width="200" />
-      <el-table-column label="Site">
-        <template #default="{ row }">
-          <el-tag v-for="t in row.SiteTags" :key="t" size="small" style="margin-right: 4px">{{ t }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="IP">
-        <template #default="{ row }">
-          <el-tag v-for="t in row.IPTags" :key="t" size="small" type="warning" style="margin-right: 4px">{{ t }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="Domain Suffix">
-        <template #default="{ row }">{{ row.DomainSuffix.join(', ') }}</template>
-      </el-table-column>
-      <el-table-column label="IP CIDR">
-        <template #default="{ row }">{{ row.IPCIDR.join(', ') }}</template>
-      </el-table-column>
-      <el-table-column label="出站" width="160">
-        <template #default="{ row }">
-          {{ row.OutboundLiteral || groupName(row.OutboundGroupID) }}
-        </template>
-      </el-table-column>
-      <el-table-column prop="SortOrder" label="排序" width="80" />
-      <el-table-column label="操作" width="140">
-        <template #default="{ row }">
-          <el-button size="small" @click="onEdit(row)">编辑</el-button>
-          <el-button size="small" type="danger" @click="onDelete(row)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+  <div class="rules">
+    <div class="rules__bar">
+      <p class="rules__hint">自定义规则优先级最高，不受预设方案影响。</p>
+      <Button variant="primary" @click="onAdd">
+        <Plus :size="14" :stroke-width="2" /> 新增规则
+      </Button>
+    </div>
+
+    <table v-if="config.customRules?.length" class="dt">
+      <thead>
+        <tr>
+          <th>名称</th>
+          <th>Site</th>
+          <th>IP</th>
+          <th>Domain Suffix</th>
+          <th>IP CIDR</th>
+          <th>出站</th>
+          <th class="is-numeric">排序</th>
+          <th class="is-numeric">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="row in config.customRules" :key="row.ID">
+          <td><span class="cell-name">{{ row.Name }}</span></td>
+          <td>
+            <Tag v-for="t in row.SiteTags" :key="t" class="mr-1">{{ t }}</Tag>
+            <span v-if="!row.SiteTags?.length" class="cell-none">—</span>
+          </td>
+          <td>
+            <Tag v-for="t in row.IPTags" :key="t" class="mr-1">{{ t }}</Tag>
+            <span v-if="!row.IPTags?.length" class="cell-none">—</span>
+          </td>
+          <td><span class="mono cell-meta">{{ row.DomainSuffix?.join(', ') || '—' }}</span></td>
+          <td><span class="mono cell-meta">{{ row.IPCIDR?.join(', ') || '—' }}</span></td>
+          <td><span class="mono cell-out">{{ row.OutboundLiteral || groupName(row.OutboundGroupID) }}</span></td>
+          <td class="is-numeric"><span class="num cell-meta">{{ row.SortOrder }}</span></td>
+          <td class="is-numeric">
+            <div class="row-actions">
+              <button class="row-actions__btn" @click="onEdit(row)" title="编辑">
+                <Pencil :size="14" :stroke-width="1.6" />
+              </button>
+              <button class="row-actions__btn row-actions__btn--danger" @click="onDelete(row)" title="删除">
+                <Trash2 :size="14" :stroke-width="1.6" />
+              </button>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div v-if="!config.customRules?.length" class="empty-state">
+      <p class="empty-state__title">还没有自定义规则</p>
+      <p class="empty-state__hint">用自定义规则覆盖远程规则集没覆盖到的域名 / IP 段。</p>
+    </div>
+
     <CustomRuleEditDialog v-model="editing" :groups="config.groups" @save="onSave" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, Pencil, Trash2 } from 'lucide-vue-next'
+import { Button, Tag, toast, confirm } from '../../../ui'
 import { createCustomRule, updateCustomRule, deleteCustomRule } from '../../../api/routing'
 import type { RoutingConfig, CustomRule } from './types'
 import CustomRuleEditDialog from './CustomRuleEditDialog.vue'
@@ -53,19 +76,12 @@ function groupName(id: number | null) {
 
 function onAdd() {
   editing.value = {
-    ID: 0,
-    Name: '',
-    SiteTags: [],
-    IPTags: [],
-    DomainSuffix: [],
-    DomainKeyword: [],
-    IPCIDR: [],
-    SrcIPCIDR: [],
-    Protocol: '',
-    Port: '',
+    ID: 0, Name: '',
+    SiteTags: [], IPTags: [],
+    DomainSuffix: [], DomainKeyword: [], IPCIDR: [], SrcIPCIDR: [],
+    Protocol: '', Port: '',
     OutboundGroupID: props.config.groups[0]?.ID ?? null,
-    OutboundLiteral: '',
-    SortOrder: 100,
+    OutboundLiteral: '', SortOrder: 100,
   }
 }
 
@@ -77,15 +93,27 @@ async function onSave(row: CustomRule) {
   if (row.ID === 0) await createCustomRule(row)
   else await updateCustomRule(row.ID, row)
   editing.value = null
-  ElMessage.success('已保存')
+  toast.success('已保存')
   emit('refresh')
 }
 
 async function onDelete(row: CustomRule) {
   try {
-    await ElMessageBox.confirm(`删除规则 ${row.Name}？`, '确认', { type: 'warning' })
+    await confirm({ message: `删除规则 ${row.Name}？`, tone: 'danger', confirmText: '删除' })
   } catch { return }
   await deleteCustomRule(row.ID)
   emit('refresh')
 }
 </script>
+
+<style scoped>
+.rules { display: flex; flex-direction: column; gap: 16px; }
+.rules__bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.rules__hint { margin: 0; font-size: 13px; color: var(--color-ink-muted); }
+
+.cell-name { font-weight: 600; color: var(--color-ink-strong); }
+.cell-meta { color: var(--color-ink-muted); font-size: 12px; }
+.cell-none { color: var(--color-ink-soft); font-size: 12px; }
+.cell-out { color: var(--color-accent-ink); font-weight: 600; font-size: 13px; }
+.mr-1 { margin-right: 4px; }
+</style>

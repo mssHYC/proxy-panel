@@ -1,137 +1,112 @@
 <template>
-  <div class="login-wrapper">
-    <el-card class="login-card" shadow="always">
-      <div class="login-header">
-        <h1 class="login-title">ProxyPanel</h1>
-        <p class="login-subtitle">{{ phase === 'login' ? '管理面板登录' : '请输入验证码' }}</p>
+  <div class="login">
+    <aside class="login__brand">
+      <div class="login__brand-inner">
+        <span class="login__mark">P</span>
+        <h1 class="login__title">ProxyPanel</h1>
+        <p class="login__lede">
+          为自己和小团队管理代理与流量。
+          <br />
+          一个克制的运维面板。
+        </p>
+        <ul class="login__bullets">
+          <li><StatusDot state="ok" /> 多端订阅 · Surge / Clash / Sing-box</li>
+          <li><StatusDot state="ok" /> 流量周期与服务器配额预警</li>
+          <li><StatusDot state="ok" /> Telegram · 企业微信 告警</li>
+        </ul>
       </div>
+    </aside>
 
-      <!-- 阶段1: 用户名 + 密码 -->
-      <el-form
-        v-if="phase === 'login'"
-        ref="formRef"
-        :model="form"
-        :rules="rules"
-        @submit.prevent="handleLogin"
-      >
-        <el-form-item prop="username">
-          <el-input
-            v-model="form.username"
-            placeholder="用户名"
-            size="large"
-            :prefix-icon="User"
-            name="username"
-            autocomplete="username"
-          />
-        </el-form-item>
-        <el-form-item prop="password">
-          <el-input
-            v-model="form.password"
-            type="password"
-            placeholder="密码"
-            size="large"
-            show-password
-            :prefix-icon="Lock"
-            name="password"
-            autocomplete="current-password"
-            @keyup.enter="handleLogin"
-          />
-        </el-form-item>
-        <el-form-item>
-          <el-button
-            type="primary"
-            size="large"
-            :loading="loading"
-            class="login-btn"
-            @click="handleLogin"
-          >
-            登 录
-          </el-button>
-        </el-form-item>
-      </el-form>
+    <main class="login__form">
+      <div class="login__form-inner">
+        <p class="eyebrow">{{ phase === 'login' ? '登录管理面板' : '两步验证' }}</p>
+        <h2 class="login__heading">{{ phase === 'login' ? '继续' : '请输入验证码' }}</h2>
 
-      <!-- 阶段2: TOTP 验证码 -->
-      <div v-else class="totp-phase">
-        <p class="totp-hint">请输入验证器 App 中的 6 位动态验证码</p>
-        <el-input
-          v-model="totpCode"
-          placeholder="000000"
-          size="large"
-          maxlength="6"
-          class="totp-input"
-          name="otp"
-          autocomplete="one-time-code"
-          inputmode="numeric"
-          @keyup.enter="handleVerify2FA"
-        />
-        <el-button
-          type="primary"
-          size="large"
-          :loading="loading"
-          class="login-btn"
-          style="margin-top: 16px"
-          @click="handleVerify2FA"
-        >
-          验 证
-        </el-button>
-        <div class="totp-back">
-          <el-link type="primary" @click="backToLogin">返回登录</el-link>
+        <form v-if="phase === 'login'" class="login__fields" @submit.prevent="handleLogin">
+          <Field label="用户名" :error="errors.username">
+            <template #default="{ id }">
+              <Input
+                :id="id"
+                v-model="form.username"
+                placeholder="admin"
+                autocomplete="username"
+              />
+            </template>
+          </Field>
+          <Field label="密码" :error="errors.password">
+            <template #default="{ id }">
+              <Input
+                :id="id"
+                v-model="form.password"
+                type="password"
+                autocomplete="current-password"
+                @keyup.enter="handleLogin"
+              />
+            </template>
+          </Field>
+          <Button type="submit" variant="primary" :loading="loading" class="login__submit">登录</Button>
+        </form>
+
+        <div v-else class="login__totp">
+          <p class="login__hint">在你的验证器 App 中找到当前 6 位代码。</p>
+          <Input
+            v-model="totpCode"
+            placeholder="000000"
+            inputmode="numeric"
+            :maxlength="6"
+            class="login__totp-input"
+            autocomplete="one-time-code"
+            name="otp"
+            @keyup.enter="handleVerify2FA"
+          />
+          <Button variant="primary" :loading="loading" class="login__submit" @click="handleVerify2FA">验证</Button>
+          <button class="login__link" type="button" @click="backToLogin">← 返回登录</button>
         </div>
       </div>
-    </el-card>
+    </main>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
-import { User, Lock } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
-import type { FormInstance, FormRules } from 'element-plus'
+import { Button, Input, Field, StatusDot, toast } from '../ui'
 import { login, verify2FA } from '../api/auth'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
 const auth = useAuthStore()
-const formRef = ref<FormInstance>()
 const loading = ref(false)
 
-// 登录阶段: 'login' | 'totp'
 const phase = ref<'login' | 'totp'>('login')
 const tempToken = ref('')
 const totpCode = ref('')
 
-const form = reactive({
-  username: '',
-  password: '',
-})
+const form = reactive({ username: '', password: '' })
+const errors = reactive<{ username?: string; password?: string }>({})
 
-const rules: FormRules = {
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }],
+function validate() {
+  errors.username = form.username ? '' : '请输入用户名'
+  errors.password = form.password ? '' : '请输入密码'
+  return !errors.username && !errors.password
 }
 
 async function handleLogin() {
-  const valid = await formRef.value?.validate().catch(() => false)
-  if (!valid) return
-
+  if (!validate()) return
   loading.value = true
   try {
     const res = await login(form.username, form.password)
     if (res.data.require_2fa) {
-      // 需要二次验证
       tempToken.value = res.data.temp_token
       phase.value = 'totp'
       totpCode.value = ''
     } else {
-      // 直接登录成功
       auth.setToken(res.data.token)
-      ElMessage.success('登录成功')
+      toast.success('登录成功')
       router.push('/')
     }
   } catch (err: any) {
-    const msg = err.response?.data?.error || '登录失败，请检查用户名和密码'
-    ElMessage.error(msg)
+    toast.error(err.response?.data?.error || '登录失败，请检查用户名和密码')
   } finally {
     loading.value = false
   }
@@ -139,18 +114,17 @@ async function handleLogin() {
 
 async function handleVerify2FA() {
   if (totpCode.value.length !== 6) {
-    ElMessage.warning('请输入 6 位验证码')
+    toast.warn('请输入 6 位验证码')
     return
   }
   loading.value = true
   try {
     const res = await verify2FA(tempToken.value, totpCode.value)
     auth.setToken(res.data.token)
-    ElMessage.success('登录成功')
+    toast.success('登录成功')
     router.push('/')
   } catch (err: any) {
-    const msg = err.response?.data?.error || '验证码错误，请重试'
-    ElMessage.error(msg)
+    toast.error(err.response?.data?.error || '验证码错误，请重试')
   } finally {
     loading.value = false
   }
@@ -164,59 +138,109 @@ function backToLogin() {
 </script>
 
 <style scoped>
-.login-wrapper {
+.login {
   min-height: 100vh;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: var(--color-surface-base);
+}
+
+.login__brand {
+  background: var(--color-surface-raised);
+  border-right: 1px solid var(--color-ink-faint);
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  padding: 64px;
+}
+.login__brand-inner { max-width: 420px; }
+.login__mark {
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-}
-
-.login-card {
-  width: 400px;
-  padding: 20px;
-  border-radius: 12px;
-}
-
-.login-header {
-  text-align: center;
-  margin-bottom: 30px;
-}
-
-.login-title {
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  background: var(--color-accent);
+  color: white;
+  font-family: var(--font-serif);
   font-size: 28px;
-  font-weight: 700;
-  color: #303133;
-  margin: 0 0 8px 0;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin-bottom: 28px;
+}
+.login__title {
+  font-family: var(--font-serif);
+  font-size: 44px;
+  line-height: 1.1;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--color-ink-strong);
+  margin: 0 0 16px;
+}
+.login__lede {
+  font-family: var(--font-serif);
+  font-size: 18px;
+  line-height: 1.6;
+  color: var(--color-ink-base);
+  margin: 0 0 28px;
+  max-width: 30ch;
+}
+.login__bullets {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 10px;
+  font-size: 13px; color: var(--color-ink-muted);
+}
+.login__bullets li { display: flex; align-items: center; gap: 8px; }
+
+.login__form {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 64px;
+}
+.login__form-inner { width: 100%; max-width: 360px; }
+.login__heading {
+  font-family: var(--font-serif);
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-ink-strong);
+  margin: 6px 0 32px;
 }
 
-.login-subtitle {
-  font-size: 14px;
-  color: #909399;
-  margin: 0;
-}
-
-.login-btn {
+.login__fields { display: flex; flex-direction: column; gap: 16px; }
+.login__submit {
   width: 100%;
-}
-
-.totp-phase {
-  text-align: center;
-}
-
-.totp-hint {
+  height: 44px;
+  margin-top: 8px;
   font-size: 14px;
-  color: #606266;
-  margin-bottom: 20px;
+  letter-spacing: 0.04em;
 }
 
-.totp-input :deep(.el-input__inner) {
+.login__totp { display: flex; flex-direction: column; gap: 16px; }
+.login__hint { font-size: 13px; color: var(--color-ink-muted); margin: 0; }
+.login__totp-input.input { height: 56px; }
+.login__totp-input :deep(.input__field) {
   text-align: center;
-  font-size: 24px;
-  letter-spacing: 8px;
+  font-family: var(--font-mono);
+  font-size: 28px;
+  letter-spacing: 12px;
 }
 
-.totp-back {
-  margin-top: 16px;
+.login__link {
+  background: none; border: 0; padding: 0;
+  color: var(--color-ink-muted);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: color 150ms var(--ease-out);
+}
+.login__link:hover { color: var(--color-accent-ink); }
+
+@media (max-width: 900px) {
+  .login { grid-template-columns: 1fr; }
+  .login__brand { display: none; }
+  .login__form { padding: 40px 24px; justify-content: center; }
 }
 </style>

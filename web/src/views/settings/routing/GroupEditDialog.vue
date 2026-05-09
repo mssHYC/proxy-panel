@@ -1,57 +1,41 @@
 <template>
-  <el-dialog
-    :model-value="!!modelValue"
-    title="编辑出站组"
-    width="640px"
-    @update:model-value="$emit('update:modelValue', null)"
-  >
-    <el-form v-if="modelValue" label-width="120px">
-      <el-form-item label="Code">
-        <el-input v-model="modelValue.Code" :disabled="readonlyCode" />
-      </el-form-item>
-      <el-form-item label="显示名">
-        <el-input v-model="modelValue.DisplayName" />
-      </el-form-item>
-      <el-form-item label="类型">
-        <el-select v-model="modelValue.Type" :disabled="readonlyCode">
-          <el-option label="selector" value="selector" />
-          <el-option label="urltest" value="urltest" />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="成员">
-        <el-select v-model="modelValue.Members" multiple filterable allow-create style="width: 100%">
-          <el-option label="<ALL> (全部节点)" value="<ALL>" />
-          <el-option label="DIRECT" value="DIRECT" />
-          <el-option label="REJECT" value="REJECT" />
-          <el-option
-            v-for="g in groups"
-            :key="g.Code"
-            :label="g.DisplayName + ' (' + g.Code + ')'"
-            :value="g.Code"
-          />
-        </el-select>
-      </el-form-item>
-      <el-form-item label="排序">
-        <el-input-number v-model="modelValue.SortOrder" />
-      </el-form-item>
-    </el-form>
-    <template #footer>
-      <el-button @click="$emit('update:modelValue', null)">取消</el-button>
-      <el-button type="primary" @click="$emit('save', modelValue!)">保存</el-button>
+  <Modal :open="!!modelValue" :width="640" title="编辑出站组" @update:open="(v) => !v && emit('update:modelValue', null)">
+    <template v-if="modelValue">
+      <Field label="Code" layout="row">
+        <Input v-model="modelValue.Code" :disabled="readonlyCode" />
+      </Field>
+      <Field label="显示名" layout="row">
+        <Input v-model="modelValue.DisplayName" />
+      </Field>
+      <Field label="类型" layout="row">
+        <Select
+          :model-value="modelValue.Type"
+          :options="[{ label: 'selector', value: 'selector' }, { label: 'urltest', value: 'urltest' }]"
+          :disabled="readonlyCode"
+          @update:model-value="(v) => (modelValue!.Type = String(v) as 'selector' | 'urltest')"
+        />
+      </Field>
+      <Field label="成员" hint="支持 <ALL> / DIRECT / REJECT / 节点名 / 其他出站组 Code" layout="row">
+        <TagInput v-model="modelValue.Members" />
+      </Field>
+      <Field label="排序" layout="row">
+        <NumberInput v-model="modelValue.SortOrder" />
+      </Field>
     </template>
-  </el-dialog>
+    <template #footer>
+      <Button @click="emit('update:modelValue', null)">取消</Button>
+      <Button variant="primary" @click="emit('save', modelValue!)">保存</Button>
+    </template>
+  </Modal>
 </template>
 
 <script setup lang="ts">
+import { Button, Input, NumberInput, Select, Modal, Field } from '../../../ui'
+import TagInput from './TagInput.vue'
 import type { Group } from './types'
 
-defineProps<{
-  modelValue: Group | null
-  readonlyCode: boolean
-  groups: Group[]
-}>()
-
-defineEmits<{
+defineProps<{ modelValue: Group | null; readonlyCode: boolean; groups: Group[] }>()
+const emit = defineEmits<{
   (e: 'update:modelValue', v: Group | null): void
   (e: 'save', v: Group): void
 }>()

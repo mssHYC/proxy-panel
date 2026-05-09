@@ -13,6 +13,7 @@ const routes = [
       { path: 'node-groups', name: 'NodeGroups', component: () => import('../views/NodeGroups.vue') },
       { path: 'plans', name: 'Plans', component: () => import('../views/Plans.vue') },
       { path: 'traffic', name: 'Traffic', component: () => import('../views/Traffic.vue') },
+      { path: 'routing', name: 'Routing', component: () => import('../views/settings/routing/RoutingSection.vue') },
       { path: 'audit-logs', name: 'AuditLogs', component: () => import('../views/AuditLogs.vue') },
       { path: 'settings', name: 'Settings', component: () => import('../views/Settings.vue') },
     ],

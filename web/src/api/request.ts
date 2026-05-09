@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { ElMessage } from 'element-plus'
+import { toast } from '../ui/toast'
 import { useAuthStore } from '../stores/auth'
 import router from '../router'
 
@@ -39,7 +39,7 @@ request.interceptors.response.use(
         (status === 429 ? '请求过于频繁' : null) ||
         error.message ||
         '请求失败'
-      ElMessage.error(msg)
+      toast.error(msg)
     }
     return Promise.reject(error)
   }

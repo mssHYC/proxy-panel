@@ -1,86 +1,103 @@
 <template>
-  <div v-loading="loading" class="p-4 space-y-4">
-    <div class="flex items-center justify-between">
-      <h2 class="text-xl font-bold">套餐管理</h2>
-      <el-button type="primary" @click="openDialog()">
-        <el-icon class="mr-1"><Plus /></el-icon>新增套餐
-      </el-button>
+  <div class="plans" :class="{ 'is-loading-overlay': loading }">
+    <div class="toolbar">
+      <p class="toolbar__hint">
+        共 <span class="num">{{ plans.length }}</span> 个套餐，其中 <span class="num">{{ enabledCount }}</span> 启用。
+      </p>
+      <Button variant="primary" @click="openDialog()">
+        <Plus :size="14" :stroke-width="2" /> 新增套餐
+      </Button>
     </div>
 
-    <el-card shadow="hover">
-      <el-table :data="plans" stripe>
-        <el-table-column prop="id" label="ID" width="80" />
-        <el-table-column prop="name" label="名称" min-width="140" />
-        <el-table-column label="流量上限" width="140">
-          <template #default="{ row }">{{ formatBytes(row.traffic_limit) }}</template>
-        </el-table-column>
-        <el-table-column prop="duration_days" label="有效期(天)" width="120" />
-        <el-table-column label="节点分组" min-width="240">
-          <template #default="{ row }">
-            <el-tag v-for="gid in row.node_group_ids" :key="gid" size="small" class="mr-1 mb-1">
-              {{ groupName(gid) }}
-            </el-tag>
-            <span v-if="!row.node_group_ids?.length" class="text-gray-400">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="80" align="center">
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.enabled ? 'success' : 'info'">
-              {{ row.enabled ? '启用' : '停用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="openDialog(row)">编辑</el-button>
-            <el-popconfirm title="确认删除该套餐？" @confirm="handleDelete(row.id)">
-              <template #reference>
-                <el-button link type="danger">删除</el-button>
-              </template>
-            </el-popconfirm>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+    <table v-if="plans.length || loading" class="dt">
+      <thead>
+        <tr>
+          <th>套餐</th>
+          <th>流量</th>
+          <th>有效期</th>
+          <th>节点分组</th>
+          <th>启用</th>
+          <th class="is-numeric">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="row in plans" :key="row.id">
+          <td><span class="cell-name">{{ row.name }}</span></td>
+          <td><span class="num cell-num">{{ formatBytesOrInf(row.traffic_limit) }}</span></td>
+          <td><span class="num cell-num">{{ row.duration_days > 0 ? row.duration_days + ' 天' : '∞' }}</span></td>
+          <td>
+            <template v-if="row.node_group_ids?.length">
+              <Tag v-for="gid in row.node_group_ids" :key="gid" :mono="false" class="mr-1">
+                {{ groupName(gid) }}
+              </Tag>
+            </template>
+            <span v-else class="cell-none">—</span>
+          </td>
+          <td>
+            <StatusDot :state="row.enabled ? 'ok' : 'off'">{{ row.enabled ? '启用' : '停用' }}</StatusDot>
+          </td>
+          <td class="is-numeric">
+            <div class="row-actions">
+              <button class="row-actions__btn" @click="openDialog(row)" title="编辑">
+                <Pencil :size="14" :stroke-width="1.6" />
+              </button>
+              <button class="row-actions__btn row-actions__btn--danger" @click="onDelete(row.id)" title="删除">
+                <Trash2 :size="14" :stroke-width="1.6" />
+              </button>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
 
-    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑套餐' : '新增套餐'" width="560px">
-      <el-form :model="form" label-width="120px">
-        <el-form-item label="名称" required>
-          <el-input v-model="form.name" />
-        </el-form-item>
-        <el-form-item label="流量上限(GB)">
-          <el-input-number v-model="trafficGB" :min="0" :precision="2" :step="1" />
-          <span class="ml-2 text-gray-400 text-xs">0 表示不限</span>
-        </el-form-item>
-        <el-form-item label="有效期(天)">
-          <el-input-number v-model="form.duration_days" :min="0" :step="1" />
-          <span class="ml-2 text-gray-400 text-xs">0 表示不限</span>
-        </el-form-item>
-        <el-form-item label="排序">
-          <el-input-number v-model="form.sort_order" :min="0" />
-        </el-form-item>
-        <el-form-item label="启用">
-          <el-switch v-model="form.enabled" />
-        </el-form-item>
-        <el-form-item label="节点分组">
-          <el-select v-model="form.node_group_ids" multiple filterable style="width:100%" placeholder="选择该套餐授权的节点分组">
-            <el-option v-for="g in groups" :key="g.id" :label="g.name" :value="g.id" />
-          </el-select>
-        </el-form-item>
-      </el-form>
+    <div v-if="!loading && !plans.length" class="empty-state">
+      <p class="empty-state__title">还没有套餐</p>
+      <p class="empty-state__hint">套餐定义了用户的流量额度、有效期，以及可访问哪些节点分组。</p>
+      <Button variant="primary" @click="openDialog()">
+        <Plus :size="14" :stroke-width="2" /> 添加第一个套餐
+      </Button>
+    </div>
+
+    <Modal v-model:open="dialogVisible" :title="isEdit ? '编辑套餐' : '新增套餐'" :width="560">
+      <Field label="名称" layout="row">
+        <Input v-model="form.name" placeholder="例如：标准月套餐 100G" />
+      </Field>
+      <Field label="流量上限" hint="GB · 0 为无限制" layout="row">
+        <NumberInput v-model="trafficGB" :min="0" :precision="2" :step="1" />
+      </Field>
+      <Field label="有效期" hint="天 · 0 为无限制" layout="row">
+        <NumberInput v-model="form.duration_days" :min="0" :step="1" />
+      </Field>
+      <Field label="排序" hint="数值越小越靠前" layout="row">
+        <NumberInput v-model="form.sort_order" :min="0" />
+      </Field>
+      <Field label="启用" layout="row">
+        <Switch v-model="form.enabled" />
+      </Field>
+      <Field label="节点分组" layout="row">
+        <MultiSelect
+          v-model="form.node_group_ids"
+          :options="groups.map((g) => ({ label: g.name, value: g.id }))"
+          placeholder="选择该套餐授权的节点分组"
+        />
+      </Field>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleSubmit">保存</el-button>
+        <Button @click="dialogVisible = false">取消</Button>
+        <Button variant="primary" @click="handleSubmit">{{ isEdit ? '保存' : '创建' }}</Button>
       </template>
-    </el-dialog>
+    </Modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { Plus } from '@element-plus/icons-vue'
+import { Plus, Pencil, Trash2 } from 'lucide-vue-next'
+import {
+  Button, Input, NumberInput, MultiSelect, Switch, Modal, Field, StatusDot, Tag,
+  toast, confirm,
+} from '../ui'
 import { getPlans, createPlan, updatePlan, deletePlan, getNodeGroups } from '../api/plan'
+import { formatBytes as formatBytesGlobal } from '../utils/format'
 
 const loading = ref(false)
 const plans = ref<any[]>([])
@@ -93,17 +110,17 @@ const form = ref({
 })
 const trafficGB = ref(0)
 
+const enabledCount = computed(() => plans.value.filter((p) => p.enabled).length)
+
 watch(trafficGB, (v) => {
   form.value.traffic_limit = Math.round((v || 0) * 1024 * 1024 * 1024)
 })
 
-const groupName = computed(() => (id: number) => groups.value.find(g => g.id === id)?.name || `#${id}`)
+const groupName = (id: number) => groups.value.find(g => g.id === id)?.name || `#${id}`
 
-function formatBytes(b: number): string {
-  if (!b) return '不限'
-  const gb = b / 1024 / 1024 / 1024
-  if (gb >= 1) return gb.toFixed(2) + ' GB'
-  return (b / 1024 / 1024).toFixed(0) + ' MB'
+function formatBytesOrInf(b: number): string {
+  if (!b) return '∞'
+  return formatBytesGlobal(b)
 }
 
 async function fetchAll() {
@@ -133,33 +150,37 @@ function openDialog(row?: any) {
 }
 
 async function handleSubmit() {
-  if (!form.value.name.trim()) {
-    ElMessage.warning('请输入套餐名称')
-    return
-  }
+  if (!form.value.name.trim()) { toast.warn('请输入套餐名称'); return }
   try {
-    if (isEdit.value && editingId.value) {
-      await updatePlan(editingId.value, form.value)
-    } else {
-      await createPlan(form.value)
-    }
-    ElMessage.success('保存成功')
+    if (isEdit.value && editingId.value) await updatePlan(editingId.value, form.value)
+    else await createPlan(form.value)
+    toast.success('保存成功')
     dialogVisible.value = false
     await fetchAll()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.error || '保存失败')
+    toast.error(e?.response?.data?.error || '保存失败')
   }
 }
 
-async function handleDelete(id: number) {
+async function onDelete(id: number) {
   try {
+    await confirm({ title: '删除套餐', message: '确认删除该套餐？', tone: 'danger', confirmText: '删除' })
     await deletePlan(id)
-    ElMessage.success('已删除')
+    toast.success('已删除')
     await fetchAll()
   } catch (e: any) {
-    ElMessage.error(e?.response?.data?.error || '删除失败')
+    if (e === 'cancel') return
+    toast.error(e?.response?.data?.error || '删除失败')
   }
 }
 
 onMounted(fetchAll)
 </script>
+
+<style scoped>
+.plans { display: flex; flex-direction: column; gap: 24px; }
+.cell-name { font-weight: 600; color: var(--color-ink-strong); }
+.cell-num { color: var(--color-ink-base); }
+.cell-none { color: var(--color-ink-soft); }
+.mr-1 { margin-right: 4px; }
+</style>

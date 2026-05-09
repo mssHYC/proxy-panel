@@ -1,100 +1,90 @@
 <template>
-  <div class="space-y-4">
-    <!-- 修改用户名 -->
-    <el-card shadow="hover">
-      <template #header><span class="font-bold">修改用户名</span></template>
-      <el-form label-width="120px">
-        <el-form-item label="新用户名">
-          <el-input v-model="usernameForm.newUsername" placeholder="请输入新用户名" />
-        </el-form-item>
-        <el-form-item label="当前密码">
-          <el-input v-model="usernameForm.password" type="password" show-password placeholder="请输入当前密码" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :loading="savingUsername" @click="handleChangeUsername">
-            确认修改
-          </el-button>
-        </el-form-item>
-      </el-form>
-    </el-card>
-
-    <!-- 修改密码 -->
-    <el-card shadow="hover">
-      <template #header><span class="font-bold">修改密码</span></template>
-      <el-form label-width="120px">
-        <el-form-item label="旧密码">
-          <el-input v-model="passwordForm.oldPassword" type="password" show-password placeholder="请输入旧密码" />
-        </el-form-item>
-        <el-form-item label="新密码">
-          <el-input v-model="passwordForm.newPassword" type="password" show-password placeholder="请输入新密码" />
-        </el-form-item>
-        <el-form-item label="确认密码">
-          <el-input v-model="passwordForm.confirmPassword" type="password" show-password placeholder="请再次输入新密码" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :loading="savingPassword" @click="handleChangePassword">
-            确认修改
-          </el-button>
-        </el-form-item>
-      </el-form>
-    </el-card>
-
-    <!-- 二次验证 -->
-    <el-card shadow="hover">
-      <template #header><span class="font-bold">二次验证</span></template>
-      <div v-if="totpLoading" v-loading="true" style="min-height: 80px" />
-      <div v-else>
-        <div v-if="totpEnabled">
-          <el-tag type="success" size="large" style="margin-bottom: 16px">已启用</el-tag>
-          <p style="color: #606266; margin-bottom: 16px">二次验证已开启，每次登录需要输入动态验证码。</p>
-          <el-button type="danger" @click="handleDisable2FA">关闭二次验证</el-button>
-        </div>
-        <div v-else>
-          <p style="color: #606266; margin-bottom: 16px">启用二次验证后，每次登录需要输入验证器 App 中的动态验证码</p>
-          <el-button type="primary" @click="handleSetup2FA">启用二次验证</el-button>
-        </div>
-
-        <!-- 开启 2FA 前需二次校验密码 -->
-        <el-dialog v-model="setupAuthDialogVisible" title="验证当前密码" width="420px" :close-on-click-modal="false">
-          <p style="color: #606266; margin-bottom: 12px">为防止令牌被盗后静默绑定 2FA，请再次输入当前密码。</p>
-          <el-input v-model="setupPassword" type="password" show-password placeholder="当前密码" />
-          <template #footer>
-            <el-button @click="setupAuthDialogVisible = false">取消</el-button>
-            <el-button type="primary" :loading="fetchingSetup" @click="confirmSetup2FA">下一步</el-button>
-          </template>
-        </el-dialog>
+  <div class="s-blocks">
+    <!-- Username -->
+    <section class="s-block">
+      <div class="s-block__head">
+        <h3 class="s-block__title">用户名</h3>
+        <p class="s-block__hint">需要再次输入当前密码以确认操作。</p>
       </div>
-    </el-card>
+      <Field label="新用户名" layout="row">
+        <Input v-model="usernameForm.newUsername" placeholder="新用户名" />
+      </Field>
+      <Field label="当前密码" layout="row">
+        <Input v-model="usernameForm.password" type="password" />
+      </Field>
+      <div class="s-actions">
+        <Button variant="primary" :loading="savingUsername" @click="handleChangeUsername">修改用户名</Button>
+      </div>
+    </section>
 
-    <!-- 二次验证设置对话框 -->
-    <el-dialog v-model="setupDialogVisible" title="设置二次验证" width="460px" :close-on-click-modal="false">
-      <div style="text-align: center">
-        <p style="margin-bottom: 16px; color: #606266">请使用验证器 App (如 Google Authenticator) 扫描下方二维码</p>
-        <el-input v-model="enablePassword" type="password" show-password placeholder="再次输入当前密码"
-          style="width: 280px; margin-bottom: 16px" />
-        <img :src="qrImageUrl" alt="QR Code" style="width: 200px; height: 200px; margin: 0 auto 16px" />
-        <p style="margin-bottom: 8px; color: #909399; font-size: 13px">无法扫码？手动输入密钥：</p>
-        <el-input :model-value="totpSecret" readonly style="margin-bottom: 20px">
-          <template #append>
-            <el-button @click="copySecret">复制</el-button>
-          </template>
-        </el-input>
-        <el-divider />
-        <p style="margin-bottom: 12px; color: #606266">输入验证器中显示的 6 位验证码以确认启用</p>
-        <el-input v-model="setupCode" placeholder="000000" maxlength="6"
-          style="width: 200px; margin-bottom: 16px" class="totp-input" />
+    <!-- Password -->
+    <section class="s-block">
+      <div class="s-block__head">
+        <h3 class="s-block__title">密码</h3>
+        <p class="s-block__hint">建议使用至少 12 位的随机密码。</p>
+      </div>
+      <Field label="旧密码" layout="row"><Input v-model="passwordForm.oldPassword" type="password" /></Field>
+      <Field label="新密码" layout="row"><Input v-model="passwordForm.newPassword" type="password" /></Field>
+      <Field label="确认新密码" layout="row">
+        <Input v-model="passwordForm.confirmPassword" type="password" @keyup.enter="handleChangePassword" />
+      </Field>
+      <div class="s-actions">
+        <Button variant="primary" :loading="savingPassword" @click="handleChangePassword">修改密码</Button>
+      </div>
+    </section>
+
+    <!-- 2FA -->
+    <section class="s-block">
+      <div class="s-block__head">
+        <h3 class="s-block__title">两步验证</h3>
+        <p class="s-block__hint">启用后，每次登录需要输入验证器 App 中的 6 位动态验证码。</p>
+      </div>
+      <div v-if="totpLoading" class="totp-skel">加载中…</div>
+      <div v-else class="totp-state">
+        <StatusDot :state="totpEnabled ? 'ok' : 'off'">{{ totpEnabled ? '已启用' : '未启用' }}</StatusDot>
+        <div class="s-actions">
+          <Button v-if="totpEnabled" variant="danger" @click="handleDisable2FA">关闭两步验证</Button>
+          <Button v-else variant="primary" @click="handleSetup2FA">启用两步验证</Button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pre-2FA password confirm -->
+    <Modal v-model:open="setupAuthDialogVisible" title="验证当前密码" :width="420">
+      <p class="dialog-lead">为防止令牌被盗后静默绑定，请再次输入当前密码。</p>
+      <Input v-model="setupPassword" type="password" placeholder="当前密码" />
+      <template #footer>
+        <Button @click="setupAuthDialogVisible = false">取消</Button>
+        <Button variant="primary" :loading="fetchingSetup" @click="confirmSetup2FA">下一步</Button>
+      </template>
+    </Modal>
+
+    <!-- 2FA setup -->
+    <Modal v-model:open="setupDialogVisible" title="设置两步验证" :width="480">
+      <div class="totp-setup">
+        <p class="dialog-lead">使用验证器 App（如 1Password、Authy、Google Authenticator）扫描下方二维码。</p>
+        <img :src="qrImageUrl" alt="QR Code" class="totp-setup__qr" />
+        <p class="totp-setup__caption">无法扫码？复制下方密钥手动添加。</p>
+        <div class="totp-secret-row">
+          <Input :model-value="totpSecret" readonly class="totp-secret" />
+          <Button @click="copySecret">复制</Button>
+        </div>
+        <hr class="divider-h" />
+        <p class="dialog-lead">输入 App 中显示的 6 位代码确认绑定。</p>
+        <Input v-model="enablePassword" type="password" placeholder="再次输入当前密码" />
+        <Input v-model="setupCode" placeholder="000000" inputmode="numeric" :maxlength="6" class="totp-code" />
       </div>
       <template #footer>
-        <el-button @click="setupDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="enabling2FA" @click="handleEnable2FA">确认启用</el-button>
+        <Button @click="setupDialogVisible = false">取消</Button>
+        <Button variant="primary" :loading="enabling2FA" @click="handleEnable2FA">确认启用</Button>
       </template>
-    </el-dialog>
+    </Modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { Button, Input, Modal, Field, StatusDot, toast, confirm } from '../../ui'
 import {
   changePassword, changeUsername,
   get2FAStatus, setup2FA, enable2FA, disable2FA,
@@ -118,36 +108,36 @@ const usernameForm = ref({ newUsername: '', password: '' })
 const passwordForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' })
 
 async function handleChangeUsername() {
-  if (!usernameForm.value.newUsername) { ElMessage.warning('请输入新用户名'); return }
-  if (!usernameForm.value.password) { ElMessage.warning('请输入当前密码'); return }
+  if (!usernameForm.value.newUsername) { toast.warn('请输入新用户名'); return }
+  if (!usernameForm.value.password) { toast.warn('请输入当前密码'); return }
   savingUsername.value = true
   try {
     await changeUsername(usernameForm.value.password, usernameForm.value.newUsername)
-    ElMessage.success('用户名修改成功')
+    toast.success('用户名修改成功')
     usernameForm.value.newUsername = ''
     usernameForm.value.password = ''
   } catch (e: any) {
-    ElMessage.error(e.response?.data?.error || '修改用户名失败')
+    toast.error(e.response?.data?.error || '修改用户名失败')
   } finally {
     savingUsername.value = false
   }
 }
 
 async function handleChangePassword() {
-  if (!passwordForm.value.oldPassword) { ElMessage.warning('请输入旧密码'); return }
-  if (!passwordForm.value.newPassword) { ElMessage.warning('请输入新密码'); return }
+  if (!passwordForm.value.oldPassword) { toast.warn('请输入旧密码'); return }
+  if (!passwordForm.value.newPassword) { toast.warn('请输入新密码'); return }
   if (passwordForm.value.newPassword !== passwordForm.value.confirmPassword) {
-    ElMessage.warning('两次输入的密码不一致'); return
+    toast.warn('两次输入的密码不一致'); return
   }
   savingPassword.value = true
   try {
     await changePassword(passwordForm.value.oldPassword, passwordForm.value.newPassword)
-    ElMessage.success('密码修改成功')
+    toast.success('密码修改成功')
     passwordForm.value.oldPassword = ''
     passwordForm.value.newPassword = ''
     passwordForm.value.confirmPassword = ''
   } catch (e: any) {
-    ElMessage.error(e.response?.data?.error || '修改密码失败')
+    toast.error(e.response?.data?.error || '修改密码失败')
   } finally {
     savingPassword.value = false
   }
@@ -159,7 +149,7 @@ async function fetch2FAStatus() {
     const { data } = await get2FAStatus()
     totpEnabled.value = data.enabled
   } catch (e) {
-    console.error('获取二次验证状态失败', e)
+    console.error('获取两步验证状态失败', e)
   } finally {
     totpLoading.value = false
   }
@@ -171,7 +161,7 @@ function handleSetup2FA() {
 }
 
 async function confirmSetup2FA() {
-  if (!setupPassword.value) { ElMessage.warning('请输入当前密码'); return }
+  if (!setupPassword.value) { toast.warn('请输入当前密码'); return }
   fetchingSetup.value = true
   try {
     const { data } = await setup2FA(setupPassword.value)
@@ -182,23 +172,23 @@ async function confirmSetup2FA() {
     setupAuthDialogVisible.value = false
     setupDialogVisible.value = true
   } catch (e: any) {
-    ElMessage.error(e.response?.data?.error || '获取二次验证配置失败')
+    toast.error(e.response?.data?.error || '获取两步验证配置失败')
   } finally {
     fetchingSetup.value = false
   }
 }
 
 async function handleEnable2FA() {
-  if (!enablePassword.value) { ElMessage.warning('请输入当前密码'); return }
-  if (setupCode.value.length !== 6) { ElMessage.warning('请输入 6 位验证码'); return }
+  if (!enablePassword.value) { toast.warn('请输入当前密码'); return }
+  if (setupCode.value.length !== 6) { toast.warn('请输入 6 位验证码'); return }
   enabling2FA.value = true
   try {
     await enable2FA(enablePassword.value, setupCode.value)
-    ElMessage.success('二次验证已启用')
+    toast.success('两步验证已启用')
     setupDialogVisible.value = false
     totpEnabled.value = true
   } catch (e: any) {
-    ElMessage.error(e.response?.data?.error || '启用失败，请检查密码或验证码')
+    toast.error(e.response?.data?.error || '启用失败，请检查密码或验证码')
   } finally {
     enabling2FA.value = false
   }
@@ -206,19 +196,22 @@ async function handleEnable2FA() {
 
 async function handleDisable2FA() {
   try {
-    const { value: password } = await ElMessageBox.prompt('请输入密码以关闭二次验证', '关闭二次验证', {
+    const password = await confirm({
+      title: '关闭两步验证',
+      message: '请输入当前密码以关闭。',
+      prompt: true,
       inputType: 'password',
-      inputPlaceholder: '请输入当前密码',
-      confirmButtonText: '确认关闭',
-      cancelButtonText: '取消',
+      inputPlaceholder: '当前密码',
+      tone: 'danger',
+      confirmText: '关闭',
     })
-    if (!password) return
+    if (typeof password !== 'string' || !password) return
     await disable2FA(password)
-    ElMessage.success('二次验证已关闭')
+    toast.success('两步验证已关闭')
     totpEnabled.value = false
   } catch (e: any) {
-    if (e === 'cancel' || e?.toString?.().includes('cancel')) return
-    ElMessage.error(e.response?.data?.error || '关闭失败')
+    if (e === 'cancel') return
+    toast.error(e.response?.data?.error || '关闭失败')
   }
 }
 
@@ -226,9 +219,7 @@ function copySecret() {
   const text = totpSecret.value
   try {
     if (navigator.clipboard && window.isSecureContext) {
-      navigator.clipboard.writeText(text).then(() => {
-        ElMessage.success('密钥已复制到剪贴板')
-      })
+      navigator.clipboard.writeText(text).then(() => toast.success('密钥已复制'))
     } else {
       const ta = document.createElement('textarea')
       ta.value = text
@@ -238,20 +229,38 @@ function copySecret() {
       ta.select()
       document.execCommand('copy')
       document.body.removeChild(ta)
-      ElMessage.success('密钥已复制到剪贴板')
+      toast.success('密钥已复制')
     }
-  } catch {
-    ElMessage.warning('复制失败，请手动复制')
-  }
+  } catch { toast.warn('复制失败，请手动复制') }
 }
 
 onMounted(fetch2FAStatus)
 </script>
 
 <style scoped>
-.totp-input :deep(.el-input__inner) {
-  text-align: center;
-  font-size: 20px;
-  letter-spacing: 6px;
+.totp-skel { font-size: 13px; color: var(--color-ink-muted); padding: 8px 0; }
+.totp-state { display: flex; flex-direction: column; gap: 16px; align-items: flex-start; }
+.dialog-lead { font-size: 13px; color: var(--color-ink-muted); margin: 0 0 12px; }
+
+.totp-setup { display: flex; flex-direction: column; gap: 12px; }
+.totp-setup__qr {
+  width: 200px; height: 200px;
+  align-self: center;
+  border: 1px solid var(--color-ink-faint);
+  border-radius: 8px;
+  padding: 8px;
+  background: white;
 }
+.totp-setup__caption { font-size: 12px; color: var(--color-ink-muted); margin: 0; text-align: center; }
+
+.totp-secret-row { display: flex; gap: 8px; align-items: center; }
+.totp-secret :deep(.input__field) { font-family: var(--font-mono); font-size: 13px; }
+
+.totp-code :deep(.input__field) {
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  letter-spacing: 8px;
+}
+.totp-code.input { height: 48px; }
 </style>

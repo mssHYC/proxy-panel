@@ -1,330 +1,308 @@
 <template>
-  <div v-loading="loading" class="p-4 space-y-4">
-    <!-- 顶部栏 -->
-    <div class="flex items-center justify-between">
-      <h2 class="text-xl font-bold">节点管理</h2>
-      <div class="flex gap-2">
-        <el-tooltip content="跳过 5s 防抖窗口，立即把当前节点/用户配置下发到内核（Xray 热加载，Sing-box 重启）" placement="top">
-          <el-button :loading="syncing" @click="handleManualSync">
-            <el-icon class="mr-1"><Refresh /></el-icon>立即应用变更
-          </el-button>
-        </el-tooltip>
-        <el-button type="primary" @click="openDialog()">
-          <el-icon class="mr-1"><Plus /></el-icon>新增节点
-        </el-button>
+  <div class="nodes" :class="{ 'is-loading-overlay': loading }">
+    <div class="toolbar">
+      <p class="toolbar__hint">共 <span class="num">{{ nodes.length }}</span> 个节点。</p>
+      <div class="toolbar__actions">
+        <Tooltip content="跳过 5s 防抖窗口，立即把当前节点/用户配置下发到内核（Xray 热加载，Sing-box 重启）">
+          <Button :loading="syncing" @click="handleManualSync">
+            <RefreshCw :size="14" :stroke-width="1.6" /> 立即应用变更
+          </Button>
+        </Tooltip>
+        <Button variant="primary" @click="openDialog()">
+          <Plus :size="14" :stroke-width="2" /> 新增节点
+        </Button>
       </div>
     </div>
 
-    <!-- 节点表格 -->
-    <el-card shadow="hover">
-      <el-table :data="nodes" stripe>
-        <el-table-column prop="name" label="节点名称" min-width="130" />
-        <el-table-column label="地址" min-width="180">
-          <template #default="{ row }">{{ row.host }}:{{ row.port }}</template>
-        </el-table-column>
-        <el-table-column label="协议" width="100">
-          <template #default="{ row }">
-            <el-tag size="small" :type="protocolColor(row.protocol)">{{ row.protocol.toUpperCase() }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="传输" width="90">
-          <template #default="{ row }">
-            <el-tag size="small" type="info">{{ row.transport || '-' }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="安全" width="90">
-          <template #default="{ row }">
-            <el-tag size="small" :type="securityColor(getSecurity(row))">
-              {{ getSecurity(row) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="内核" width="90">
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.kernel_type === 'xray' ? '' : 'success'">{{ row.kernel_type }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="70" align="center">
-          <template #default="{ row }">
-            <el-switch v-model="row.enable" :loading="row._switching" @change="(val: boolean) => handleToggle(row, val)" />
-          </template>
-        </el-table-column>
-        <el-table-column label="健康" width="80" align="center">
-          <template #default="{ row }">
-            <el-tooltip v-if="row.last_check_at" :content="healthTooltip(row)" placement="top">
-              <el-tag size="small" :type="row.last_check_ok ? 'success' : 'danger'">
+    <table v-if="nodes.length || loading" class="dt">
+      <thead>
+        <tr>
+          <th>节点</th>
+          <th>地址</th>
+          <th>协议</th>
+          <th>传输</th>
+          <th>安全</th>
+          <th>内核</th>
+          <th>启用</th>
+          <th>健康</th>
+          <th class="is-numeric">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="row in nodes" :key="row.id">
+          <td><span class="cell-name">{{ row.name }}</span></td>
+          <td><span class="mono cell-addr">{{ row.host }}<span class="cell-addr__sep">:</span>{{ row.port }}</span></td>
+          <td><span class="proto-tag" :data-proto="row.protocol">{{ row.protocol.toUpperCase() }}</span></td>
+          <td><span class="mono cell-meta">{{ row.transport || '—' }}</span></td>
+          <td><span class="mono cell-meta">{{ getSecurity(row) }}</span></td>
+          <td><span class="mono cell-meta">{{ row.kernel_type }}</span></td>
+          <td>
+            <Switch :model-value="row.enable" :disabled="row._switching" @update:model-value="(v) => handleToggle(row, v)" />
+          </td>
+          <td>
+            <Tooltip v-if="row.last_check_at" :content="healthTooltip(row)">
+              <StatusDot :state="row.last_check_ok ? 'ok' : 'crit'">
                 {{ row.last_check_ok ? '在线' : '离线' }}
-              </el-tag>
-            </el-tooltip>
-            <el-tag v-else size="small" type="info">未探测</el-tag>
+              </StatusDot>
+            </Tooltip>
+            <StatusDot v-else state="off">待检测</StatusDot>
+          </td>
+          <td class="is-numeric">
+            <div class="row-actions">
+              <button class="row-actions__btn" @click="openDialog(row)" title="编辑">
+                <Pencil :size="14" :stroke-width="1.6" />
+              </button>
+              <button class="row-actions__btn row-actions__btn--danger" @click="handleDelete(row)" title="删除">
+                <Trash2 :size="14" :stroke-width="1.6" />
+              </button>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div v-if="!loading && !nodes.length" class="empty-state">
+      <p class="empty-state__title">还没有节点</p>
+      <p class="empty-state__hint">节点是真正承载流量的入口。配置好至少一个节点后，用户的订阅链接才有内容可下发。</p>
+      <Button variant="primary" @click="openDialog()">
+        <Plus :size="14" :stroke-width="2" /> 添加第一个节点
+      </Button>
+    </div>
+
+    <Modal v-model:open="dialogVisible" :title="isEdit ? '编辑节点' : '新增节点'" :width="760">
+      <!-- ============ 基础 ============ -->
+      <section class="nf-section">
+        <h4 class="nf-section__title">基础</h4>
+        <div class="nf-grid">
+          <Field class="nf-col-2" label="节点名称" :error="errors.name">
+            <Input v-model="form.name" placeholder="如: Tokyo-01" />
+          </Field>
+          <Field class="nf-col-2" label="主机地址" hint="客户端连接的 IP 或域名（可与监听 IP 不同）" :error="errors.host">
+            <Input v-model="form.host" placeholder="example.com 或 1.2.3.4" />
+          </Field>
+          <Field label="监听 IP" hint="留空使用 0.0.0.0">
+            <Input v-model="form.listen" placeholder="0.0.0.0" />
+          </Field>
+          <Field label="端口" :error="errors.port">
+            <NumberInput v-model="form.port" :min="1" :max="65535" />
+          </Field>
+          <Field label="排序" hint="数值越小越靠前">
+            <NumberInput v-model="form.sort_order" :min="0" />
+          </Field>
+        </div>
+      </section>
+
+      <!-- ============ 协议 ============ -->
+      <section class="nf-section">
+        <h4 class="nf-section__title">协议</h4>
+        <div class="nf-grid">
+          <Field label="协议">
+            <Select
+              :model-value="form.protocol"
+              :options="protocols.map(p => ({ label: p.label, value: p.value }))"
+              @update:model-value="(v) => { form.protocol = String(v); onProtocolChange() }"
+            />
+          </Field>
+          <Field label="内核">
+            <Select
+              :model-value="form.kernel_type"
+              :options="availableKernels.map(k => ({ label: k, value: k }))"
+              @update:model-value="(v) => (form.kernel_type = String(v))"
+            />
+          </Field>
+          <Field v-if="form.protocol === 'ss'" class="nf-col-2" label="加密方式">
+            <Select
+              :model-value="form.ss_method"
+              :options="ssMethods.map(m => ({ label: m, value: m }))"
+              @update:model-value="(v) => (form.ss_method = String(v))"
+            />
+          </Field>
+        </div>
+      </section>
+
+      <!-- ============ 传输 ============ -->
+      <section v-if="hasTransport" class="nf-section">
+        <h4 class="nf-section__title">传输</h4>
+        <div class="nf-grid">
+          <Field class="nf-col-2" label="传输方式">
+            <Select
+              :model-value="form.transport"
+              :options="availableTransports.map(t => ({ label: t.label, value: t.value }))"
+              @update:model-value="(v) => (form.transport = String(v))"
+            />
+          </Field>
+          <template v-if="form.transport === 'ws' || form.transport === 'httpupgrade'">
+            <Field label="路径"><Input v-model="form.ws_path" placeholder="/" /></Field>
+            <Field label="Host" hint="可选，伪装 Host 头"><Input v-model="form.ws_host" /></Field>
           </template>
-        </el-table-column>
-        <el-table-column label="操作" width="130" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="openDialog(row)">编辑</el-button>
-            <el-popconfirm title="确认删除该节点？" @confirm="handleDelete(row.id)">
-              <template #reference>
-                <el-button link type="danger">删除</el-button>
-              </template>
-            </el-popconfirm>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
-
-    <!-- 新增/编辑对话框 -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑节点' : '新增节点'" width="660px" destroy-on-close top="5vh">
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="110px" class="max-h-[70vh] overflow-y-auto pr-2">
-
-        <!-- ===== 基础 ===== -->
-        <el-divider content-position="left">基础信息</el-divider>
-        <el-form-item label="节点名称" prop="name">
-          <el-input v-model="form.name" placeholder="如: Tokyo-01" />
-        </el-form-item>
-        <el-row :gutter="12">
-          <el-col :span="8">
-            <el-form-item label="监听 IP">
-              <el-input v-model="form.listen" placeholder="0.0.0.0" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="端口" prop="port">
-              <el-input v-model.number="form.port" type="number" placeholder="443" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="排序">
-              <el-input v-model.number="form.sort_order" type="number" placeholder="0" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <el-form-item label="主机地址" prop="host">
-          <el-input v-model="form.host" placeholder="客户端连接的 IP 或域名 (可与监听 IP 不同)" />
-        </el-form-item>
-
-        <!-- ===== 协议 ===== -->
-        <el-divider content-position="left">协议</el-divider>
-        <el-row :gutter="12">
-          <el-col :span="12">
-            <el-form-item label="协议" prop="protocol">
-              <el-select v-model="form.protocol" style="width:100%" @change="onProtocolChange">
-                <el-option v-for="p in protocols" :key="p.value" :label="p.label" :value="p.value" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="内核">
-              <el-select v-model="form.kernel_type" style="width:100%">
-                <el-option v-for="k in availableKernels" :key="k" :label="k" :value="k" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-        </el-row>
-
-        <!-- Shadowsocks 加密 -->
-        <el-form-item v-if="form.protocol === 'ss'" label="加密方式">
-          <el-select v-model="form.ss_method" style="width:100%">
-            <el-option v-for="m in ssMethods" :key="m" :label="m" :value="m" />
-          </el-select>
-        </el-form-item>
-
-        <!-- ===== 传输 ===== -->
-        <template v-if="hasTransport">
-          <el-divider content-position="left">传输</el-divider>
-          <el-form-item label="传输方式">
-            <el-select v-model="form.transport" style="width:100%" @change="onTransportChange">
-              <el-option v-for="t in availableTransports" :key="t.value" :label="t.label" :value="t.value" />
-            </el-select>
-          </el-form-item>
-
-          <!-- TCP 无额外配置 -->
-
-          <!-- WebSocket -->
-          <template v-if="form.transport === 'ws'">
-            <el-form-item label="路径">
-              <el-input v-model="form.ws_path" placeholder="/" />
-            </el-form-item>
-            <el-form-item label="Host">
-              <el-input v-model="form.ws_host" placeholder="可选，伪装 Host 头" />
-            </el-form-item>
-          </template>
-
-          <!-- gRPC -->
           <template v-if="form.transport === 'grpc'">
-            <el-form-item label="Service Name">
-              <el-input v-model="form.grpc_service_name" placeholder="如: grpc-service" />
-            </el-form-item>
-            <el-form-item label="Multi Mode">
-              <el-switch v-model="form.grpc_multi_mode" />
-            </el-form-item>
+            <Field label="Service Name"><Input v-model="form.grpc_service_name" placeholder="grpc-service" /></Field>
+            <div class="nf-toggle">
+              <div class="nf-toggle__head">
+                <span class="nf-toggle__label">Multi Mode</span>
+                <small class="nf-toggle__hint">启用多路复用</small>
+              </div>
+              <Switch v-model="form.grpc_multi_mode" />
+            </div>
           </template>
-
-          <!-- HTTP/2 -->
           <template v-if="form.transport === 'h2'">
-            <el-form-item label="路径">
-              <el-input v-model="form.h2_path" placeholder="/" />
-            </el-form-item>
-            <el-form-item label="Host">
-              <el-input v-model="form.h2_host" placeholder="可选" />
-            </el-form-item>
+            <Field label="路径"><Input v-model="form.h2_path" placeholder="/" /></Field>
+            <Field label="Host" hint="可选"><Input v-model="form.h2_host" /></Field>
           </template>
+        </div>
+      </section>
 
-          <!-- HTTPUpgrade -->
-          <template v-if="form.transport === 'httpupgrade'">
-            <el-form-item label="路径">
-              <el-input v-model="form.ws_path" placeholder="/" />
-            </el-form-item>
-            <el-form-item label="Host">
-              <el-input v-model="form.ws_host" placeholder="可选" />
-            </el-form-item>
-          </template>
-        </template>
+      <!-- ============ 安全 ============ -->
+      <section v-if="hasSecurity" class="nf-section">
+        <h4 class="nf-section__title">安全</h4>
+        <div class="nf-grid">
+          <Field class="nf-col-2" label="安全方式">
+            <Select
+              :model-value="form.security"
+              :options="availableSecurities.map(s => ({ label: s.label, value: s.value }))"
+              @update:model-value="(v) => (form.security = String(v))"
+            />
+          </Field>
 
-        <!-- ===== 安全 ===== -->
-        <template v-if="hasSecurity">
-          <el-divider content-position="left">安全</el-divider>
-          <el-form-item label="安全方式">
-            <el-select v-model="form.security" style="width:100%">
-              <el-option v-for="s in availableSecurities" :key="s.value" :label="s.label" :value="s.value" />
-            </el-select>
-          </el-form-item>
-
-          <!-- ---- TLS ---- -->
           <template v-if="form.security === 'tls'">
-            <el-form-item label="SNI">
-              <el-input v-model="form.sni" placeholder="服务器域名" />
-            </el-form-item>
-            <el-form-item label="uTLS 指纹">
-              <el-select v-model="form.fingerprint" style="width:100%">
-                <el-option v-for="f in fingerprints" :key="f" :label="f" :value="f" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="ALPN">
-              <el-select v-model="form.alpn" multiple style="width:100%" placeholder="留空自动">
-                <el-option label="h2" value="h2" />
-                <el-option label="http/1.1" value="http/1.1" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="证书文件路径">
-              <div class="flex gap-2 w-full">
-                <el-input v-model="form.cert_path" placeholder="如: /opt/proxy-panel/certs/domain.crt" />
-                <el-button @click="fillSystemCert">填充</el-button>
+            <Field label="SNI" hint="服务器域名"><Input v-model="form.sni" /></Field>
+            <Field label="uTLS 指纹">
+              <Select
+                :model-value="form.fingerprint"
+                :options="fingerprints.map(f => ({ label: f, value: f }))"
+                @update:model-value="(v) => (form.fingerprint = String(v))"
+              />
+            </Field>
+            <Field class="nf-col-2" label="ALPN" hint="留空自动协商">
+              <MultiSelect
+                v-model="form.alpn"
+                :options="[{label:'h2',value:'h2'},{label:'http/1.1',value:'http/1.1'}]"
+                placeholder="选择 ALPN"
+              />
+            </Field>
+            <Field class="nf-col-2" label="证书文件">
+              <div class="nf-cert">
+                <Input v-model="form.cert_path" placeholder="/opt/proxy-panel/certs/domain.crt" />
+                <Button @click="fillSystemCert">填充</Button>
               </div>
-            </el-form-item>
-            <el-form-item label="私钥文件路径">
-              <div class="flex gap-2 w-full">
-                <el-input v-model="form.key_path" placeholder="如: /opt/proxy-panel/certs/domain.key" />
-                <el-button @click="fillSystemCert">填充</el-button>
+            </Field>
+            <Field class="nf-col-2" label="私钥文件">
+              <div class="nf-cert">
+                <Input v-model="form.key_path" placeholder="/opt/proxy-panel/certs/domain.key" />
+                <Button @click="fillSystemCert">填充</Button>
               </div>
-            </el-form-item>
-            <el-form-item label="跳过证书验证">
-              <el-switch v-model="form.allow_insecure" />
-              <span class="ml-2 text-xs text-gray-400">客户端侧，仅用于自签证书</span>
-            </el-form-item>
+            </Field>
+            <div class="nf-toggle nf-col-2">
+              <div class="nf-toggle__head">
+                <span class="nf-toggle__label">跳过证书验证</span>
+                <small class="nf-toggle__hint">仅用于自签证书</small>
+              </div>
+              <Switch v-model="form.allow_insecure" />
+            </div>
           </template>
 
-          <!-- ---- Reality ---- -->
           <template v-if="form.security === 'reality'">
-            <el-form-item label="目标地址 (Dest)">
-              <el-input v-model="form.reality_dest" placeholder="如: www.google.com:443" />
-            </el-form-item>
-            <el-form-item label="SNI (Server Names)">
-              <el-input v-model="form.sni" placeholder="如: www.google.com" />
-            </el-form-item>
-            <el-form-item>
-              <template #label>
-                <span>密钥对 & Short IDs</span>
-              </template>
-              <el-button type="primary" :loading="generatingKeypair" @click="handleGenerateKeypair" size="small">
-                自动生成
-              </el-button>
-              <span class="ml-2 text-xs text-gray-400">生成 x25519 密钥对和 Short IDs</span>
-            </el-form-item>
-            <el-form-item label="Private Key">
-              <el-input v-model="form.reality_private_key" placeholder="xray x25519 生成的私钥" />
-            </el-form-item>
-            <el-form-item label="Public Key">
-              <el-input v-model="form.reality_public_key" placeholder="对应的公钥 (客户端使用)" />
-            </el-form-item>
-            <el-form-item label="Short IDs">
-              <el-input v-model="form.reality_short_id" placeholder="如: abcd1234 (多个逗号分隔)" />
-            </el-form-item>
-            <el-form-item label="uTLS 指纹">
-              <el-select v-model="form.fingerprint" style="width:100%">
-                <el-option v-for="f in fingerprints" :key="f" :label="f" :value="f" />
-              </el-select>
-            </el-form-item>
-            <el-form-item v-if="form.protocol === 'vless'" label="Flow">
-              <el-select v-model="form.flow" style="width:100%" clearable>
-                <el-option label="无" value="" />
-                <el-option label="xtls-rprx-vision" value="xtls-rprx-vision" />
-              </el-select>
-            </el-form-item>
+            <Field label="目标地址 Dest"><Input v-model="form.reality_dest" placeholder="www.google.com:443" /></Field>
+            <Field label="SNI" hint="Server Names"><Input v-model="form.sni" placeholder="www.google.com" /></Field>
+            <Field class="nf-col-2 nf-keypair" label="x25519 密钥对" hint="自动生成 Private Key / Public Key / Short IDs">
+              <Button variant="primary" :loading="generatingKeypair" @click="handleGenerateKeypair">自动生成</Button>
+            </Field>
+            <Field class="nf-col-2" label="Private Key">
+              <Input v-model="form.reality_private_key" />
+            </Field>
+            <Field class="nf-col-2" label="Public Key" hint="客户端使用">
+              <Input v-model="form.reality_public_key" />
+            </Field>
+            <Field class="nf-col-2" label="Short IDs" hint="多个用逗号分隔">
+              <Input v-model="form.reality_short_id" placeholder="abcd1234,ef56" />
+            </Field>
+            <Field label="uTLS 指纹">
+              <Select
+                :model-value="form.fingerprint"
+                :options="fingerprints.map(f => ({ label: f, value: f }))"
+                @update:model-value="(v) => (form.fingerprint = String(v))"
+              />
+            </Field>
+            <Field v-if="form.protocol === 'vless'" label="Flow">
+              <Select
+                :model-value="form.flow || ''"
+                :options="[{label:'无',value:''},{label:'xtls-rprx-vision',value:'xtls-rprx-vision'}]"
+                @update:model-value="(v) => (form.flow = String(v))"
+              />
+            </Field>
           </template>
-        </template>
+        </div>
+      </section>
 
-        <!-- ===== Hysteria2 专属 ===== -->
-        <template v-if="form.protocol === 'hysteria2'">
-          <el-divider content-position="left">Hysteria2 配置</el-divider>
-          <el-form-item label="SNI">
-            <el-input v-model="form.sni" placeholder="可选" />
-          </el-form-item>
-          <el-form-item label="证书文件路径">
-            <div class="flex gap-2 w-full">
-              <el-input v-model="form.cert_path" placeholder="如: /opt/proxy-panel/certs/domain.crt" />
-              <el-button @click="fillSystemCert">填充</el-button>
+      <!-- ============ Hysteria2 ============ -->
+      <section v-if="form.protocol === 'hysteria2'" class="nf-section">
+        <h4 class="nf-section__title">Hysteria2</h4>
+        <div class="nf-grid">
+          <Field class="nf-col-2" label="SNI" hint="可选"><Input v-model="form.sni" /></Field>
+          <Field class="nf-col-2" label="证书文件">
+            <div class="nf-cert">
+              <Input v-model="form.cert_path" placeholder="/opt/proxy-panel/certs/domain.crt" />
+              <Button @click="fillSystemCert">填充</Button>
             </div>
-          </el-form-item>
-          <el-form-item label="私钥文件路径">
-            <div class="flex gap-2 w-full">
-              <el-input v-model="form.key_path" placeholder="如: /opt/proxy-panel/certs/domain.key" />
-              <el-button @click="fillSystemCert">填充</el-button>
+          </Field>
+          <Field class="nf-col-2" label="私钥文件">
+            <div class="nf-cert">
+              <Input v-model="form.key_path" placeholder="/opt/proxy-panel/certs/domain.key" />
+              <Button @click="fillSystemCert">填充</Button>
             </div>
-          </el-form-item>
-          <el-form-item label="混淆类型">
-            <el-select v-model="form.hy2_obfs_type" style="width:100%" clearable>
-              <el-option label="无" value="" />
-              <el-option label="salamander" value="salamander" />
-            </el-select>
-          </el-form-item>
-          <el-form-item v-if="form.hy2_obfs_type" label="混淆密码">
-            <el-input v-model="form.hy2_obfs_password" placeholder="混淆密码" />
-          </el-form-item>
-          <el-form-item label="最大上行 (Mbps)">
-            <el-input-number v-model="form.hy2_max_up_mbps" :min="0" :max="20" controls-position="right" />
-            <span class="ml-2 text-xs text-gray-400">0 = 不限速；节点总带宽上限，多用户共享</span>
-          </el-form-item>
-          <el-form-item label="最大下行 (Mbps)">
-            <el-input-number v-model="form.hy2_max_down_mbps" :min="0" :max="20" controls-position="right" />
-            <span class="ml-2 text-xs text-gray-400">0 = 不限速；节点总带宽上限，多用户共享</span>
-          </el-form-item>
-          <el-form-item label="跳过证书验证">
-            <el-switch v-model="form.allow_insecure" />
-            <span class="ml-2 text-xs text-gray-400">客户端侧</span>
-          </el-form-item>
-          <el-form-item label="忽略客户端带宽">
-            <el-switch v-model="form.hy2_ignore_client_bandwidth" />
-            <span class="ml-2 text-xs text-gray-400">服务端全权控制带宽，忽略客户端声明</span>
-          </el-form-item>
-        </template>
-      </el-form>
+          </Field>
+          <Field label="混淆类型">
+            <Select
+              :model-value="form.hy2_obfs_type || ''"
+              :options="[{label:'无',value:''},{label:'salamander',value:'salamander'}]"
+              @update:model-value="(v) => (form.hy2_obfs_type = String(v))"
+            />
+          </Field>
+          <Field v-if="form.hy2_obfs_type" label="混淆密码">
+            <Input v-model="form.hy2_obfs_password" />
+          </Field>
+          <Field label="最大上行" hint="Mbps · 0 不限速">
+            <NumberInput v-model="form.hy2_max_up_mbps" :min="0" :max="20" />
+          </Field>
+          <Field label="最大下行" hint="Mbps · 0 不限速">
+            <NumberInput v-model="form.hy2_max_down_mbps" :min="0" :max="20" />
+          </Field>
+          <div class="nf-toggle nf-col-2">
+            <div class="nf-toggle__head">
+              <span class="nf-toggle__label">跳过证书验证</span>
+              <small class="nf-toggle__hint">客户端侧</small>
+            </div>
+            <Switch v-model="form.allow_insecure" />
+          </div>
+          <div class="nf-toggle nf-col-2">
+            <div class="nf-toggle__head">
+              <span class="nf-toggle__label">忽略客户端带宽</span>
+              <small class="nf-toggle__hint">服务端全权控制</small>
+            </div>
+            <Switch v-model="form.hy2_ignore_client_bandwidth" />
+          </div>
+        </div>
+      </section>
 
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSubmit">确定</el-button>
+        <Button @click="dialogVisible = false">取消</Button>
+        <Button variant="primary" :loading="submitting" @click="handleSubmit">{{ isEdit ? '保存' : '创建' }}</Button>
       </template>
-    </el-dialog>
+    </Modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue'
-import { ElMessage, type FormInstance, type FormRules } from 'element-plus'
+import { Plus, Pencil, Trash2, RefreshCw } from 'lucide-vue-next'
+import {
+  Button, Input, NumberInput, Select, MultiSelect, Switch, Modal, Field, Tooltip, StatusDot,
+  toast, confirm,
+} from '../ui'
 import { getNodes, createNode, updateNode, deleteNode, generateRealityKeypair } from '../api/node'
 import { getSettings } from '../api/setting'
 import request from '../api/request'
 
-// ---- 状态 ----
 const loading = ref(false)
 const nodes = ref<any[]>([])
 const dialogVisible = ref(false)
@@ -332,22 +310,20 @@ const isEdit = ref(false)
 const editId = ref<number | null>(null)
 const submitting = ref(false)
 const syncing = ref(false)
-const formRef = ref<FormInstance>()
+const errors = reactive<{ name?: string; host?: string; port?: string }>({})
 
-// 手动触发：跳过后端 5s 防抖窗口，立即生成配置并重启/热加载内核
 async function handleManualSync() {
   syncing.value = true
   try {
     await request.post('/kernel/sync')
-    ElMessage.success('内核配置已立即下发')
+    toast.success('内核配置已立即下发')
   } catch (e: any) {
-    ElMessage.error(e.response?.data?.error || '同步失败')
+    toast.error(e.response?.data?.error || '同步失败')
   } finally {
     syncing.value = false
   }
 }
 
-// ---- 常量：协议 / 传输 / 安全 / 内核 映射 ----
 const protocols = [
   { label: 'VLESS', value: 'vless' },
   { label: 'VMess', value: 'vmess' },
@@ -360,7 +336,7 @@ const protocolTransportMap: Record<string, { label: string; value: string }[]> =
   vless:   [{ label: 'TCP', value: 'tcp' }, { label: 'WebSocket', value: 'ws' }, { label: 'gRPC', value: 'grpc' }, { label: 'HTTP/2', value: 'h2' }, { label: 'HTTPUpgrade', value: 'httpupgrade' }],
   vmess:   [{ label: 'TCP', value: 'tcp' }, { label: 'WebSocket', value: 'ws' }, { label: 'gRPC', value: 'grpc' }, { label: 'HTTP/2', value: 'h2' }, { label: 'HTTPUpgrade', value: 'httpupgrade' }],
   trojan:  [{ label: 'TCP', value: 'tcp' }, { label: 'WebSocket', value: 'ws' }, { label: 'gRPC', value: 'grpc' }],
-  ss:      [],
+  ss: [],
   hysteria2: [],
 }
 
@@ -368,16 +344,13 @@ const protocolSecurityMap: Record<string, { label: string; value: string }[]> = 
   vless:   [{ label: '无', value: 'none' }, { label: 'TLS', value: 'tls' }, { label: 'Reality', value: 'reality' }],
   vmess:   [{ label: '无', value: 'none' }, { label: 'TLS', value: 'tls' }],
   trojan:  [{ label: 'TLS', value: 'tls' }, { label: 'Reality', value: 'reality' }],
-  ss:      [],
+  ss: [],
   hysteria2: [],
 }
 
 const protocolKernelMap: Record<string, string[]> = {
-  vless: ['xray', 'singbox'],
-  vmess: ['xray', 'singbox'],
-  trojan: ['xray', 'singbox'],
-  ss: ['xray', 'singbox'],
-  hysteria2: ['singbox'],
+  vless: ['xray', 'singbox'], vmess: ['xray', 'singbox'], trojan: ['xray', 'singbox'],
+  ss: ['xray', 'singbox'], hysteria2: ['singbox'],
 }
 
 const ssMethods = [
@@ -387,11 +360,9 @@ const ssMethods = [
 
 const fingerprints = ['chrome', 'firefox', 'safari', 'edge', 'ios', 'android', 'random', 'randomized']
 
-// 系统证书路径 (从 settings API 加载，来自 install.sh 安装时生成的 config.yaml)
 const systemCertPath = ref('')
 const systemKeyPath = ref('')
 
-// Reality 密钥对生成
 const generatingKeypair = ref(false)
 async function handleGenerateKeypair() {
   generatingKeypair.value = true
@@ -400,12 +371,9 @@ async function handleGenerateKeypair() {
     form.reality_private_key = data.private_key
     form.reality_public_key = data.public_key
     form.reality_short_id = (data.short_ids as string[]).join(',')
-    ElMessage.success('密钥对和 Short IDs 已生成')
-  } catch {
-    ElMessage.error('生成失败')
-  } finally {
-    generatingKeypair.value = false
-  }
+    toast.success('密钥对和 Short IDs 已生成')
+  } catch { toast.error('生成失败') }
+  finally { generatingKeypair.value = false }
 }
 
 async function loadSystemCertPaths() {
@@ -414,101 +382,53 @@ async function loadSystemCertPaths() {
     const map: Record<string, string> = typeof data === 'object' && !Array.isArray(data) ? data : {}
     systemCertPath.value = map.system_cert_path || ''
     systemKeyPath.value = map.system_key_path || ''
-  } catch { /* ignore */ }
+  } catch {/* ignore */}
 }
 
 function fillSystemCert() {
   if (!systemCertPath.value || !systemKeyPath.value) {
-    ElMessage.warning('系统未配置 TLS 证书，请在 config.yaml 或安装脚本中设置')
+    toast.warn('系统未配置 TLS 证书，请在 config.yaml 或安装脚本中设置')
     return
   }
   form.cert_path = systemCertPath.value
   form.key_path = systemKeyPath.value
-  ElMessage.success('已填充系统证书路径')
+  toast.success('已填充系统证书路径')
 }
 
-// ---- 计算属性 ----
 const availableTransports = computed(() => protocolTransportMap[form.protocol] || [])
 const availableSecurities = computed(() => protocolSecurityMap[form.protocol] || [])
 const availableKernels = computed(() => protocolKernelMap[form.protocol] || ['xray'])
 const hasTransport = computed(() => availableTransports.value.length > 0)
 const hasSecurity = computed(() => availableSecurities.value.length > 0)
 
-// ---- 表单 ----
 const defaultForm = () => ({
-  name: '',
-  listen: '',
-  host: '',
-  port: 443,
-  protocol: 'vless',
-  transport: 'tcp',
-  kernel_type: 'xray',
-  sort_order: 0,
-  // 安全
-  security: 'none',
-  sni: '',
-  fingerprint: 'chrome',
-  alpn: [] as string[],
-  allow_insecure: false,
-  cert_path: '',
-  key_path: '',
-  // Reality
-  reality_dest: '',
-  reality_private_key: '',
-  reality_public_key: '',
-  reality_short_id: '',
-  flow: '',
-  // WebSocket / HTTPUpgrade
-  ws_path: '/',
-  ws_host: '',
-  // gRPC
-  grpc_service_name: '',
-  grpc_multi_mode: false,
-  // HTTP/2
-  h2_path: '/',
-  h2_host: '',
-  // Shadowsocks
+  name: '', listen: '', host: '', port: 443,
+  protocol: 'vless', transport: 'tcp', kernel_type: 'xray', sort_order: 0,
+  security: 'none', sni: '', fingerprint: 'chrome', alpn: [] as string[],
+  allow_insecure: false, cert_path: '', key_path: '',
+  reality_dest: '', reality_private_key: '', reality_public_key: '', reality_short_id: '', flow: '',
+  ws_path: '/', ws_host: '',
+  grpc_service_name: '', grpc_multi_mode: false,
+  h2_path: '/', h2_host: '',
   ss_method: 'aes-256-gcm',
-  // Hysteria2
-  hy2_obfs_type: '',
-  hy2_obfs_password: '',
-  hy2_max_up_mbps: 10,
-  hy2_max_down_mbps: 10,
-  hy2_ignore_client_bandwidth: false,
+  hy2_obfs_type: '', hy2_obfs_password: '',
+  hy2_max_up_mbps: 10, hy2_max_down_mbps: 10, hy2_ignore_client_bandwidth: false,
 })
 const form = reactive(defaultForm())
 
-const rules: FormRules = {
-  name: [{ required: true, message: '请输入节点名称', trigger: 'blur' }],
-  host: [{ required: true, message: '请输入主机地址', trigger: 'blur' }],
-  port: [{ required: true, message: '请输入端口', trigger: 'blur' }],
-  protocol: [{ required: true, message: '请选择协议', trigger: 'change' }],
-}
-
-// ---- 联动 ----
 function onProtocolChange() {
-  // 重置传输
   const trs = protocolTransportMap[form.protocol] || []
   form.transport = trs.length > 0 ? trs[0].value : ''
-  // 重置安全
   const secs = protocolSecurityMap[form.protocol] || []
   form.security = secs.length > 0 ? secs[0].value : 'none'
-  // 修正内核
   const kernels = protocolKernelMap[form.protocol] || ['xray']
   if (!kernels.includes(form.kernel_type)) form.kernel_type = kernels[0]
   if (form.protocol === 'hysteria2') form.kernel_type = 'singbox'
-  if (form.protocol === 'trojan') form.security = 'tls' // trojan 默认 TLS
+  if (form.protocol === 'trojan') form.security = 'tls'
 }
 
-function onTransportChange() {
-  // reality 作为 transport 时不需要，现在 reality 是 security
-}
-
-// ---- settings JSON ↔ 表单 转换 ----
 function formToSettings(): string {
   const s: Record<string, any> = {}
-
-  // 安全
   s.security = form.security
   if (form.security === 'tls') {
     if (form.sni) s.sni = form.sni
@@ -523,12 +443,10 @@ function formToSettings(): string {
     if (form.reality_dest) s.dest = form.reality_dest
     if (form.reality_private_key) s.private_key = form.reality_private_key
     if (form.reality_public_key) s.public_key = form.reality_public_key
-    if (form.reality_short_id) { s.short_id = form.reality_short_id; s.short_ids = form.reality_short_id.split(',').map((x: string) => x.trim()) }
+    if (form.reality_short_id) { s.short_id = form.reality_short_id; s.short_ids = form.reality_short_id.split(',').map(x => x.trim()) }
     if (form.fingerprint) s.fingerprint = form.fingerprint
     if (form.flow) s.flow = form.flow
   }
-
-  // 传输
   if (form.transport === 'ws' || form.transport === 'httpupgrade') {
     if (form.ws_path) s.path = form.ws_path
     if (form.ws_host) s.host = form.ws_host
@@ -539,11 +457,7 @@ function formToSettings(): string {
     if (form.h2_path) s.path = form.h2_path
     if (form.h2_host) s.host = form.h2_host
   }
-
-  // Shadowsocks
   if (form.protocol === 'ss') s.method = form.ss_method
-
-  // Hysteria2
   if (form.protocol === 'hysteria2') {
     if (form.sni) s.sni = form.sni
     if (form.cert_path) s.cert_path = form.cert_path
@@ -554,17 +468,13 @@ function formToSettings(): string {
     if (form.allow_insecure) s.skip_cert_verify = true
     if (form.hy2_ignore_client_bandwidth) s.ignore_client_bandwidth = true
   }
-
-  // 监听地址
   if (form.listen) s.listen = form.listen
-
   return JSON.stringify(s)
 }
 
 function settingsToForm(settingsStr: string) {
   let s: Record<string, any> = {}
   try { s = JSON.parse(settingsStr || '{}') } catch { return }
-
   form.sni = s.sni || s.serverName || ''
   form.allow_insecure = s.allow_insecure || s.skip_cert_verify || false
   form.fingerprint = s.fingerprint || s.fp || 'chrome'
@@ -572,8 +482,6 @@ function settingsToForm(settingsStr: string) {
   form.cert_path = s.cert_path || s.certPath || ''
   form.key_path = s.key_path || s.keyPath || ''
   form.listen = s.listen || ''
-
-  // 安全
   if (s.security === 'reality') {
     form.security = 'reality'
     form.reality_dest = s.dest || ''
@@ -586,8 +494,6 @@ function settingsToForm(settingsStr: string) {
   } else {
     form.security = s.security || 'none'
   }
-
-  // 传输
   form.ws_path = s.path || '/'
   form.ws_host = s.host || ''
   form.h2_path = s.path || '/'
@@ -604,34 +510,30 @@ function settingsToForm(settingsStr: string) {
   form.hy2_ignore_client_bandwidth = !!s.ignore_client_bandwidth
 }
 
-// ---- 表格辅助 ----
 function getSecurity(row: any): string {
   try { const s = JSON.parse(row.settings || '{}'); return s.security || (s.tls ? 'tls' : 'none') } catch { return 'none' }
 }
-function protocolColor(p: string) { return ({ vless: '', vmess: 'success', trojan: 'warning', ss: 'danger', hysteria2: 'info' } as any)[p] || '' }
+
 function healthTooltip(row: any) {
   const t = row.last_check_at ? new Date(row.last_check_at).toLocaleString() : '-'
   const isQUIC = row.protocol === 'hysteria2' || row.protocol === 'hy2' || row.protocol === 'tuic'
-  const note = isQUIC
-    ? '\n注: QUIC 仅探测端口可达性，未验证账号/密码/业务可用性'
-    : ''
+  const note = isQUIC ? '\n注: QUIC 仅探测端口可达性，未验证账号/密码/业务可用性' : ''
   if (row.last_check_ok) return `最近检测: ${t}${note}`
   return `最近检测: ${t}\n失败次数: ${row.fail_count}\n错误: ${row.last_check_err || '-'}${note}`
 }
-function securityColor(s: string) { return s === 'tls' ? 'success' : s === 'reality' ? 'warning' : 'info' }
 
-// ---- CRUD ----
 const fetchNodes = async () => {
   loading.value = true
   try {
     const { data } = await getNodes()
     nodes.value = (data.nodes || data || []).map((n: any) => ({ ...n, _switching: false }))
-  } catch { ElMessage.error('获取节点列表失败') }
+  } catch { toast.error('获取节点列表失败') }
   finally { loading.value = false }
 }
 
 const openDialog = (row?: any) => {
   Object.assign(form, defaultForm())
+  errors.name = ''; errors.host = ''; errors.port = ''
   if (row) {
     isEdit.value = true
     editId.value = row.id
@@ -646,14 +548,14 @@ const openDialog = (row?: any) => {
 }
 
 const handleSubmit = async () => {
-  if (!formRef.value) return
-  await formRef.value.validate()
+  errors.name = form.name.trim() ? '' : '请输入节点名称'
+  errors.host = form.host.trim() ? '' : '请输入主机地址'
+  errors.port = form.port ? '' : '请输入端口'
+  if (errors.name || errors.host || errors.port) return
   submitting.value = true
   try {
-    // 对 reality，transport 存 "tcp"，security 信息存在 settings 里
     let transport = form.transport
     if (form.security === 'reality' && !transport) transport = 'tcp'
-
     const payload: any = {
       name: form.name, host: form.host, port: form.port,
       protocol: form.protocol, transport: transport || 'tcp',
@@ -662,14 +564,14 @@ const handleSubmit = async () => {
     }
     if (isEdit.value && editId.value) {
       await updateNode(editId.value, payload)
-      ElMessage.success('节点更新成功')
+      toast.success('节点更新成功')
     } else {
       await createNode(payload)
-      ElMessage.success('节点创建成功')
+      toast.success('节点创建成功')
     }
     dialogVisible.value = false
     await fetchNodes()
-  } catch (e: any) { ElMessage.error(e.response?.data?.error || '操作失败') }
+  } catch (e: any) { toast.error(e.response?.data?.error || '操作失败') }
   finally { submitting.value = false }
 }
 
@@ -677,14 +579,19 @@ const handleToggle = async (row: any, val: boolean) => {
   row._switching = true
   try {
     await updateNode(row.id, { enable: val })
-    ElMessage.success(val ? '已启用' : '已禁用')
-  } catch (e: any) { row.enable = !val; ElMessage.error(e.response?.data?.error || '操作失败') }
+    row.enable = val
+    toast.success(val ? '已启用' : '已禁用')
+  } catch (e: any) { row.enable = !val; toast.error(e.response?.data?.error || '操作失败') }
   finally { row._switching = false }
 }
 
-const handleDelete = async (id: number) => {
-  try { await deleteNode(id); ElMessage.success('删除成功'); await fetchNodes() }
-  catch (e: any) { ElMessage.error(e.response?.data?.error || '删除失败') }
+const handleDelete = async (row: any) => {
+  try {
+    await confirm({ title: '删除节点', message: `确认删除节点「${row.name}」？`, tone: 'danger', confirmText: '删除' })
+    await deleteNode(row.id)
+    toast.success('删除成功')
+    await fetchNodes()
+  } catch (e: any) { if (e === 'cancel') return; toast.error(e?.response?.data?.error || '删除失败') }
 }
 
 onMounted(() => {
@@ -692,3 +599,91 @@ onMounted(() => {
   loadSystemCertPaths()
 })
 </script>
+
+<style scoped>
+.nodes { display: flex; flex-direction: column; gap: 24px; }
+
+.cell-name { font-weight: 600; color: var(--color-ink-strong); }
+.cell-addr { color: var(--color-ink-base); font-size: 13px; }
+.cell-addr__sep { color: var(--color-ink-soft); padding: 0 1px; }
+.cell-meta { font-size: 12px; color: var(--color-ink-muted); text-transform: lowercase; }
+
+.proto-tag {
+  font-family: var(--font-mono);
+  font-size: 11px; font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 3px 7px;
+  border-radius: 4px;
+  background: var(--color-surface-sunken);
+  color: var(--color-ink-base);
+  border: 1px solid var(--color-ink-faint);
+}
+.proto-tag[data-proto="vless"]     { color: var(--color-accent-ink); border-color: var(--color-accent-soft); }
+.proto-tag[data-proto="trojan"]    { color: var(--color-status-warn); }
+.proto-tag[data-proto="vmess"]     { color: var(--color-status-info); }
+.proto-tag[data-proto="ss"]        { color: var(--color-ink-strong); }
+.proto-tag[data-proto="hysteria2"] { color: var(--color-status-ok); }
+
+/* Node form — sectioned 2-col grid for breathing room */
+.nf-section {
+  margin: 0 0 28px;
+  padding-top: 18px;
+  border-top: 1px solid var(--color-ink-faint);
+}
+.nf-section:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+.nf-section__title {
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-ink-strong);
+  letter-spacing: -0.005em;
+  margin: 0 0 14px;
+}
+.nf-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 20px;
+  row-gap: 14px;
+  align-items: start;
+}
+.nf-col-2 { grid-column: span 2; }
+
+.nf-cert {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.nf-cert > :first-child { flex: 1; min-width: 0; }
+
+/* Switch rows: label/hint on left, Switch on right */
+.nf-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 4px 0;
+}
+.nf-toggle__head { display: flex; flex-direction: column; gap: 2px; }
+.nf-toggle__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-ink-strong);
+}
+.nf-toggle__hint {
+  font-size: 12px;
+  color: var(--color-ink-muted);
+}
+
+/* Reality keypair action button stays compact */
+.nf-keypair :deep(.field__control) {
+  align-items: flex-start;
+}
+
+@media (max-width: 720px) {
+  .nf-grid { grid-template-columns: 1fr; }
+  .nf-col-2 { grid-column: auto; }
+}
+</style>
