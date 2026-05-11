@@ -42,6 +42,11 @@
   --radius-md: 6px;
   --radius-lg: 10px;
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
+
+  /* breakpoints (reference only; used through media queries below) */
+  --bp-sm: 480px;
+  --bp-md: 768px;
+  --bp-lg: 1024px;
 }
 
 /* ============================================================
@@ -239,6 +244,24 @@ code, kbd, samp, .mono, .num,
 .s-row__hint { font-size: 12px; color: var(--color-ink-muted); margin: 2px 0 0; }
 .s-row--inline .s-row__control { flex-direction: row; align-items: center; gap: 12px; flex-wrap: wrap; }
 
+@media (max-width: 1023px) {
+  .s-blocks { gap: 36px; }
+  .s-row {
+    grid-template-columns: 1fr;
+    column-gap: 0;
+    row-gap: 6px;
+    padding: 12px 0;
+  }
+  .s-row__label { padding-top: 0; }
+  .s-row--inline {
+    grid-template-columns: 1fr auto;
+    column-gap: 16px;
+    align-items: center;
+  }
+  .s-row--inline .s-row__label { padding-top: 0; }
+  .s-row--inline .s-row__control { flex-direction: row; justify-content: flex-end; }
+}
+
 /* Footer action bar inside a settings pane */
 .s-actions {
   display: flex;
@@ -409,3 +432,171 @@ code, kbd, samp, .mono, .num,
 
 /* Form helpers */
 .form-hint { font-size: 12px; color: var(--color-ink-muted); }
+
+/* ============================================================
+   Mobile list-row — replaces .dt under 768px for resource lists.
+   Each <tr> on desktop maps to a .lr block on mobile via the
+   in-page <table class="dt dt--responsive"> + data-label hooks,
+   OR pages render an explicit <ul class="lr-list"> when they
+   want full control. Both share these primitives.
+   ============================================================ */
+.lr-list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--color-ink-faint); }
+.lr {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 12px;
+  row-gap: 6px;
+  padding: 14px 4px;
+  border-bottom: 1px solid var(--color-ink-faint);
+}
+.lr__title {
+  grid-column: 1;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-ink-strong);
+  line-height: 1.35;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.lr__title > * { min-width: 0; }
+.lr__title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lr__aside {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: center;
+}
+.lr__meta {
+  grid-column: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  font-size: 12px;
+  color: var(--color-ink-muted);
+  line-height: 1.5;
+}
+.lr__meta .num,
+.lr__meta .mono { font-size: 12px; color: var(--color-ink-base); }
+.lr__meta dt {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-ink-soft);
+  margin-right: 4px;
+  display: inline;
+}
+.lr__meta dd { display: inline; margin: 0 8px 0 0; }
+.lr__progress { grid-column: 1 / -1; }
+
+/* Touch row-action button — bumped to 36px for touch hit area */
+@media (max-width: 1023px) {
+  .row-actions__btn { width: 36px; height: 36px; }
+  .row-actions { gap: 2px; }
+}
+
+/* Responsive data-table: shows as <table> on ≥1024, list on <1024.
+   1024 is the breakpoint at which the desktop sidebar reappears;
+   below that, columns get cramped and we surface mobile list mode.
+   Apply class .dt--responsive in addition to .dt. The page must
+   provide a data-label="…" on each <td> that should surface a
+   meta label on mobile. The first <td> becomes the title row.
+   ============================================================ */
+@media (max-width: 1023px) {
+  table.dt--responsive,
+  table.dt--responsive thead,
+  table.dt--responsive tbody,
+  table.dt--responsive tr,
+  table.dt--responsive td {
+    display: block;
+    width: 100%;
+  }
+  table.dt--responsive thead { display: none; }
+  table.dt--responsive tbody tr {
+    border-bottom: 1px solid var(--color-ink-faint);
+    padding: 12px 4px 14px;
+  }
+  table.dt--responsive tbody tr:first-child {
+    border-top: 1px solid var(--color-ink-faint);
+  }
+  table.dt--responsive tbody tr:hover td,
+  table.dt--responsive tbody tr.is-selected td { background: transparent; }
+  table.dt--responsive tbody td {
+    padding: 4px 0;
+    border-bottom: 0;
+    display: grid;
+    grid-template-columns: minmax(56px, auto) minmax(0, 1fr);
+    column-gap: 12px;
+    align-items: baseline;
+    text-align: right;
+  }
+  table.dt--responsive tbody td::before {
+    content: attr(data-label);
+    grid-column: 1;
+    justify-self: start;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-ink-muted);
+    text-align: left;
+  }
+  table.dt--responsive tbody td > * { grid-column: 2; justify-self: end; min-width: 0; }
+  /* First cell renders as a full-width left-aligned title block */
+  table.dt--responsive tbody td:first-child {
+    grid-template-columns: 1fr;
+    text-align: left;
+    padding-top: 0;
+    padding-bottom: 6px;
+  }
+  table.dt--responsive tbody td:first-child::before { display: none; }
+  table.dt--responsive tbody td:first-child > * { grid-column: 1; justify-self: start; }
+  table.dt--responsive tbody td.is-numeric { text-align: right; }
+  /* Action cell — full row, left aligned, no label */
+  table.dt--responsive tbody td.dt-actions {
+    grid-template-columns: 1fr;
+    padding-top: 10px;
+  }
+  table.dt--responsive tbody td.dt-actions::before { display: none; }
+  table.dt--responsive tbody td.dt-actions > * { grid-column: 1; justify-self: start; }
+}
+
+/* ============================================================
+   Mobile-only / desktop-only utility wrappers
+   ============================================================ */
+.only-mobile { display: none; }
+.only-desktop { display: initial; }
+@media (max-width: 1023px) {
+  .only-mobile { display: initial; }
+  .only-desktop { display: none; }
+}
+
+/* ============================================================
+   Page-level helpers used by Layout on mobile
+   ============================================================ */
+.scroll-lock { overflow: hidden; }
+
+/* Horizontal-scroll tab strip (Settings nav on mobile, etc.) */
+.hscroll {
+  display: flex;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.hscroll::-webkit-scrollbar { display: none; }
+.hscroll > * { scroll-snap-align: start; flex: 0 0 auto; }
+
+/* Larger tap targets in toolbars on mobile/tablet portrait */
+@media (max-width: 1023px) {
+  .toolbar { gap: 8px; }
+  .toolbar__actions { width: 100%; }
+  .toolbar__actions .btn,
+  .toolbar__actions button { flex: 1; min-height: 40px; }
+}

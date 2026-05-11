@@ -1,9 +1,44 @@
 <template>
-  <div class="app-shell">
-    <aside class="app-aside">
+  <div class="app-shell" :class="{ 'app-shell--drawer-open': drawerOpen }">
+    <!-- Mobile top bar: only renders < 1024 via CSS -->
+    <header class="m-topbar">
+      <button
+        class="m-topbar__menu"
+        type="button"
+        aria-label="打开导航"
+        @click="openDrawer"
+      >
+        <Menu :size="18" :stroke-width="1.7" />
+      </button>
+      <div class="m-topbar__title">
+        <span class="m-topbar__eyebrow">{{ section }}</span>
+        <h1 class="m-topbar__name">{{ pageTitle }}</h1>
+      </div>
+      <span class="m-topbar__brand">
+        <span class="brand__mark brand__mark--sm">P</span>
+      </span>
+    </header>
+
+    <!-- Drawer scrim (mobile only) -->
+    <div
+      v-if="drawerOpen"
+      class="drawer-scrim"
+      aria-hidden="true"
+      @click="closeDrawer"
+    ></div>
+
+    <aside class="app-aside" :class="{ 'is-open': drawerOpen }">
       <div class="brand">
         <span class="brand__mark">P</span>
         <span class="brand__word">ProxyPanel</span>
+        <button
+          class="m-aside-close"
+          type="button"
+          aria-label="关闭导航"
+          @click="closeDrawer"
+        >
+          <X :size="18" :stroke-width="1.7" />
+        </button>
       </div>
 
       <nav class="nav">
@@ -11,7 +46,12 @@
           <p class="nav__group">{{ group.label }}</p>
           <ul class="nav__list">
             <li v-for="item in group.items" :key="item.path">
-              <router-link :to="item.path" class="nav__item" :class="{ 'is-active': isActive(item.path) }">
+              <router-link
+                :to="item.path"
+                class="nav__item"
+                :class="{ 'is-active': isActive(item.path) }"
+                @click="closeDrawer"
+              >
                 <component :is="item.icon" class="nav__icon" :size="16" :stroke-width="1.6" />
                 <span>{{ item.label }}</span>
               </router-link>
@@ -46,17 +86,29 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref, watch, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Gauge, BarChart3, Users as UsersIcon, Package, Server, Layers,
-  Filter, ScrollText, Settings as SettingsIcon, LogOut,
+  Filter, ScrollText, Settings as SettingsIcon, LogOut, Menu, X,
 } from 'lucide-vue-next'
 import { useAuthStore } from '../stores/auth'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+
+const drawerOpen = ref(false)
+function openDrawer() {
+  drawerOpen.value = true
+  document.body.classList.add('scroll-lock')
+}
+function closeDrawer() {
+  drawerOpen.value = false
+  document.body.classList.remove('scroll-lock')
+}
+watch(() => route.fullPath, closeDrawer)
+onUnmounted(() => document.body.classList.remove('scroll-lock'))
 
 const groups = [
   {
@@ -128,6 +180,7 @@ function handleLogout() {
   flex-direction: column;
   background: var(--color-surface-raised);
   border-right: 1px solid var(--color-ink-faint);
+  z-index: 30;
 }
 
 .brand {
@@ -151,7 +204,9 @@ function handleLogout() {
   font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.02em;
+  flex-shrink: 0;
 }
+.brand__mark--sm { width: 24px; height: 24px; font-size: 15px; }
 .brand__word {
   font-family: var(--font-serif);
   font-size: 17px;
@@ -159,6 +214,21 @@ function handleLogout() {
   color: var(--color-ink-strong);
   letter-spacing: -0.01em;
 }
+
+.m-aside-close {
+  margin-left: auto;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--color-ink-muted);
+  cursor: pointer;
+}
+.m-aside-close:hover { background: var(--color-surface-sunken); color: var(--color-ink-strong); }
 
 .nav {
   flex: 1;
@@ -238,11 +308,107 @@ function handleLogout() {
 }
 .page-body { padding: 24px 48px 64px; max-width: 1240px; width: 100%; }
 
-@media (max-width: 1024px) {
-  .page-head, .page-body { padding-left: 24px; padding-right: 24px; }
+/* Mobile top bar — hidden on ≥1024 */
+.m-topbar { display: none; }
+.drawer-scrim { display: none; }
+
+@media (max-width: 1023px) {
+  /* Fixed aside still claims an implicit grid row even though it's
+     position:fixed — switching to block layout removes the phantom track. */
+  .app-shell { display: block; grid-template-columns: none; }
+
+  .m-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 56px;
+    padding: 0 16px;
+    background: var(--color-surface-raised);
+    border-bottom: 1px solid var(--color-ink-faint);
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+  .m-topbar__menu {
+    width: 40px; height: 40px;
+    margin-left: -8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    color: var(--color-ink-strong);
+    cursor: pointer;
+  }
+  .m-topbar__menu:hover { background: var(--color-surface-sunken); }
+  .m-topbar__title {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+  .m-topbar__eyebrow {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-ink-muted);
+    line-height: 1.2;
+  }
+  .m-topbar__name {
+    font-family: var(--font-serif);
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--color-ink-strong);
+    letter-spacing: -0.005em;
+    line-height: 1.25;
+    margin: 1px 0 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .m-topbar__brand { display: inline-flex; }
+
+  /* Aside becomes an off-canvas drawer */
+  .app-aside {
+    position: fixed;
+    top: 0; left: 0;
+    width: min(320px, 86vw);
+    height: 100vh;
+    height: 100dvh;
+    box-shadow: 0 0 0 1px transparent;
+    transform: translateX(-100%);
+    transition: transform 220ms var(--ease-out);
+    z-index: 60;
+  }
+  .app-aside.is-open {
+    transform: translateX(0);
+    box-shadow: 0 12px 40px oklch(0.2 0.01 80 / 0.18);
+  }
+  .m-aside-close { display: inline-flex; }
+
+  .drawer-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: oklch(0.2 0.01 80 / 0.35);
+    backdrop-filter: blur(2px);
+    z-index: 55;
+    animation: scrim-in 160ms var(--ease-out);
+  }
+  @keyframes scrim-in { from { opacity: 0; } }
+
+  /* Hide desktop page-head; mobile uses m-topbar */
+  .page-head { display: none; }
+  .page-body { padding: 16px 16px 80px; }
 }
-@media (max-width: 768px) {
-  .app-shell { grid-template-columns: 1fr; }
-  .app-aside { position: static; height: auto; }
+
+@media (max-width: 767px) {
+  .page-body { padding: 12px 16px 88px; }
+}
+
+@media (max-width: 1280px) and (min-width: 1024px) {
+  .page-head, .page-body { padding-left: 32px; padding-right: 32px; }
 }
 </style>

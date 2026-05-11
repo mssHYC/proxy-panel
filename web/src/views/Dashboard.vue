@@ -243,4 +243,21 @@ onMounted(fetchDashboard)
 .kernel__id { display: flex; align-items: baseline; gap: 14px; }
 .kernel__name { font-weight: 600; color: var(--color-ink-strong); min-width: 80px; }
 .kernel__state { color: var(--color-ink-muted); font-size: 13px; }
+
+@media (max-width: 767px) {
+  .dashboard { gap: 32px; }
+  .summary__line { font-size: 17px; line-height: 1.55; }
+  .usage__total { font-size: 28px; }
+  .usage__numbers { gap: 12px; flex-wrap: wrap; }
+  .usage__split { grid-template-columns: 1fr 1fr; gap: 16px; }
+  .usage__split dd { font-size: 15px; }
+  .section-head { flex-direction: column; align-items: flex-start; gap: 6px; margin-bottom: 12px; }
+  .kernel { flex-wrap: wrap; gap: 12px; }
+  .kernel__id { flex-wrap: wrap; gap: 8px 12px; }
+  .kernel__name { min-width: 0; }
+}
+
+@media (max-width: 479px) {
+  .usage__split { grid-template-columns: 1fr; gap: 12px; }
+}
 </style>
