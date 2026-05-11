@@ -89,8 +89,8 @@ async function onImport() {
 
 <style scoped>
 .adv-mono :deep(.input__field) { font-family: var(--font-mono); font-size: 13px; }
-.adv-final { width: 240px; }
-.legacy-mode { width: 280px; }
+.adv-final { width: 240px; max-width: 100%; }
+.legacy-mode { width: 280px; max-width: 100%; }
 code {
   background: var(--color-surface-sunken);
   padding: 1px 6px;

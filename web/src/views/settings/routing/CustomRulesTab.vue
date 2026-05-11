@@ -7,7 +7,7 @@
       </Button>
     </div>
 
-    <table v-if="config.customRules?.length" class="dt">
+    <table v-if="config.customRules?.length" class="dt dt--responsive">
       <thead>
         <tr>
           <th>名称</th>
@@ -23,19 +23,19 @@
       <tbody>
         <tr v-for="row in config.customRules" :key="row.ID">
           <td><span class="cell-name">{{ row.Name }}</span></td>
-          <td>
+          <td data-label="Site">
             <Tag v-for="t in row.SiteTags" :key="t" class="mr-1">{{ t }}</Tag>
             <span v-if="!row.SiteTags?.length" class="cell-none">—</span>
           </td>
-          <td>
+          <td data-label="IP">
             <Tag v-for="t in row.IPTags" :key="t" class="mr-1">{{ t }}</Tag>
             <span v-if="!row.IPTags?.length" class="cell-none">—</span>
           </td>
-          <td><span class="mono cell-meta">{{ row.DomainSuffix?.join(', ') || '—' }}</span></td>
-          <td><span class="mono cell-meta">{{ row.IPCIDR?.join(', ') || '—' }}</span></td>
-          <td><span class="mono cell-out">{{ row.OutboundLiteral || groupName(row.OutboundGroupID) }}</span></td>
-          <td class="is-numeric"><span class="num cell-meta">{{ row.SortOrder }}</span></td>
-          <td class="is-numeric">
+          <td data-label="Domain"><span class="mono cell-meta cell-wrap">{{ row.DomainSuffix?.join(', ') || '—' }}</span></td>
+          <td data-label="IP CIDR"><span class="mono cell-meta cell-wrap">{{ row.IPCIDR?.join(', ') || '—' }}</span></td>
+          <td data-label="出站"><span class="mono cell-out">{{ row.OutboundLiteral || groupName(row.OutboundGroupID) }}</span></td>
+          <td class="is-numeric" data-label="排序"><span class="num cell-meta">{{ row.SortOrder }}</span></td>
+          <td class="is-numeric dt-actions">
             <div class="row-actions">
               <button class="row-actions__btn" @click="onEdit(row)" title="编辑">
                 <Pencil :size="14" :stroke-width="1.6" />
@@ -115,5 +115,13 @@ async function onDelete(row: CustomRule) {
 .cell-meta { color: var(--color-ink-muted); font-size: 12px; }
 .cell-none { color: var(--color-ink-soft); font-size: 12px; }
 .cell-out { color: var(--color-accent-ink); font-weight: 600; font-size: 13px; }
+.cell-wrap { white-space: normal; word-break: break-all; }
 .mr-1 { margin-right: 4px; }
+
+@media (max-width: 1023px) {
+  .rules__bar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .rules__hint { font-size: 12px; }
+  /* Mono cells with long domain/CIDR lists wrap on the value column */
+  .dt--responsive tbody td > .cell-wrap { text-align: right; }
+}
 </style>

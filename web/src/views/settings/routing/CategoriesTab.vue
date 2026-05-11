@@ -17,7 +17,7 @@
       </Button>
     </div>
 
-    <table v-if="config.categories.length" class="dt">
+    <table v-if="config.categories.length" class="dt dt--responsive">
       <thead>
         <tr>
           <th>名称</th>
@@ -32,26 +32,26 @@
       <tbody>
         <tr v-for="row in config.categories" :key="row.ID">
           <td><span class="cell-name">{{ row.DisplayName }}</span></td>
-          <td><span class="kind-tag" :data-kind="row.Kind">{{ row.Kind === 'system' ? '系统' : '自定义' }}</span></td>
-          <td>
+          <td data-label="类型"><span class="kind-tag" :data-kind="row.Kind">{{ row.Kind === 'system' ? '系统' : '自定义' }}</span></td>
+          <td data-label="Site Tags">
             <Tag v-for="t in row.SiteTags" :key="t" class="mr-1">{{ t }}</Tag>
             <span v-if="!row.SiteTags?.length" class="cell-none">—</span>
           </td>
-          <td>
+          <td data-label="IP Tags">
             <Tag v-for="t in row.IPTags" :key="t" class="mr-1">{{ t }}</Tag>
             <span v-if="!row.IPTags?.length" class="cell-none">—</span>
           </td>
-          <td>
+          <td data-label="出站组">
             <Select
               :model-value="row.DefaultGroupID"
               :options="config.groups.map(g => ({ label: g.DisplayName, value: g.ID }))"
               @update:model-value="(v) => { row.DefaultGroupID = v as number; onUpdate(row) }"
             />
           </td>
-          <td>
+          <td data-label="启用">
             <Switch :model-value="row.Enabled" @update:model-value="(v) => { row.Enabled = v; onUpdate(row) }" />
           </td>
-          <td class="is-numeric">
+          <td class="is-numeric dt-actions">
             <div class="row-actions">
               <button class="row-actions__btn" @click="onEdit(row)" title="编辑">
                 <Pencil :size="14" :stroke-width="1.6" />
@@ -162,4 +162,13 @@ async function onDelete(row: Category) {
 .kind-tag[data-kind="custom"] { color: var(--color-accent-ink); background: var(--color-accent-soft); }
 
 .mr-1 { margin-right: 4px; }
+
+@media (max-width: 1023px) {
+  .cats__bar { flex-direction: column; align-items: stretch; gap: 12px; }
+  .cats__preset { flex-direction: column; align-items: stretch; gap: 8px; }
+  .cats__preset-sel { width: 100%; }
+  /* Default-group Select inside the responsive table cell stretches to fill
+     the value column instead of fighting it. */
+  .dt--responsive tbody td > :deep(.sel) { width: 100%; max-width: 220px; }
+}
 </style>
