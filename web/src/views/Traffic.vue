@@ -274,4 +274,14 @@ onUnmounted(() => {
 
 .chart-canvas { width: 100%; height: 340px; }
 .empty { font-size: 13px; color: var(--color-ink-muted); padding: 24px 0; }
+
+@media (max-width: 767px) {
+  .traffic { gap: 28px; }
+  .traffic-summary { grid-template-columns: 1fr 1fr; gap: 16px; }
+  .traffic-summary dd { font-size: 18px; }
+  .chart-canvas { height: 240px; }
+}
+@media (max-width: 479px) {
+  .traffic-summary { grid-template-columns: 1fr; gap: 12px; }
+}
 </style>

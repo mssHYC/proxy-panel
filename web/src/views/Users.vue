@@ -10,7 +10,7 @@
       </Button>
     </div>
 
-    <table v-if="users.length || loading" class="dt">
+    <table v-if="users.length || loading" class="dt dt--responsive">
       <thead>
         <tr>
           <th>用户</th>
@@ -30,7 +30,7 @@
               <span v-if="row.email" class="cell-user__email">{{ row.email }}</span>
             </div>
           </td>
-          <td>
+          <td data-label="节点">
             <template v-if="row.node_ids && row.node_ids.length">
               <Tag v-for="nid in row.node_ids" :key="nid" :mono="false" class="mr-1">
                 {{ nodeNameMap[nid] || `节点#${nid}` }}
@@ -38,7 +38,7 @@
             </template>
             <span v-else class="cell-allnodes">全部节点</span>
           </td>
-          <td>
+          <td data-label="流量">
             <div class="cell-traffic">
               <div class="cell-traffic__row">
                 <span class="num">{{ formatBytes(row.traffic_used || 0) }}</span>
@@ -54,19 +54,19 @@
               />
             </div>
           </td>
-          <td>
+          <td data-label="启用">
             <Switch :model-value="row.enable" @update:model-value="(v) => handleToggle(row, v)" />
           </td>
-          <td>
+          <td data-label="到期">
             <span class="cell-expire" :data-soon="isExpiringSoon(row.expires_at) ? '1' : null">
               <span class="num">{{ formatDate(row.expires_at) || '—' }}</span>
             </span>
           </td>
-          <td>
+          <td data-label="套餐">
             <span v-if="planNameMap[row.plan_id ?? -1]">{{ planNameMap[row.plan_id ?? -1] }}</span>
             <span v-else class="cell-none">—</span>
           </td>
-          <td class="is-numeric">
+          <td class="is-numeric dt-actions">
             <div class="row-actions">
               <button class="row-actions__btn" @click="openSub(row)" title="订阅链接">
                 <Link :size="14" :stroke-width="1.6" />
@@ -387,6 +387,12 @@ async function handleAssignPlan() {
 .cell-none { color: var(--color-ink-soft); }
 
 .cell-traffic { display: flex; flex-direction: column; gap: 6px; min-width: 180px; }
+@media (max-width: 1023px) {
+  /* Responsive table puts each td value in grid column 2; let cell-traffic
+     stretch to fill that column so the progress bar can span its width. */
+  .dt--responsive tbody td > .cell-traffic { justify-self: stretch; align-items: stretch; }
+  .cell-traffic__row { justify-content: flex-end; }
+}
 .cell-traffic__row { display: flex; align-items: baseline; gap: 6px; font-size: 13px; color: var(--color-ink-strong); }
 .cell-traffic__sep { color: var(--color-ink-soft); }
 .cell-traffic__limit { color: var(--color-ink-muted); }

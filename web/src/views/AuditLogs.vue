@@ -21,7 +21,7 @@
       </div>
     </div>
 
-    <table v-if="items.length || loading" class="dt dt--compact">
+    <table v-if="items.length || loading" class="dt dt--compact dt--responsive">
       <thead>
         <tr>
           <th>时间</th>
@@ -36,12 +36,12 @@
       <tbody>
         <tr v-for="row in items" :key="row.id || row.created_at + row.action">
           <td><span class="ts">{{ formatTime(row.created_at) }}</span></td>
-          <td><span class="actor">{{ row.actor || '—' }}</span></td>
-          <td><span class="mono action">{{ row.action }}</span></td>
-          <td><span class="mono cell-meta">{{ row.target_type || '—' }}</span></td>
-          <td><span class="num">{{ row.target_id || '—' }}</span></td>
-          <td><span class="mono">{{ row.ip || '—' }}</span></td>
-          <td><span class="detail" :title="row.detail">{{ row.detail || '—' }}</span></td>
+          <td data-label="操作人"><span class="actor">{{ row.actor || '—' }}</span></td>
+          <td data-label="动作"><span class="mono action">{{ row.action }}</span></td>
+          <td data-label="资源"><span class="mono cell-meta">{{ row.target_type || '—' }}</span></td>
+          <td data-label="目标 ID"><span class="num">{{ row.target_id || '—' }}</span></td>
+          <td data-label="IP"><span class="mono">{{ row.ip || '—' }}</span></td>
+          <td data-label="详情"><span class="detail" :title="row.detail">{{ row.detail || '—' }}</span></td>
         </tr>
       </tbody>
     </table>

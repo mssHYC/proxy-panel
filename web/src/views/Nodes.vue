@@ -14,7 +14,7 @@
       </div>
     </div>
 
-    <table v-if="nodes.length || loading" class="dt">
+    <table v-if="nodes.length || loading" class="dt dt--responsive">
       <thead>
         <tr>
           <th>节点</th>
@@ -31,15 +31,15 @@
       <tbody>
         <tr v-for="row in nodes" :key="row.id">
           <td><span class="cell-name">{{ row.name }}</span></td>
-          <td><span class="mono cell-addr">{{ row.host }}<span class="cell-addr__sep">:</span>{{ row.port }}</span></td>
-          <td><span class="proto-tag" :data-proto="row.protocol">{{ row.protocol.toUpperCase() }}</span></td>
-          <td><span class="mono cell-meta">{{ row.transport || '—' }}</span></td>
-          <td><span class="mono cell-meta">{{ getSecurity(row) }}</span></td>
-          <td><span class="mono cell-meta">{{ row.kernel_type }}</span></td>
-          <td>
+          <td data-label="地址"><span class="mono cell-addr">{{ row.host }}<span class="cell-addr__sep">:</span>{{ row.port }}</span></td>
+          <td data-label="协议"><span class="proto-tag" :data-proto="row.protocol">{{ row.protocol.toUpperCase() }}</span></td>
+          <td data-label="传输"><span class="mono cell-meta">{{ row.transport || '—' }}</span></td>
+          <td data-label="安全"><span class="mono cell-meta">{{ getSecurity(row) }}</span></td>
+          <td data-label="内核"><span class="mono cell-meta">{{ row.kernel_type }}</span></td>
+          <td data-label="启用">
             <Switch :model-value="row.enable" :disabled="row._switching" @update:model-value="(v) => handleToggle(row, v)" />
           </td>
-          <td>
+          <td data-label="健康">
             <Tooltip v-if="row.last_check_at" :content="healthTooltip(row)">
               <StatusDot :state="row.last_check_ok ? 'ok' : 'crit'">
                 {{ row.last_check_ok ? '在线' : '离线' }}
@@ -47,7 +47,7 @@
             </Tooltip>
             <StatusDot v-else state="off">待检测</StatusDot>
           </td>
-          <td class="is-numeric">
+          <td class="is-numeric dt-actions">
             <div class="row-actions">
               <button class="row-actions__btn" @click="openDialog(row)" title="编辑">
                 <Pencil :size="14" :stroke-width="1.6" />

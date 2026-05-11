@@ -9,7 +9,7 @@
       </Button>
     </div>
 
-    <table v-if="plans.length || loading" class="dt">
+    <table v-if="plans.length || loading" class="dt dt--responsive">
       <thead>
         <tr>
           <th>套餐</th>
@@ -23,9 +23,9 @@
       <tbody>
         <tr v-for="row in plans" :key="row.id">
           <td><span class="cell-name">{{ row.name }}</span></td>
-          <td><span class="num cell-num">{{ formatBytesOrInf(row.traffic_limit) }}</span></td>
-          <td><span class="num cell-num">{{ row.duration_days > 0 ? row.duration_days + ' 天' : '∞' }}</span></td>
-          <td>
+          <td data-label="流量"><span class="num cell-num">{{ formatBytesOrInf(row.traffic_limit) }}</span></td>
+          <td data-label="有效期"><span class="num cell-num">{{ row.duration_days > 0 ? row.duration_days + ' 天' : '∞' }}</span></td>
+          <td data-label="节点分组">
             <template v-if="row.node_group_ids?.length">
               <Tag v-for="gid in row.node_group_ids" :key="gid" :mono="false" class="mr-1">
                 {{ groupName(gid) }}
@@ -33,10 +33,10 @@
             </template>
             <span v-else class="cell-none">—</span>
           </td>
-          <td>
+          <td data-label="状态">
             <StatusDot :state="row.enabled ? 'ok' : 'off'">{{ row.enabled ? '启用' : '停用' }}</StatusDot>
           </td>
-          <td class="is-numeric">
+          <td class="is-numeric dt-actions">
             <div class="row-actions">
               <button class="row-actions__btn" @click="openDialog(row)" title="编辑">
                 <Pencil :size="14" :stroke-width="1.6" />

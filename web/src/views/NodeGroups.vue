@@ -9,7 +9,7 @@
       </Button>
     </div>
 
-    <table v-if="groups.length || loading" class="dt">
+    <table v-if="groups.length || loading" class="dt dt--responsive">
       <thead>
         <tr>
           <th>分组</th>
@@ -22,15 +22,15 @@
       <tbody>
         <tr v-for="row in groups" :key="row.id">
           <td><span class="cell-name">{{ row.name }}</span></td>
-          <td>
+          <td data-label="包含节点">
             <template v-if="row.node_ids?.length">
               <Tag v-for="nid in row.node_ids" :key="nid" :mono="false" class="mr-1">{{ nodeName(nid) }}</Tag>
             </template>
             <span v-else class="cell-none">—</span>
           </td>
-          <td class="is-numeric"><span class="num">{{ row.node_ids?.length || 0 }}</span></td>
-          <td class="is-numeric"><span class="num cell-meta">{{ row.sort_order }}</span></td>
-          <td class="is-numeric">
+          <td class="is-numeric" data-label="节点数"><span class="num">{{ row.node_ids?.length || 0 }}</span></td>
+          <td class="is-numeric" data-label="排序"><span class="num cell-meta">{{ row.sort_order }}</span></td>
+          <td class="is-numeric dt-actions">
             <div class="row-actions">
               <button class="row-actions__btn" @click="openDialog(row)" title="编辑">
                 <Pencil :size="14" :stroke-width="1.6" />

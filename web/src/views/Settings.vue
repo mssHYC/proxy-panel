@@ -90,8 +90,35 @@ const activeTab = ref<TabName>('account')
 
 @media (max-width: 900px) {
   .settings { grid-template-columns: 1fr; gap: 24px; }
-  .settings-nav { position: static; flex-direction: row; flex-wrap: wrap; }
-  .settings-nav__item { flex-direction: row; align-items: center; gap: 8px; }
+  .settings-nav {
+    position: static;
+    flex-direction: row;
+    gap: 2px;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    margin: 0 -16px;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--color-ink-faint);
+  }
+  .settings-nav::-webkit-scrollbar { display: none; }
+  .settings-nav__item {
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    padding: 12px 14px;
+    border-radius: 0;
+    scroll-snap-align: start;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .settings-nav__item:hover { background: transparent; }
+  .settings-nav__item.is-active {
+    background: transparent;
+    border-bottom-color: var(--color-accent);
+  }
   .settings-nav__hint { display: none; }
 }
 </style>

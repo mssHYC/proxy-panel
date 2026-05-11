@@ -134,4 +134,46 @@ function onOutside(e: any) {
   gap: 8px;
   padding: 16px 24px 22px;
 }
+
+/* Bottom sheet on mobile — full-width, anchored to bottom,
+   sticky footer; height capped so users can swipe-scroll body */
+@media (max-width: 639px) {
+  .modal__content {
+    inset: auto 0 0 0;
+    top: auto; left: 0;
+    transform: none;
+    width: 100% !important;
+    max-width: 100%;
+    max-height: 92dvh;
+    border-radius: 16px 16px 0 0;
+    animation: sheet-rise 220ms var(--ease-out);
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  @keyframes sheet-rise {
+    from { opacity: 0; transform: translateY(12px); }
+  }
+  .modal__head { padding: 18px 20px 0; }
+  .modal__title { font-size: 18px; }
+  .modal__body { padding: 14px 20px 8px; }
+  .modal__foot {
+    padding: 14px 20px;
+    border-top: 1px solid var(--color-ink-faint);
+    background: var(--color-surface-raised);
+    position: sticky;
+    bottom: 0;
+  }
+  .modal__foot > * { flex: 1; min-height: 44px; }
+  .modal__close { width: 36px; height: 36px; }
+
+  /* Subtle drag affordance */
+  .modal__content::before {
+    content: '';
+    display: block;
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--color-ink-faint);
+    margin: 8px auto 0;
+  }
+}
 </style>
