@@ -90,7 +90,12 @@ onMounted(load)
   /* Let the pill tab strip scroll horizontally so all 4 tabs stay reachable
      even on narrow phones, and keep the help button visible to the right. */
   .routing__head { gap: 12px; flex-wrap: nowrap; }
+  .routing__head :deep(.tabs) {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
   .routing__head :deep(.tabs__list) {
+    width: 100%;
     overflow-x: auto;
     max-width: 100%;
     scrollbar-width: none;
