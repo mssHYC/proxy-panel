@@ -80,8 +80,32 @@ onMounted(load)
   cursor: pointer;
   transition: background 150ms var(--ease-out), color 150ms var(--ease-out);
   font-family: inherit;
+  flex-shrink: 0;
 }
 .routing__help:hover { background: var(--color-surface-sunken); color: var(--color-ink-strong); }
 
 .routing__pane { min-height: 200px; }
+
+@media (max-width: 1023px) {
+  /* Let the pill tab strip scroll horizontally so all 4 tabs stay reachable
+     even on narrow phones, and keep the help button visible to the right. */
+  .routing__head { gap: 12px; flex-wrap: nowrap; }
+  .routing__head :deep(.tabs) {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  .routing__head :deep(.tabs__list) {
+    width: 100%;
+    overflow-x: auto;
+    max-width: 100%;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+  .routing__head :deep(.tabs__list)::-webkit-scrollbar { display: none; }
+  .routing__head :deep(.tabs--pill .tabs__tab) {
+    white-space: nowrap;
+    flex: 0 0 auto;
+    min-height: 32px;
+  }
+}
 </style>
