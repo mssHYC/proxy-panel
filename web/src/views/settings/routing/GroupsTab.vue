@@ -7,7 +7,7 @@
       </Button>
     </div>
 
-    <table v-if="config.groups.length" class="dt">
+    <table v-if="config.groups.length" class="dt dt--responsive">
       <thead>
         <tr>
           <th>显示名</th>
@@ -21,13 +21,13 @@
       <tbody>
         <tr v-for="row in config.groups" :key="row.ID">
           <td><span class="cell-name">{{ row.DisplayName }}</span></td>
-          <td><span class="mono cell-code">{{ row.Code }}</span></td>
-          <td><span class="mono cell-meta">{{ row.Type }}</span></td>
-          <td>
+          <td data-label="Code"><span class="mono cell-code">{{ row.Code }}</span></td>
+          <td data-label="类型"><span class="mono cell-meta">{{ row.Type }}</span></td>
+          <td data-label="成员">
             <Tag v-for="m in row.Members" :key="m" class="mr-1">{{ m }}</Tag>
           </td>
-          <td><span class="kind-tag" :data-kind="row.Kind">{{ row.Kind === 'system' ? '系统' : '自定义' }}</span></td>
-          <td class="is-numeric">
+          <td data-label="种类"><span class="kind-tag" :data-kind="row.Kind">{{ row.Kind === 'system' ? '系统' : '自定义' }}</span></td>
+          <td class="is-numeric dt-actions">
             <div class="row-actions">
               <button class="row-actions__btn" @click="onEdit(row)" title="编辑">
                 <Pencil :size="14" :stroke-width="1.6" />
@@ -107,4 +107,9 @@ async function onDelete(row: Group) {
 }
 .kind-tag[data-kind="custom"] { color: var(--color-accent-ink); background: var(--color-accent-soft); }
 .mr-1 { margin-right: 4px; }
+
+@media (max-width: 1023px) {
+  .grps__bar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .grps__hint { font-size: 12px; }
+}
 </style>
