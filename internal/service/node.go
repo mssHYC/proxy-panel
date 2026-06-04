@@ -126,8 +126,7 @@ func (s *NodeService) Create(req *CreateNodeReq) (*model.Node, error) {
 	}
 
 	result, err := s.db.Exec(`INSERT INTO nodes (name, host, port, protocol, transport,
-		kernel_type, settings, enable, sort_order, created_at, updated_at,
-		last_check_at, last_check_ok, last_check_err, fail_count)
+		kernel_type, settings, enable, sort_order, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
 		req.Name, req.Host, req.Port, req.Protocol, transport,
 		kernelType, settings, req.SortOrder, now, now)
