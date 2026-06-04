@@ -202,9 +202,11 @@ download_singbox() {
 
 # 安装 acme.sh (方案 1-4 共用)
 install_acme() {
+    # 通配符域名 (*.example.com) 含 *，不能直接拼进邮箱，去掉开头的 *.
+    local acct_email="admin@${DOMAIN#\*.}"
     if [[ ! -f ~/.acme.sh/acme.sh ]]; then
         info "安装 acme.sh..."
-        curl -s https://get.acme.sh | sh -s email=admin@"${DOMAIN}" 2>/dev/null || {
+        curl -s https://get.acme.sh | sh -s email="$acct_email" 2>/dev/null || {
             warn "acme.sh 安装失败，请检查网络"
             return 1
         }
@@ -1778,6 +1780,57 @@ do_restore() {
 }
 
 # ============================================
+# 修改面板端口子命令: proxy-panel port [新端口]
+# ============================================
+
+do_port() {
+    check_root
+    [[ -f "$CONFIG_FILE" ]] || error "未找到配置文件 ${CONFIG_FILE}，请先安装"
+
+    # 读取当前端口（复用 show_context_hint 的解析方式）
+    local cur_port
+    cur_port=$(awk '/^server:/{flag=1;next} /^[a-z]/{flag=0} flag && /port:/{print $2; exit}' "$CONFIG_FILE" 2>/dev/null)
+    : "${cur_port:=8080}"
+
+    # 新端口：优先取命令行参数，否则交互输入
+    local new_port="${2:-}"
+    if [[ -z "$new_port" ]]; then
+        echo "当前面板端口: ${cur_port}"
+        read -p "新端口: " new_port
+    fi
+
+    # 校验（与 interactive_config 一致）
+    if ! [[ "$new_port" =~ ^[0-9]+$ ]] || [[ "$new_port" -lt 1 || "$new_port" -gt 65535 ]]; then
+        error "无效的端口号: ${new_port}"
+    fi
+    if [[ "$new_port" == "$cur_port" ]]; then
+        info "端口未变化 (${cur_port})，无需修改"
+        return 0
+    fi
+
+    # 仅修改 server.port 这一行
+    sed -i "s|^  port:.*|  port: ${new_port}|" "$CONFIG_FILE"
+    info "config.yaml 端口已更新: ${cur_port} → ${new_port}"
+
+    # 尽力放行新端口（本机 ufw/firewalld；云安全组需另行放行）
+    if command -v ufw &>/dev/null; then
+        ufw allow "${new_port}/tcp" >/dev/null 2>&1 && info "ufw 已放行 ${new_port}/tcp"
+    elif command -v firewall-cmd &>/dev/null; then
+        firewall-cmd --permanent --add-port="${new_port}/tcp" >/dev/null 2>&1 &&
+            firewall-cmd --reload >/dev/null 2>&1 && info "firewalld 已放行 ${new_port}/tcp"
+    fi
+
+    # 重启面板生效
+    systemctl restart "${SERVICE_NAME}" 2>/dev/null && info "ProxyPanel 已重启" \
+        || warn "ProxyPanel 重启失败，请执行 proxy-panel status 查看"
+
+    echo ""
+    info "✅ 面板端口已改为 ${new_port}"
+    warn "云服务商安全组需另行放行 ${new_port}/tcp；旧端口 ${cur_port} 如不再使用可自行回收"
+    warn "若用 Cloudflare 橙色云代理，HTTPS 仅支持 443/2053/2083/2087/2096/8443 端口"
+}
+
+# ============================================
 # 显示帮助
 # ============================================
 
@@ -1795,6 +1848,7 @@ show_help() {
     echo -e "${GREEN}[运维]${NC}"
     echo "  status             查看服务状态"
     echo "  restart            重启所有服务"
+    echo "  port [新端口]      修改面板端口 (改 config + 放行防火墙 + 重启)"
     echo "  logs [svc] [行数]  查看日志"
     echo "  backup             备份配置和数据"
     echo "  restore [文件]     从备份恢复"
@@ -1839,6 +1893,7 @@ main() {
         uninstall)  do_uninstall ;;
         status)     do_status ;;
         restart)    do_restart ;;
+        port)       do_port "$@" ;;
         logs)       do_logs "$@" ;;
         reset-pwd)  do_reset_pwd ;;
         disable-2fa) do_disable_2fa ;;
