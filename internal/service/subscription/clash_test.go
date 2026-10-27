@@ -10,6 +10,61 @@ import (
 	"proxy-panel/internal/service/routing"
 )
 
+func TestClashGenerator_RealityEnablesX25519MLKEM768(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		security string
+		shortID  string
+	}{
+		{"reality", "reality", "a1b2c3d4"},
+		{"reality without short ID", "reality", ""},
+		{"plain TLS", "tls", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			node := model.Node{
+				Name: "test-node", Host: "proxy.example.com", Port: 443,
+				Protocol: "vless", Transport: "tcp",
+				Settings: `{"security":"` + tc.security + `","tls":true,"sni":"example.com",` +
+					`"public_key":"test-public-key","short_id":"` + tc.shortID + `",` +
+					`"fingerprint":"chrome","flow":"xtls-rprx-vision"}`,
+			}
+			g := &ClashGenerator{}
+			content, _, err := g.GenerateWithPlan(&routing.Plan{Final: "DIRECT"}, []model.Node{node},
+				&model.User{UUID: "00000000-0000-0000-0000-000000000001"}, "", "")
+			if err != nil {
+				t.Fatalf("GenerateWithPlan: %v", err)
+			}
+			var doc struct {
+				Proxies []map[string]any `yaml:"proxies"`
+			}
+			if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
+				t.Fatalf("generated YAML should parse: %v", err)
+			}
+			if len(doc.Proxies) != 1 {
+				t.Fatalf("expected one proxy, got %d", len(doc.Proxies))
+			}
+			proxy := doc.Proxies[0]
+			if tc.security != "reality" {
+				if _, ok := proxy["reality-opts"]; ok {
+					t.Fatal("plain TLS proxy must not contain reality-opts")
+				}
+				return
+			}
+			opts, ok := proxy["reality-opts"].(map[string]any)
+			if !ok || opts["support-x25519mlkem768"] != true {
+				t.Fatalf("Reality must enable X25519MLKEM768 inside reality-opts, got %#v", opts)
+			}
+			if opts["public-key"] != "test-public-key" || (tc.shortID != "" && opts["short-id"] != tc.shortID) {
+				t.Fatalf("Reality authentication parameters changed: %#v", opts)
+			}
+			if proxy["tls"] != true || proxy["servername"] != "example.com" ||
+				proxy["client-fingerprint"] != "chrome" || proxy["flow"] != "xtls-rprx-vision" {
+				t.Fatalf("Reality TLS and Vision parameters changed: %#v", proxy)
+			}
+		})
+	}
+}
+
 // Clash Verge 等部分客户端不识别 mihomo 原生的 network: httpupgrade 写法，
 // 需要用 ws + ws-opts.v2ray-http-upgrade: true 的兼容写法才能握手成功。
 // 订阅生成器必须输出兼容写法，否则客户端节点"看似有配置，连接却一直超时"。

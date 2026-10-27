@@ -272,6 +272,7 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 			if s.ShortID != "" {
 				b.WriteString(fmt.Sprintf("      short-id: %s\n", s.ShortID))
 			}
+			b.WriteString("      support-x25519mlkem768: true\n")
 			if s.Fingerprint != "" {
 				b.WriteString(fmt.Sprintf("    client-fingerprint: %s\n", s.Fingerprint))
 			}
