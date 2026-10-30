@@ -124,6 +124,21 @@ class WebsiteTests(unittest.TestCase):
         self.assertEqual(self.node_settings(), wrong)
         self.assertFalse(self.confdir.exists())
 
+    def test_certificate_symlinks_are_preserved_for_renewal(self):
+        cert_link, key_link = self.root / 'live.crt', self.root / 'live.key'
+        cert_link.symlink_to(self.cert)
+        key_link.symlink_to(self.key)
+        settings = dict(self.settings, cert_path=str(cert_link), key_path=str(key_link))
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('UPDATE nodes SET settings=?', (json.dumps(settings),))
+        live = json.loads(self.kernel.read_text())
+        live['inbounds'][0]['streamSettings']['tlsSettings']['certificates'][0] = {
+            'certificateFile': str(cert_link), 'keyFile': str(key_link)}
+        self.kernel.write_text(json.dumps(live))
+        stage, plan = self.prepare()
+        self.assertEqual(plan['cert'], str(cert_link))
+        self.assertIn(str(cert_link), (stage / 'proxy-panel-web-cert.path').read_text())
+
     def test_other_transport_is_not_changed(self):
         with contextlib.closing(sqlite3.connect(self.db)) as db, db:
             db.execute('UPDATE nodes SET transport="tcp"')
@@ -162,6 +177,7 @@ class WebsiteTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get('NGINX_BINARY'), 'set NGINX_BINARY for real HTTPS/Upgrade integration')
     def test_real_nginx_serves_site_and_tunnels_httpupgrade(self):
         stage, plan = self.prepare()
+        self.root.chmod(0o755)
         self.webroot.mkdir()
         (self.webroot / 'index.html').write_text('website-ok')
         observed = []
@@ -196,7 +212,7 @@ class WebsiteTests(unittest.TestCase):
         conf = conf.replace('https://127.0.0.1:443;', f'https://127.0.0.1:{backend.server_port};')
         test_conf = self.root / 'integration.conf'
         test_conf.write_text(conf)
-        # With an unprivileged master, workers retain the test user's access to the fixture.
+        # CI runs the master as root, as deployment does; its workers must still read the site.
         log = (self.root / 'nginx.log').open('w+')
         self.addCleanup(log.close)
         process = subprocess.Popen([self.nginx, '-p', str(self.root), '-c', str(test_conf), '-g', 'daemon off;'], stdout=log, stderr=log)
