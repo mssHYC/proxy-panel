@@ -359,6 +359,18 @@ func (db *DB) seedRouting() error {
 			return err
 		}
 	}
+	// 仅迁移与旧默认值完全一致的前缀，保留用户自定义地址。
+	legacyDefaults := map[string]string{
+		"routing.site_ruleset_base_url.clash":   "https://ghfast.top/https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/",
+		"routing.ip_ruleset_base_url.clash":     "https://ghfast.top/https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/",
+		"routing.site_ruleset_base_url.singbox": "https://ghfast.top/https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/",
+		"routing.ip_ruleset_base_url.singbox":   "https://ghfast.top/https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geoip/",
+	}
+	for k, old := range legacyDefaults {
+		if _, err := db.Exec(`UPDATE settings SET value = ? WHERE key = ? AND value = ?`, defaults[k], k, old); err != nil {
+			return err
+		}
+	}
 
 	// 5. 自动导入老文本（仅执行一次）
 	var marked string

@@ -3,7 +3,7 @@
     <section class="s-block">
       <div class="s-block__head">
         <h3 class="s-block__title">规则集前缀</h3>
-        <p class="s-block__hint">控制客户端从哪里下载规则集文件。默认走 GitHub 加速镜像，多数情况下不需要修改。</p>
+        <p class="s-block__hint">默认通过 jsDelivr 下载规则集。前缀需以 / 结尾，修改后请刷新客户端订阅。目录页可能提示 150 MB 限制，请在前缀后加 cn.mrs 或 cn.srs 检查实际文件能否下载。</p>
       </div>
       <Field label="Clash geosite" hint=".mrs" layout="row">
         <Input v-model="s['routing.site_ruleset_base_url.clash']" class="adv-mono" @blur="save('routing.site_ruleset_base_url.clash')" />

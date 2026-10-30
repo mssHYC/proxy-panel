@@ -82,6 +82,19 @@ curl -I http://127.0.0.1:8081/
 
 关闭网站回落时清空面板的回落端口并保存；回滚整个版本时恢复备份的二进制与配置。网站文件可保留；删掉 Nginx 配置之前先关闭回落，避免正常网页访问断开。
 
+## 规则集下载源升级
+
+Clash 的 MRS 与 sing-box 的 SRS 默认改为通过 `cdn.jsdelivr.net` 下载。启动时仅将数据库中与旧 `ghfast.top` 默认值完全一致的四项前缀替换为 jsDelivr，保留自定义地址。系统分类同步将 `gemini` 改为 `google-gemini`，将不存在的 `category-education-!cn` 改用 `category-scholar-!cn`（非中国学术类别）；分类的启用状态、出站组及顺序保持原值，自定义规则不改写。
+
+升级并重启面板后，**刷新客户端订阅，再更新规则集**。客户端已经保存的旧地址不会仅因服务端重启而改变。
+
+前缀需要保留末尾 `/`。直接访问 jsDelivr 目录可能得到 `Package size exceeded the configured limit of 150 MB`；应测试带文件名的地址，例如：
+
+- Clash：<https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite/cn.mrs>
+- sing-box：<https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/cn.srs>
+
+2026-10-30 在测试网络中，四个目录返回上述错误，但修正标签后的全部 64 个内置文件均下载成功。目录错误本身不能判断文件下载是否可用；CDN 缓存及客户端网络仍可能影响实际结果，不能保证各地或未来持续可用。
+
 ## 参考与边界
 
 参考 [v2ray-agent 的部署实现](https://github.com/mack-a/v2ray-agent/blob/ade6c61b41e0bf631fa53602507a424b49ce2fa5/install.sh)，采用本地网站回落、TLS SNI 校验和 Vision 配置联动；未照搬其固定端口或路由标签。
