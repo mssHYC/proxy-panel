@@ -33,10 +33,10 @@ type SystemPreset struct {
 
 // 默认 URL 前缀（可被 settings 覆写）。
 const (
-	DefaultClashSiteBase   = "https://ghfast.top/https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/"
-	DefaultClashIPBase     = "https://ghfast.top/https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geoip/"
-	DefaultSingboxSiteBase = "https://ghfast.top/https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/"
-	DefaultSingboxIPBase   = "https://ghfast.top/https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geoip/"
+	DefaultClashSiteBase   = "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geosite/"
+	DefaultClashIPBase     = "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@meta/geo/geoip/"
+	DefaultSingboxSiteBase = "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geosite/"
+	DefaultSingboxIPBase   = "https://cdn.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@sing/geo/geoip/"
 	DefaultFinalGroup      = "node_select"
 )
 
@@ -84,7 +84,7 @@ var SystemCategories = []SystemCategory{
 	{Code: "location_cn", DisplayName: "Location:CN", SiteTags: []string{"cn"}, IPTags: []string{"cn"}, DefaultGroupCode: "direct", Enabled: true, SortOrder: 20},
 	{Code: "ad_block", DisplayName: "广告拦截", SiteTags: []string{"category-ads-all"}, DefaultGroupCode: "fallback", Enabled: false, SortOrder: 30},
 	{Code: "claude_ai", DisplayName: "Claude AI", SiteTags: []string{"anthropic"}, InlineDomainSuffix: []string{"claude.ai", "claude.com", "anthropic.com", "clau.de", "claudeusercontent.com", "claudemcpclient.com"}, DefaultGroupCode: "claude_ai", Enabled: true, SortOrder: 35},
-	{Code: "ai_services", DisplayName: "AI 服务", SiteTags: []string{"openai", "gemini", "category-ai-chat-!cn"}, DefaultGroupCode: "openai", Enabled: true, SortOrder: 40},
+	{Code: "ai_services", DisplayName: "AI 服务", SiteTags: []string{"openai", "google-gemini", "category-ai-chat-!cn"}, DefaultGroupCode: "openai", Enabled: true, SortOrder: 40},
 	{Code: "bilibili", DisplayName: "Bilibili", SiteTags: []string{"bilibili"}, DefaultGroupCode: "cn_media", Enabled: false, SortOrder: 50},
 	{Code: "youtube", DisplayName: "YouTube", SiteTags: []string{"youtube"}, DefaultGroupCode: "youtube", Enabled: true, SortOrder: 60},
 	{Code: "google", DisplayName: "Google", SiteTags: []string{"google"}, IPTags: []string{"google"}, DefaultGroupCode: "google", Enabled: true, SortOrder: 70},
@@ -95,7 +95,7 @@ var SystemCategories = []SystemCategory{
 	{Code: "social_media", DisplayName: "社交媒体", SiteTags: []string{"facebook", "twitter", "instagram", "tiktok"}, DefaultGroupCode: "global_proxy", Enabled: false, SortOrder: 120},
 	{Code: "streaming", DisplayName: "流媒体", SiteTags: []string{"netflix", "disney", "hbo", "spotify"}, DefaultGroupCode: "streaming", Enabled: false, SortOrder: 130},
 	{Code: "gaming", DisplayName: "游戏", SiteTags: []string{"category-games-!cn"}, DefaultGroupCode: "global_proxy", Enabled: false, SortOrder: 140},
-	{Code: "education", DisplayName: "教育", SiteTags: []string{"category-education-!cn"}, DefaultGroupCode: "global_proxy", Enabled: false, SortOrder: 150},
+	{Code: "education", DisplayName: "教育", SiteTags: []string{"category-scholar-!cn"}, DefaultGroupCode: "global_proxy", Enabled: false, SortOrder: 150},
 	{Code: "financial", DisplayName: "金融", SiteTags: []string{"paypal", "stripe"}, DefaultGroupCode: "global_proxy", Enabled: false, SortOrder: 160},
 	{Code: "cloud_services", DisplayName: "云服务", SiteTags: []string{"amazon", "aws", "cloudflare"}, DefaultGroupCode: "global_proxy", Enabled: false, SortOrder: 170},
 	{Code: "non_china", DisplayName: "Non-China", SiteTags: []string{"geolocation-!cn"}, DefaultGroupCode: "fallback", Enabled: true, SortOrder: 900},
