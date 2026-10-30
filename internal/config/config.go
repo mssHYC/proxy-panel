@@ -92,9 +92,10 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 设置默认值
+	// 缺少 listen 的旧配置沿用原来的全接口监听，直接替换二进制升级也不会失联。
+	// 新安装由安装脚本和示例配置显式写入 127.0.0.1；已有 listen 原样保留。
 	cfg := &Config{
-		Server:   ServerConfig{Port: 8080, Listen: "127.0.0.1"},
+		Server:   ServerConfig{Port: 8080, Listen: "0.0.0.0"},
 		Database: DatabaseConfig{Path: "data/panel.db"},
 		Auth:     AuthConfig{TokenExpiry: 24},
 		Traffic:  TrafficConfig{CollectInterval: 60, WarnPercent: 80, ResetCron: "0 0 1 * *"},
