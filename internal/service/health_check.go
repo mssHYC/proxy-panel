@@ -94,7 +94,7 @@ func (h *HealthChecker) dialOne(ctx context.Context, n *model.Node) error {
 		return probeQUIC(dctx, n.Host, n.Port, quicProbeOpts{obfsKind: kind, obfsPassword: pwd})
 	}
 	dialer := &net.Dialer{Timeout: h.timeout}
-	addr := net.JoinHostPort(n.Host, strconv.Itoa(n.Port))
+	addr := net.JoinHostPort(n.Host, strconv.Itoa(n.PublicPort()))
 	conn, err := dialer.DialContext(dctx, "tcp", addr)
 	if err != nil {
 		return err
@@ -129,7 +129,7 @@ func (h *HealthChecker) checkOne(ctx context.Context, n *model.Node) {
 	// 仅在首次跨越阈值时发送，避免重复告警
 	if n.FailCount < healthFailThreshold && newFail >= healthFailThreshold && h.notifySvc != nil {
 		msg := fmt.Sprintf("🚫 节点「%s」(%s:%d) 连续 %d 次探测失败：%s",
-			n.Name, n.Host, n.Port, newFail, errMsg)
+			n.Name, n.Host, n.PublicPort(), newFail, errMsg)
 		h.notifySvc.SendAll(msg)
 		AlertsSentTotal.WithLabelValues("node_offline").Inc()
 	}

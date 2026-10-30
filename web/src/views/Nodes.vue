@@ -30,8 +30,8 @@
       </thead>
       <tbody>
         <tr v-for="row in nodes" :key="row.id">
-          <td><span class="cell-name">{{ row.name }}</span></td>
-          <td data-label="地址"><span class="mono cell-addr">{{ row.host }}<span class="cell-addr__sep">:</span>{{ row.port }}</span></td>
+          <td><span class="cell-name">{{ row.name }}</span> <span class="cell-meta">#{{ row.id }}</span></td>
+          <td data-label="地址"><span class="mono cell-addr">{{ row.host }}<span class="cell-addr__sep">:</span>{{ getPublicPort(row) }}</span></td>
           <td data-label="协议"><span class="proto-tag" :data-proto="row.protocol">{{ row.protocol.toUpperCase() }}</span></td>
           <td data-label="传输"><span class="mono cell-meta">{{ row.transport || '—' }}</span></td>
           <td data-label="安全"><span class="mono cell-meta">{{ getSecurity(row) }}</span></td>
@@ -83,7 +83,7 @@
           <Field label="监听 IP" hint="留空使用 0.0.0.0">
             <Input v-model="form.listen" placeholder="0.0.0.0" />
           </Field>
-          <Field label="端口" :error="errors.port">
+          <Field :label="form.public_port ? '后端监听端口' : '端口'" :hint="form.public_port ? `订阅使用公网 ${form.public_port}。修改域名、端口或路径后需重新部署网站。` : ''" :error="errors.port">
             <NumberInput v-model="form.port" :min="1" :max="65535" />
           </Field>
           <Field label="排序" hint="数值越小越靠前">
@@ -410,8 +410,13 @@ const hasSecurity = computed(() => availableSecurities.value.length > 0)
 const canUseVision = computed(() => form.protocol === 'vless' && form.transport === 'tcp' && ['tls', 'reality'].includes(form.security))
 const canUseFallback = computed(() => form.kernel_type === 'xray' && ['vless', 'trojan'].includes(form.protocol) && form.transport === 'tcp' && form.security === 'tls')
 
+function getPublicPort(node: any) {
+  try { return JSON.parse(node.settings || '{}').public_port || node.port }
+  catch { return node.port }
+}
+
 const defaultForm = () => ({
-  name: '', listen: '', host: '', port: 443,
+  name: '', listen: '', host: '', port: 443, public_port: 0,
   protocol: 'vless', transport: 'tcp', kernel_type: 'xray', sort_order: 0,
   security: 'none', sni: '', fingerprint: 'chrome', alpn: [] as string[],
   allow_insecure: false, cert_path: '', key_path: '', fallback_port: '',
@@ -482,6 +487,7 @@ function formToSettings(): string {
     if (form.hy2_ignore_client_bandwidth) s.ignore_client_bandwidth = true
   }
   if (form.listen) s.listen = form.listen
+  if (form.public_port) s.public_port = form.public_port
   return JSON.stringify(s)
 }
 
@@ -497,6 +503,7 @@ function settingsToForm(settingsStr: string) {
   form.cert_path = s.cert_path || s.certPath || ''
   form.key_path = s.key_path || s.keyPath || ''
   form.listen = s.listen || ''
+  form.public_port = s.public_port || 0
   if (s.security === 'reality') {
     form.security = 'reality'
     form.reality_dest = s.dest || ''

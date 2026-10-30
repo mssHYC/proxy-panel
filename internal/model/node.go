@@ -1,6 +1,9 @@
 package model
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Node 节点模型
 type Node struct {
@@ -20,4 +23,21 @@ type Node struct {
 	LastCheckOK  bool       `json:"last_check_ok"`
 	LastCheckErr string     `json:"last_check_err,omitempty"`
 	FailCount    int        `json:"fail_count"`
+}
+
+// PublicPort is the client-facing port; Port remains the core listener port.
+func (n Node) PublicPort() int {
+	if n.Protocol == "vmess" && (n.Transport == "ws" || n.Transport == "httpupgrade") {
+		var s struct {
+			PublicPort int    `json:"public_port"`
+			Security   string `json:"security"`
+			TLS        bool   `json:"tls"`
+			Listen     string `json:"listen"`
+		}
+		if json.Unmarshal([]byte(n.Settings), &s) == nil && s.PublicPort == 443 &&
+			(s.Security == "tls" || (s.Security == "" && s.TLS)) && s.Listen == "127.0.0.1" {
+			return s.PublicPort
+		}
+	}
+	return n.Port
 }
