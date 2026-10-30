@@ -72,6 +72,10 @@ class WebsiteTests(unittest.TestCase):
     def checked_run(self, args):
         if args[0].startswith('/fixture/'):
             return ''
+        if args[0] == 'systemd-analyze':
+            if not os.environ.get('SYSTEMD_ANALYZE_BINARY'):
+                return ''
+            args = [os.environ['SYSTEMD_ANALYZE_BINARY'], *args[1:]]
         return self.real_run(args)
 
     def prepare(self):
@@ -114,6 +118,78 @@ class WebsiteTests(unittest.TestCase):
         stage, _ = self.prepare()
         tool.apply(stage)
         self.assertEqual((self.webroot / 'index.html').read_text(), 'my existing website')
+
+    def test_retry_accepts_empty_directories_left_by_rollback(self):
+        self.confdir.mkdir()
+        self.webroot.mkdir()
+        stage, _ = self.prepare()
+        tool.apply(stage)
+        self.assertTrue((self.confdir / 'managed.json').is_file())
+
+    def test_certificate_watch_paths_are_literal_absolute_paths(self):
+        units = tool.website_units('/usr/sbin/nginx', '/etc/nginx/proxy-panel/nginx.conf',
+                                   '/opt/cert folder/100%.crt', '/opt/cert folder/100%.key')
+        paths = [line for line in units['proxy-panel-web-cert.path'].splitlines() if line.startswith('PathChanged=')]
+        self.assertEqual(paths, ['PathChanged=/opt/cert folder/100%%.crt',
+                                 'PathChanged=/opt/cert folder/100%%.key'])
+
+    def test_invalid_systemd_unit_fails_before_node_changes(self):
+        def reject_unit(args):
+            if args[0] == 'systemd-analyze':
+                raise ValueError('bad unit file setting')
+            return self.checked_run(args)
+        with patch.object(tool, 'run', side_effect=reject_unit):
+            with self.assertRaisesRegex(ValueError, 'bad unit file setting'):
+                self.prepare()
+        self.assertEqual(self.node_settings(), self.settings)
+        self.assertEqual(json.loads(self.kernel.read_text()), self.original_core)
+        self.assertFalse(self.confdir.exists())
+
+    @unittest.skipUnless(os.environ.get('SYSTEMD_ANALYZE_BINARY'), 'set SYSTEMD_ANALYZE_BINARY for Linux unit verification')
+    def test_real_systemd_rejects_original_quoted_watch_paths(self):
+        stage, _ = self.prepare()
+        watcher = stage / 'proxy-panel-web-cert.path'
+        text = watcher.read_text()
+        for cert_path in (self.cert, self.key):
+            text = text.replace('PathChanged=' + str(cert_path), 'PathChanged="' + str(cert_path) + '"')
+        watcher.write_text(text)
+        with self.assertRaises(ValueError):
+            self.real_run([os.environ['SYSTEMD_ANALYZE_BINARY'], 'verify', '--man=no', str(watcher)])
+
+    @unittest.skipUnless(os.environ.get('SYSTEMD_ANALYZE_BINARY'), 'set SYSTEMD_ANALYZE_BINARY on a systemd runner')
+    def test_real_systemd_watcher_starts_and_detects_both_renewals(self):
+        # Use an isolated unit name and a harmless reload handler on the CI runner.
+        name = 'proxy-panel-website-test-' + str(os.getpid())
+        cert, key, marker = [self.root / p for p in ('watched cert%.crt', 'watched key%.key', 'reloaded')]
+        cert.touch()
+        key.touch()
+        contents = tool.website_units(self.nginx, self.confdir / 'nginx.conf', cert, key)
+        watcher, handler = self.root / (name + '.path'), self.root / (name + '.service')
+        watcher.write_text(contents['proxy-panel-web-cert.path'].replace('Unit=proxy-panel-web-reload.service', 'Unit=' + handler.name))
+        handler.write_text('[Service]\nType=oneshot\nExecStart=/bin/touch ' + str(marker) + '\n')
+
+        def cleanup():
+            subprocess.run(['systemctl', 'stop', watcher.name, handler.name], capture_output=True)
+            for unit in (watcher, handler):
+                link = Path('/etc/systemd/system') / unit.name
+                if link.is_symlink() and link.resolve() == unit:
+                    link.unlink()
+            subprocess.run(['systemctl', 'daemon-reload'], capture_output=True)
+        self.addCleanup(cleanup)
+        self.real_run(['systemctl', 'link', str(watcher), str(handler)])
+        self.real_run(['systemctl', 'daemon-reload'])
+        self.real_run(['systemctl', 'start', watcher.name])
+        self.real_run(['systemctl', 'is-active', '--quiet', watcher.name])
+        for changed in (cert, key):
+            marker.unlink(missing_ok=True)
+            changed.write_text('renewed')
+            reloaded = False
+            for _ in range(50):
+                if marker.exists() and self.real_run(['systemctl', 'show', '-p', 'ActiveState', '--value', handler.name]).strip() == 'inactive':
+                    reloaded = True
+                    break
+                time.sleep(.1)
+            self.assertTrue(reloaded, 'Certificate watcher did not trigger: ' + str(changed))
 
     def test_wrong_cdn_certificate_fails_without_mutation(self):
         with contextlib.closing(sqlite3.connect(self.db)) as db, db:
@@ -359,7 +435,7 @@ systemctl() {
   shift
   for svc in "$@"; do rm -f "$TEST_ROOT/states/$svc"; done;;
  start)
-  if [[ "$FAIL" == start && "$svc" == proxy-panel-web ]]; then return 1; fi
+  if [[ "$FAIL" == start && "$svc" == proxy-panel-web || "$FAIL" == watcher && "$svc" == proxy-panel-web-cert.path ]]; then return 1; fi
   touch "$TEST_ROOT/states/$svc";;
  enable) shift; for svc in "$@"; do touch "$TEST_ROOT/enabled/$svc"; done;;
  disable) shift; for svc in "$@"; do rm -f "$TEST_ROOT/enabled/$svc"; done;;
@@ -394,6 +470,7 @@ if [[ "$OFFER" == 1 ]]; then offer_website_setup; else do_website website setup;
     def test_concurrent_change_recovers(self): self.run_case('changed')
     def test_partial_apply_failure_recovers(self): self.run_case('apply')
     def test_nginx_start_failure_recovers(self): self.run_case('start')
+    def test_cert_watcher_start_failure_recovers(self): self.run_case('watcher')
     def test_health_failure_recovers(self): self.run_case('health')
     def test_update_offer_does_not_disable_transaction_errors(self): self.run_case('apply', offer=True)
 

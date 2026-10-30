@@ -1487,6 +1487,7 @@ def unit_path(value):
 
 def website_units(nginx, config, cert, key):
     command = unit_path(nginx) + ' -c ' + unit_path(config)
+    # PathChanged takes the whole absolute path, without ExecStart-style quotes.
     return {
         'proxy-panel-web.service': f'''[Unit]
 Description=ProxyPanel website and HTTPUpgrade reverse proxy
@@ -1513,8 +1514,8 @@ ExecStart=/bin/systemctl reload proxy-panel-web.service
         'proxy-panel-web-cert.path': f'''[Unit]
 Description=Watch ProxyPanel website certificate renewal
 [Path]
-PathChanged={unit_path(cert)}
-PathChanged={unit_path(key)}
+PathChanged={str(cert).replace('%', '%%')}
+PathChanged={str(key).replace('%', '%%')}
 Unit=proxy-panel-web-reload.service
 [Install]
 WantedBy=multi-user.target
@@ -1540,8 +1541,12 @@ def prepare(config, install, confdir, root, units, stage, website_domain=''):
     kernel_path = str(Path(cfg['kernel']['xray_config']).resolve())
     state_path = confdir / 'managed.json'
     managed = json.loads(state_path.read_text()) if state_path.exists() else None
-    if not managed and (confdir.exists() or root.exists()):
-        raise ValueError("网站目录已存在但不是本脚本托管，拒绝覆盖")
+    if not managed:
+        for directory in (confdir, root):
+            # A failed first deployment can leave empty directories after rollback.
+            if directory.is_symlink() or (directory.exists() and
+                    (not directory.is_dir() or any(directory.iterdir()))):
+                raise ValueError("网站目录已存在但不是本脚本托管，拒绝覆盖")
     with closing(sqlite3.connect(Path(database).as_uri() + '?mode=ro', uri=True)) as db:
         rows = db.execute('SELECT id,host,protocol,transport,settings FROM nodes WHERE enable=1 AND port=443 AND kernel_type="xray"').fetchall()
     if len(rows) != 1:
@@ -1614,7 +1619,8 @@ def prepare(config, install, confdir, root, units, stage, website_domain=''):
              str(state_path): ('managed.json', json.dumps({k: v for k, v in plan.items() if k not in ('original_settings', 'settings')}), 0o600)}
     if not (root / 'index.html').exists():
         files[str(root / 'index.html')] = ('index.html', PAGE, 0o644)
-    for name, text in website_units(nginx, config_file, cert, key).items():
+    unit_files = website_units(nginx, config_file, cert, key)
+    for name, text in unit_files.items():
         files[str(units / name)] = (name, text, 0o644)
     stage.mkdir(parents=True, mode=0o700, exist_ok=True)
     for name, text, mode in files.values():
@@ -1630,6 +1636,7 @@ def prepare(config, install, confdir, root, units, stage, website_domain=''):
         (stage / 'xray-check.log').write_text(str(exc))
         raise ValueError('Xray 候选配置检查失败，诊断文件: ' + str(stage / 'xray-check.log')) from exc
     run([nginx, '-t', '-c', str(stage / 'nginx.conf')])
+    run(['systemd-analyze', 'verify', '--man=no', *[str(stage / name) for name in unit_files]])
     print('网站预检通过: ' + ', '.join(plan['domains']) + '；保留端口 443、路径和节点凭据')
 
 
@@ -1721,6 +1728,7 @@ install_website_deps() (
     command -v ip >/dev/null || packages+=("$ip_package")
     command -v jq >/dev/null || packages+=(jq)
     command -v flock >/dev/null || packages+=(util-linux)
+    command -v systemd-analyze >/dev/null || packages+=(systemd)
     # Debian packages must not start a default public HTTP site during setup.
     cleanup_website_policy() {
         if [[ "$temporary_policy" == true ]]; then rm -f /usr/sbin/policy-rc.d; fi
@@ -1741,7 +1749,7 @@ install_website_deps() (
     if [[ "$new_nginx" == true ]]; then systemctl disable --now nginx; fi
     python3 -c 'import yaml, sqlite3, ssl'
     local cmd
-    for cmd in nginx openssl ip jq flock; do command -v "$cmd" >/dev/null || error "缺少网站部署依赖: $cmd"; done
+    for cmd in nginx openssl ip jq flock systemd-analyze; do command -v "$cmd" >/dev/null || error "缺少网站部署依赖: $cmd"; done
 )
 
 setup_website_selinux() {
@@ -1800,7 +1808,7 @@ run_website_setup() (
         if systemctl is-active --quiet "$svc"; then active+=("$svc"); fi
     done
     for svc in "$WEBSITE_SERVICE" proxy-panel-web-cert.path; do
-        if systemctl is-enabled --quiet "$svc"; then enabled+=("$svc"); fi
+        if systemctl is-enabled --quiet "$svc" 2>/dev/null; then enabled+=("$svc"); fi
     done
     jq --argjson active "$(printf '%s\n' "${active[@]}" | jq -Rsc 'split("\n") | map(select(length>0))')" \
        --argjson enabled "$(printf '%s\n' "${enabled[@]}" | jq -Rsc 'split("\n") | map(select(length>0))')" \
