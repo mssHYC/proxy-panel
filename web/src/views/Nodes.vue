@@ -204,6 +204,10 @@
           <template v-if="form.security === 'reality'">
             <Field label="目标地址 Dest"><Input v-model="form.reality_dest" placeholder="www.google.com:443" /></Field>
             <Field label="SNI" hint="Server Names"><Input v-model="form.sni" placeholder="www.google.com" /></Field>
+            <Field class="nf-col-2" label="目标检查" hint="从服务器验证公网地址、证书/SNI、TLS 1.3 和 HTTP/2；新建或更换目标时保存也会检查。">
+              <Button :loading="checkingReality" @click="handleCheckReality">检查目标</Button>
+              <p v-if="realityCheckMessage" role="status">{{ realityCheckMessage }}</p>
+            </Field>
             <Field class="nf-col-2 nf-keypair" label="x25519 密钥对" hint="自动生成 Private Key / Public Key / Short IDs">
               <Button variant="primary" :loading="generatingKeypair" @click="handleGenerateKeypair">自动生成</Button>
             </Field>
@@ -296,13 +300,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { Plus, Pencil, Trash2, RefreshCw } from 'lucide-vue-next'
 import {
   Button, Input, NumberInput, Select, MultiSelect, Switch, Modal, Field, Tooltip, StatusDot,
   toast, confirm,
 } from '../ui'
-import { getNodes, createNode, updateNode, deleteNode, generateRealityKeypair } from '../api/node'
+import { getNodes, createNode, updateNode, deleteNode, generateRealityKeypair, checkRealityTarget } from '../api/node'
 import { getSettings } from '../api/setting'
 import request from '../api/request'
 
@@ -542,6 +546,7 @@ const fetchNodes = async () => {
 }
 
 const openDialog = (row?: any) => {
+  realityCheckMessage.value = ''
   Object.assign(form, defaultForm())
   errors.name = ''; errors.host = ''; errors.port = ''
   if (row) {
@@ -555,6 +560,19 @@ const openDialog = (row?: any) => {
     isEdit.value = false; editId.value = null
   }
   dialogVisible.value = true
+}
+
+const checkingReality = ref(false)
+const realityCheckMessage = ref('')
+watch(() => [form.reality_dest, form.sni], () => { realityCheckMessage.value = '' })
+const handleCheckReality = async () => {
+  checkingReality.value = true
+  realityCheckMessage.value = ''
+  try {
+    const { data } = await checkRealityTarget({ dest: form.reality_dest, server_names: [form.sni] })
+    realityCheckMessage.value = `TLS 1.3、HTTP/2 和证书检查通过。${data.warnings.join('；')}`
+  } catch (e: any) { realityCheckMessage.value = e.response?.data?.error || '目标检查失败' }
+  finally { checkingReality.value = false }
 }
 
 const handleSubmit = async () => {

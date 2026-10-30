@@ -197,3 +197,18 @@ func withFirewallWarning(h *NodeHandler, node *model.Node) any {
 		FirewallWarning: firewallWarning(h),
 	}
 }
+
+// CheckRealityTarget reports network/protocol checks without saving a node.
+func (h *NodeHandler) CheckRealityTarget(c *gin.Context) {
+	var settings map[string]interface{}
+	if err := c.ShouldBindJSON(&settings); err != nil {
+		c.JSON(400, gin.H{"error": "无效的目标配置"})
+		return
+	}
+	result, err := service.CheckRealityTarget(c.Request.Context(), settings)
+	if err != nil {
+		c.JSON(400, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(200, result)
+}

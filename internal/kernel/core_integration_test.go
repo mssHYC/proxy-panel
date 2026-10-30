@@ -258,3 +258,73 @@ func startCore(t *testing.T, dir, binary string, args ...string) {
 		}
 	})
 }
+
+// Every release tests its pinned core pair against the generated protocol matrix.
+func TestCoreCompatibilityMatrix(t *testing.T) {
+	xray, singbox := os.Getenv("XRAY_BINARY"), os.Getenv("SINGBOX_BINARY")
+	if xray == "" || singbox == "" {
+		t.Skip("set XRAY_BINARY and SINGBOX_BINARY")
+	}
+	dir := t.TempDir()
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	defer srv.Close()
+	cert := srv.TLS.Certificates[0]
+	key, err := x509.MarshalPKCS8PrivateKey(cert.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPath, keyPath := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	if err = os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, engineName := range []string{"xray", "sing-box"} {
+		for _, protocol := range []string{"vless", "vmess", "trojan", "hysteria2"} {
+			if engineName == "xray" && protocol == "hysteria2" {
+				continue
+			}
+			for _, transport := range []string{"tcp", "ws", "grpc", "httpupgrade"} {
+				if protocol == "hysteria2" && transport != "tcp" {
+					continue
+				}
+				for _, security := range []string{"tls", "reality"} {
+					if security == "reality" && (protocol != "vless" || transport != "tcp") {
+						continue
+					}
+					t.Run(engineName+"/"+protocol+"/"+transport+"/"+security, func(t *testing.T) {
+						settings := map[string]interface{}{"listen": "127.0.0.1", "security": security, "sni": "example.com", "cert_path": certPath, "key_path": keyPath, "alpn": "h2, http/1.1", "path": "/proxy", "serviceName": "proxy"}
+						if protocol == "vless" && transport == "tcp" {
+							settings["flow"] = "xtls-rprx-vision"
+						}
+						if security == "reality" {
+							settings["dest"] = "example.com:443"
+							settings["server_names"] = []string{"example.com"}
+							settings["private_key"] = "UuMBgl7MXTPx9inmQp2UC7Jcnwc6XYbwDNebonM-FCc"
+							settings["short_ids"] = []string{"abcd1234"}
+						}
+						path := filepath.Join(t.TempDir(), "config.json")
+						var engine Engine = NewXrayEngine(xray, path, 10085)
+						binary, args := xray, []string{"run", "-test", "-config", path}
+						if engineName == "sing-box" {
+							engine = NewSingboxEngine(singbox, path, 9090)
+							binary = singbox
+							args = []string{"check", "-c", path}
+						}
+						data, err := engine.GenerateConfig([]NodeConfig{{ID: 1, Tag: "node-1", Port: 14443, Protocol: protocol, Transport: transport, Settings: settings}}, []UserConfig{{UUID: "00000000-0000-0000-0000-000000000001", Email: "test", NodeIDs: []int64{1}}})
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err = engine.WriteConfig(data); err != nil {
+							t.Fatal(err)
+						}
+						if out, err := exec.Command(binary, args...).CombinedOutput(); err != nil {
+							t.Fatalf("%s: %v", out, err)
+						}
+					})
+				}
+			}
+		}
+	}
+}

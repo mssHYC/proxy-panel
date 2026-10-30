@@ -19,7 +19,7 @@ func TestNodeCreate_InsertColumnsMatchValues(t *testing.T) {
 		Protocol:   "vless",
 		Transport:  "tcp",
 		KernelType: "xray",
-		Settings:   `{"security":"reality"}`,
+		Settings:   `{}`,
 		SortOrder:  0,
 	})
 	if err != nil {

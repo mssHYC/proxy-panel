@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -56,8 +57,9 @@ type UpdateNodeReq struct {
 
 // NodeService 节点业务逻辑
 type NodeService struct {
-	db *database.DB
-	fw *firewall.Service
+	db           *database.DB
+	fw           *firewall.Service
+	realityCheck func(context.Context, map[string]interface{}) (*RealityCheck, error)
 }
 
 // NewNodeService 创建节点服务
@@ -148,6 +150,10 @@ func (s *NodeService) Create(req *CreateNodeReq) (*model.Node, error) {
 		return nil, err
 	}
 
+	if err := s.validateRealityChange("", settings, true); err != nil {
+		return nil, err
+	}
+
 	result, err := s.db.Exec(`INSERT INTO nodes (name, host, port, protocol, transport,
 		kernel_type, settings, enable, sort_order, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
@@ -195,6 +201,11 @@ func (s *NodeService) Update(id int64, req *UpdateNodeReq) (*model.Node, error) 
 	// Allow disabling legacy invalid nodes without first repairing their settings.
 	if req.Protocol != nil || req.Transport != nil || req.KernelType != nil || req.Port != nil || req.Settings != nil || (req.Enable != nil && *req.Enable) {
 		if err := validateNodeSettings(candidate.Protocol, candidate.Transport, candidate.KernelType, candidate.Port, candidate.Settings); err != nil {
+			return nil, err
+		}
+	}
+	if req.Settings != nil || (req.Enable != nil && *req.Enable) {
+		if err := s.validateRealityChange(old.Settings, candidate.Settings, req.Enable != nil && *req.Enable && !old.Enable); err != nil {
 			return nil, err
 		}
 	}

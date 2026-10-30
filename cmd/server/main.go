@@ -15,13 +15,23 @@ import (
 	"proxy-panel/internal/service"
 	"proxy-panel/internal/service/firewall"
 	notify "proxy-panel/internal/service/notify"
+	"proxy-panel/internal/upgrade"
 )
 
 func main() {
 	cfgPath := flag.String("config", "config.yaml", "配置文件路径")
 	resetPass := flag.String("reset-pass", "", "重置管理员密码后退出（供 install.sh reset-pwd 调用）")
 	disableTOTP := flag.Bool("disable-totp", false, "强制关闭 2FA 后退出（供 install.sh disable-2fa 应急解锁调用）")
+	checkUpdate := flag.String("check-update", "", "在临时目录验证升级候选，不修改线上数据")
+	checkHealth := flag.Bool("check-health", false, "检查面板 HTTP/TLS 监听后退出")
+	compatibility := flag.Bool("compatibility", false, "输出本版本已验证的内核版本")
+	xrayCandidate := flag.String("xray-candidate", "", "待验证的 Xray 二进制")
+	singboxCandidate := flag.String("singbox-candidate", "", "待验证的 sing-box 二进制")
 	flag.Parse()
+	if *compatibility {
+		fmt.Print(string(upgrade.Compatibility))
+		return
+	}
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
@@ -31,6 +41,20 @@ func main() {
 	// 安全守卫：默认凭证 / JWT 密钥未改动时拒绝启动，避免生产裸奔
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("配置校验失败: %v\n请编辑 %s 后重新启动", err, *cfgPath)
+	}
+
+	if *checkUpdate != "" {
+		if err := upgrade.Check(cfg, *cfgPath, *checkUpdate, *xrayCandidate, *singboxCandidate); err != nil {
+			log.Fatal(err)
+		}
+		log.Print("升级预检通过")
+		return
+	}
+	if *checkHealth {
+		if err := upgrade.Health(cfg); err != nil {
+			log.Fatal(err)
+		}
+		return
 	}
 
 	db, err := database.Open(cfg.Database.Path)

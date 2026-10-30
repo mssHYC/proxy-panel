@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -497,21 +499,14 @@ func buildSingboxTLS(s map[string]interface{}) map[string]interface{} {
 		if key := getSettingStrAny(s, "", "key_path", "keyPath"); key != "" {
 			tls["key_path"] = key
 		}
-		if alpn := getSettingSliceAny(s, "alpn"); len(alpn) > 0 {
+		if alpn := tlsALPN(s); len(alpn) > 0 {
 			tls["alpn"] = alpn
 		}
 		return tls
 	case "reality":
-		dest := getSettingStrAny(s, "", "dest")
-		handshakeServer := dest
-		handshakePort := 443
-		if idx := indexOfColon(dest); idx > 0 {
-			handshakeServer = dest[:idx]
-			if p, err := parseIntSafe(dest[idx+1:]); err == nil && p > 0 {
-				handshakePort = p
-			}
-		}
-		serverNames := getSettingSliceAny(s, "server_names", "serverNames")
+		dest, serverNames, _ := RealityTarget(s)
+		handshakeServer, port, _ := net.SplitHostPort(dest)
+		handshakePort, _ := strconv.Atoi(port)
 		serverName := ""
 		if len(serverNames) > 0 {
 			serverName = serverNames[0]
@@ -532,21 +527,6 @@ func buildSingboxTLS(s map[string]interface{}) map[string]interface{} {
 		return tls
 	}
 	return nil
-}
-
-func indexOfColon(s string) int {
-	return strings.LastIndex(s, ":")
-}
-
-func parseIntSafe(s string) (int, error) {
-	n := 0
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, fmt.Errorf("invalid")
-		}
-		n = n*10 + int(c-'0')
-	}
-	return n, nil
 }
 
 // WriteConfig 将配置写入文件

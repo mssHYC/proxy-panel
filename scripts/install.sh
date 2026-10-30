@@ -621,32 +621,6 @@ do_cert() {
 }
 
 # ============================================
-# 复用现有配置 (重装场景)
-# ============================================
-
-# 从现有 config.yaml 解析 setup_firewall / print_summary 所需的变量，
-# 避免重装时让用户再次输入端口、账号、TLS、Telegram 等。
-# 不重写 config.yaml：JWT、密码 hash 引用、自定义字段全部原样保留。
-load_existing_config() {
-    [[ ! -f "$CONFIG_FILE" ]] && error "config.yaml 不存在，无法复用配置"
-
-    local awk_server='/^server:/{f=1;next} /^[a-z]/{f=0} f && $1==key":"{sub(/^[^:]+:[[:space:]]*/,""); gsub(/^"|"$/,""); print; exit}'
-    PANEL_PORT=$(awk -v key="port"   "$awk_server" "$CONFIG_FILE")
-    TLS_ENABLED=$(awk -v key="tls"   "$awk_server" "$CONFIG_FILE")
-    CERT_PATH=$(awk -v key="cert"    "$awk_server" "$CONFIG_FILE")
-    KEY_PATH=$(awk -v key="key"      "$awk_server" "$CONFIG_FILE")
-    DOMAIN=$(awk -v key="domain"     "$awk_server" "$CONFIG_FILE")
-
-    ADMIN_USER=$(awk '/^auth:/{f=1;next} /^[a-z]/{f=0} f && /admin_user:/{sub(/^[^:]+:[[:space:]]*/,""); gsub(/^"|"$/,""); print; exit}' "$CONFIG_FILE")
-
-    : "${PANEL_PORT:=8080}"
-    : "${TLS_ENABLED:=false}"
-    : "${ADMIN_USER:=admin}"
-
-    info "已读取现有配置: 端口=${PANEL_PORT}, 管理员=${ADMIN_USER}, TLS=${TLS_ENABLED}${DOMAIN:+, 域名=${DOMAIN}}"
-}
-
-# ============================================
 # 交互式配置
 # ============================================
 
@@ -1336,34 +1310,16 @@ do_install() {
     detect_os
     detect_arch
 
-    # 检查是否已安装：重装走 "复用现有配置" 快捷路径
-    local REINSTALL="false"
+    # Existing installations use the same staged upgrade/rollback path.
     if [[ -f "${INSTALL_DIR}/proxy-panel" ]]; then
         warn "检测到已安装 ProxyPanel"
-        if confirm "是否覆盖安装? (复用现有配置、数据、证书)"; then
-            stop_all_services
-            REINSTALL="true"
-            info "开始覆盖安装 (复用现有配置，跳过交互式询问)..."
-        else
-            info "取消安装"
-            exit 0
+        if confirm "是否升级现有安装? (保留配置、数据、证书)"; then
+            do_update
         fi
+        return
     fi
 
     install_deps
-
-    if [[ "$REINSTALL" == "true" ]]; then
-        load_existing_config
-        setup_firewall
-        download_xray
-        download_singbox
-        download_panel
-        install_cli
-        setup_systemd
-        start_services
-        print_summary
-        return
-    fi
 
     interactive_config
     setup_firewall
@@ -1383,41 +1339,188 @@ do_install() {
 # update 子命令: 升级 (保留配置和数据)
 # ============================================
 
+# Fetch a published asset and verify GitHub's SHA-256 before extraction/execution.
+# Core versions come from the candidate panel's tested compatibility manifest.
+fetch_update_asset() {
+    local repo="$1" tag="$2" name="$3" output="$4" metadata url digest actual
+    metadata=$(curl -fsSL --connect-timeout 10 --max-time 30 "https://api.github.com/repos/${repo}/releases/${tag}") || return 1
+    url=$(jq -er --arg name "$name" '.assets[] | select(.name==$name) | .browser_download_url' <<< "$metadata") || return 1
+    digest=$(jq -er --arg name "$name" '.assets[] | select(.name==$name) | .digest' <<< "$metadata") || return 1
+    [[ "$url" == "https://github.com/${repo}/releases/download/"* && "$digest" =~ ^sha256:[a-f0-9]{64}$ ]] || return 1
+    curl -fL --retry 2 --connect-timeout 10 --max-time 300 "$url" -o "$output" || return 1
+    actual=$(sha256sum "$output") || return 1
+    [[ "${actual%% *}" == "${digest#sha256:}" ]]
+}
+
+# Copy then rename on the destination filesystem; a partial download/copy never
+# replaces the currently executable binary.
+replace_update_binary() {
+    local source="$1" destination="$2"
+    cp "$source" "${destination}.update-new" && chmod 755 "${destination}.update-new" && mv -f "${destination}.update-new" "$destination"
+}
+
+restore_update_files() {
+    local backup="$1" file index=0
+    jq -e '.files | type == "array"' "$backup/state.json" >/dev/null || return 1
+    while IFS= read -r file; do
+        if [[ -f "$backup/$index" ]]; then
+            cp -p "$backup/$index" "${file}.update-restore" && mv -f "${file}.update-restore" "$file" || return 1
+        else
+            rm -f "$file" || return 1
+        fi
+        index=$((index+1))
+    done < <(jq -r '.files[]' "$backup/state.json")
+}
+
+stop_update_services() {
+    local svc
+    for svc in "$SERVICE_NAME" "$XRAY_SERVICE" "$SINGBOX_SERVICE"; do
+        # Stop loaded units even while failed/activating, cancelling Restart= jobs
+        # before copying the database or restoring old files.
+        if [[ "$(systemctl show -p LoadState --value "$svc")" == "loaded" ]]; then
+            systemctl stop "$svc" || return 1
+        fi
+    done
+}
+
+start_update_services() {
+    local state="$1" svc
+    jq -e '.active | type == "array"' "$state" >/dev/null || return 1
+    # Panel starts last because it generates/reloads the core configurations.
+    for svc in "$XRAY_SERVICE" "$SINGBOX_SERVICE" "$SERVICE_NAME"; do
+        if jq -e --arg svc "$svc" '.active | index($svc) != null' "$state" >/dev/null; then
+            systemctl start "$svc" || return 1
+        fi
+    done
+}
+
+keep_update_services_inactive() {
+    local state="$1" svc
+    # Panel startup can restart an unused core; retain the prior inactive state.
+    for svc in "$XRAY_SERVICE" "$SINGBOX_SERVICE"; do
+        if ! jq -e --arg svc "$svc" '.active | index($svc) != null' "$state" >/dev/null && systemctl is-active --quiet "$svc"; then
+            systemctl stop "$svc" || return 1
+        fi
+    done
+
+}
+
+run_safe_update() (
+    set -eEo pipefail
+    umask 077
+    cd "$INSTALL_DIR"
+    exec 9>"${INSTALL_DIR}/.update.lock"
+    flock -n 9 || { warn "另一个升级正在运行"; exit 1; }
+    local stage backup phase="prepare" svc i file version xray_arch xray_path singbox_path
+    local xray_candidate="" singbox_candidate="" active=()
+    stage=$(mktemp -d "${INSTALL_DIR}/.update.XXXXXX")
+    backup="${BACKUP_DIR}/update-$(date +%Y%m%d_%H%M%S)-$$"
+    finish_update() {
+        local status=$?
+        trap - EXIT INT TERM
+        if [[ "$phase" == "stopped" || "$phase" == "installed" ]]; then
+            warn "升级失败，正在恢复旧文件和服务..."
+            if stop_update_services && { [[ "$phase" == "stopped" ]] || restore_update_files "$backup"; } && start_update_services "$stage/state.json"; then
+                warn "已恢复升级前文件及运行状态，备份: $backup"
+            else
+                warn "自动恢复未完成，请使用备份 $backup 检查服务；预检日志: $stage"
+            fi
+        fi
+        if [[ "$status" == 0 ]]; then rm -rf "$stage"; else warn "升级已中止，诊断目录: $stage"; fi
+        exit "$status"
+    }
+    trap finish_update EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    step "下载并验证升级候选（当前服务继续运行）..."
+    fetch_update_asset "$GITHUB_REPO" latest "proxy-panel-linux-${ARCH}.tar.gz" "$stage/panel.tar.gz"
+    tar -xzf "$stage/panel.tar.gz" -C "$stage" proxy-panel
+    chmod 755 "$stage/proxy-panel"
+    "$stage/proxy-panel" -compatibility > "$stage/compatibility.json"
+    if confirm "是否同时更新 Xray 到本版本已验证的内核?"; then
+        version=$(jq -er '.xray' "$stage/compatibility.json")
+        [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+        case "$ARCH" in amd64) xray_arch=64 ;; arm64) xray_arch=arm64-v8a ;; *) exit 1 ;; esac
+        fetch_update_asset XTLS/Xray-core "tags/$version" "Xray-linux-${xray_arch}.zip" "$stage/xray.zip"
+        unzip -p "$stage/xray.zip" xray > "$stage/xray"
+        chmod 755 "$stage/xray"
+        xray_candidate="$stage/xray"
+    fi
+    if confirm "是否同时更新 Sing-box 到本版本已验证的内核?"; then
+        version=$(jq -er '."sing-box"' "$stage/compatibility.json")
+        [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+        fetch_update_asset SagerNet/sing-box "tags/$version" "sing-box-${version#v}-linux-${ARCH}.tar.gz" "$stage/singbox.tar.gz"
+        tar -xOzf "$stage/singbox.tar.gz" "sing-box-${version#v}-linux-${ARCH}/sing-box" > "$stage/sing-box"
+        chmod 755 "$stage/sing-box"
+        singbox_candidate="$stage/sing-box"
+    fi
+    "$stage/proxy-panel" -config "$CONFIG_FILE" -check-update "$stage/check" -xray-candidate "$xray_candidate" -singbox-candidate "$singbox_candidate" > "$stage/preflight.log" 2>&1
+    xray_path=$(jq -er '.xray_path' "$stage/check/manifest.json")
+    singbox_path=$(jq -r '.singbox_path' "$stage/check/manifest.json")
+    for svc in "$SERVICE_NAME" "$XRAY_SERVICE" "$SINGBOX_SERVICE"; do
+        if systemctl is-active --quiet "$svc"; then active+=("$svc"); fi
+    done
+    jq --arg panel "${INSTALL_DIR}/proxy-panel" --argjson active "$(printf '%s\n' "${active[@]}" | jq -Rsc 'split("\n") | map(select(length>0))')" '.files += [$panel] | .files |= unique | .active=$active' "$stage/check/manifest.json" > "$stage/state.json"
+    step "预检通过，停止服务并创建一致备份..."
+    phase="stopped"
+    stop_update_services
+    mkdir -p "$backup"
+    i=0
+    while IFS= read -r file; do
+        if [[ -f "$file" ]]; then cp -p "$file" "$backup/$i"; fi
+        i=$((i+1))
+    done < <(jq -r '.files[]' "$stage/state.json")
+    cp "$stage/state.json" "$backup/state.json"
+    # Recheck after stopping: includes any node edits made during download.
+    "$stage/proxy-panel" -config "$CONFIG_FILE" -check-update "$stage/final-check" -xray-candidate "$xray_candidate" -singbox-candidate "$singbox_candidate" > "$stage/final-preflight.log" 2>&1
+    cmp -s "$stage/check/manifest.json" "$stage/final-check/manifest.json" || { warn "预检期间配置路径发生变化，请重新升级"; exit 1; }
+    phase="installed"
+    replace_update_binary "$stage/proxy-panel" "${INSTALL_DIR}/proxy-panel"
+    if [[ -n "$xray_candidate" ]]; then replace_update_binary "$xray_candidate" "$xray_path"; fi
+    if [[ -n "$singbox_candidate" ]]; then replace_update_binary "$singbox_candidate" "$singbox_path"; fi
+    start_update_services "$stage/state.json"
+    for i in {1..15}; do
+        sleep 1
+        local healthy=true
+        for svc in "${active[@]}"; do systemctl is-active --quiet "$svc" || healthy=false; done
+        if jq -e --arg svc "$SERVICE_NAME" '.active | index($svc) != null' "$stage/state.json" >/dev/null; then
+            "${INSTALL_DIR}/proxy-panel" -config "$CONFIG_FILE" -check-health >> "$stage/health.log" 2>&1 || healthy=false
+        fi
+        if [[ "$healthy" == true ]]; then
+            keep_update_services_inactive "$stage/state.json"
+            if [[ "$i" -ge 5 ]]; then break; fi
+        fi
+    done
+    [[ "$healthy" == true ]] || { warn "新版本启动/健康检查失败"; exit 1; }
+    phase="complete"
+    info "升级完成，监听配置已保留。回退备份: $backup"
+)
+
+# Explicit recovery entry for a completed update. Restores the database too.
+do_rollback_update() (
+    check_root
+    local backup="$1"
+    [[ "$backup" == "${BACKUP_DIR}/update-"* && -f "$backup/state.json" ]] || error "请选择本机 backups/update-* 备份目录"
+    warn "回退会恢复升级时的数据库，之后的节点、账号和流量修改将丢失。"
+    confirm "确认恢复 $backup ?" || exit 0
+    set -eEo pipefail
+    exec 9>"${INSTALL_DIR}/.update.lock"
+    flock -n 9 || error "另一个升级正在运行"
+    stop_update_services
+    restore_update_files "$backup"
+    start_update_services "$backup/state.json"
+    info "已恢复升级前的程序、数据和服务状态"
+)
+
 do_update() {
     check_root
     detect_os
     detect_arch
-
-    [[ ! -f "$CONFIG_FILE" ]] && error "未检测到已安装的 ProxyPanel，请先执行 install"
-
-    step "升级 ProxyPanel..."
-
-    # 先备份
-    info "升级前自动备份..."
-    do_backup
-
-    # 停止所有服务
-    stop_all_services
-
-    # 下载新版本
-    download_panel
-
-    # 可选: 更新 Xray
-    if confirm "是否同时更新 Xray?"; then
-        download_xray
-    fi
-
-    # 可选: 更新 Sing-box
-    if confirm "是否同时更新 Sing-box?"; then
-        download_singbox
-    fi
-
-    # 重新加载并启动
-    systemctl daemon-reload
-    start_services
-
-    echo ""
-    info "升级完成! 配置和数据已保留。"
+    [[ -f "$CONFIG_FILE" ]] || error "未检测到已安装的 ProxyPanel，请先执行 install"
+    local cmd
+    for cmd in curl jq sha256sum flock tar unzip; do command -v "$cmd" >/dev/null || error "缺少升级依赖: $cmd"; done
+    run_safe_update
 }
 
 # ============================================
@@ -1818,7 +1921,8 @@ show_help() {
     echo ""
     echo -e "${GREEN}[安装]${NC}"
     echo "  install            完整安装 ProxyPanel"
-    echo "  update             升级 (保留配置和数据)"
+    echo "  update             升级 (预检、保留配置、失败回退)"
+    echo "  rollback-update <目录>  从 update-* 备份回退程序和数据"
     echo "  uninstall          卸载 (可选保留数据)"
     echo ""
     echo -e "${GREEN}[运维]${NC}"
@@ -1866,6 +1970,7 @@ main() {
     case "${1:-}" in
         install)    do_install ;;
         update)     do_update ;;
+        rollback-update) do_rollback_update "${2:-}" ;;
         uninstall)  do_uninstall ;;
         status)     do_status ;;
         restart)    do_restart ;;
@@ -1889,4 +1994,4 @@ main() {
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi
