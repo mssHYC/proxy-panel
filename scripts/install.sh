@@ -1474,7 +1474,17 @@ run_safe_update() (
     cp "$stage/state.json" "$backup/state.json"
     # Recheck after stopping: includes any node edits made during download.
     "$stage/proxy-panel" -config "$CONFIG_FILE" -check-update "$stage/final-check" -xray-candidate "$xray_candidate" -singbox-candidate "$singbox_candidate" > "$stage/final-preflight.log" 2>&1
-    cmp -s "$stage/check/manifest.json" "$stage/final-check/manifest.json" || { warn "预检期间配置路径发生变化，请重新升级"; exit 1; }
+    # jq is already checked before the update; minimal systems may lack cmp.
+    jq -e -s 'if length == 2 then .[0] == .[1] else error("expected two preflight manifests") end' \
+        "$stage/check/manifest.json" "$stage/final-check/manifest.json" >/dev/null || {
+        local comparison_status=$?
+        if [[ "$comparison_status" == 1 ]]; then
+            warn "预检期间配置路径发生变化，请重新升级"
+        else
+            warn "无法读取或比较升级预检清单，请检查诊断目录: $stage"
+        fi
+        exit 1
+    }
     phase="installed"
     replace_update_binary "$stage/proxy-panel" "${INSTALL_DIR}/proxy-panel"
     if [[ -n "$xray_candidate" ]]; then replace_update_binary "$xray_candidate" "$xray_path"; fi

@@ -146,6 +146,8 @@ sudo install -m 755 /tmp/proxy-panel-install.sh /usr/local/bin/proxy-panel
 sudo proxy-panel update
 ```
 
+旧版管理脚本在部分 AlmaLinux 等精简系统上可能报 `cmp: command not found`，随后误报“配置路径发生变化”并回退。AlmaLinux 可先运行 `sudo dnf install -y diffutils`，成功后重试升级。新脚本复用已检查的 `jq` 比较预检清单，不再依赖 `cmp`，并分别报告路径变化与清单读取/解析失败。
+
 手动回退使用升级完成时打印的真实备份目录：
 
 ```bash
