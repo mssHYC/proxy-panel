@@ -1445,6 +1445,7 @@ http {{
     server {{
 {default_listen}
         ssl_reject_handshake on;
+        return 404;
     }}
     server {{
 {listen}
@@ -1565,8 +1566,9 @@ def prepare(config, install, confdir, root, units, stage, website_domain=''):
         names.append(domain(node_host))
     if website_domain:
         names.append(domain(website_domain))
-    cert = str(Path(settings.get('cert_path') or settings.get('certPath') or '').resolve())
-    key = str(Path(settings.get('key_path') or settings.get('keyPath') or '').resolve())
+    # Keep logical certificate paths: certbot/acme can replace their symlink targets.
+    cert = os.path.abspath(settings.get('cert_path') or settings.get('certPath') or '')
+    key = os.path.abspath(settings.get('key_path') or settings.get('keyPath') or '')
     ca = ssl.get_default_verify_paths().cafile
     if not ca:
         raise ValueError("找不到系统 CA 证书包，请安装 ca-certificates")
@@ -1595,7 +1597,7 @@ def prepare(config, install, confdir, root, units, stage, website_domain=''):
     certificates = stream.get('tlsSettings', {}).get('certificates', [])
     if stream.get('network') != transport or stream.get('security') != 'tls' or live.get('path', '/') != path or live.get('host', '') != host or not certificates:
         raise ValueError("运行配置与面板节点参数不一致，请先同步内核")
-    if str(Path(certificates[0]['certificateFile']).resolve()) != cert or str(Path(certificates[0]['keyFile']).resolve()) != key:
+    if os.path.abspath(certificates[0]['certificateFile']) != cert or os.path.abspath(certificates[0]['keyFile']) != key:
         raise ValueError("运行配置与面板证书路径不一致，请先同步内核")
     inbounds[0]['listen'] = '127.0.0.1'
     stream['tlsSettings']['alpn'] = ['http/1.1']
@@ -1740,6 +1742,7 @@ setup_website_selinux() {
     fi
     local file pattern
     while IFS= read -r file; do
+        file=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$file") || return 1
         case "$file" in /root/*|/home/*) warn "SELinux 下请将证书安装到 /opt/proxy-panel/certs 或 /etc/pki/tls 后重试"; return 1;; esac
         pattern=$(python3 -c 'import re,sys; print(re.escape(sys.argv[1]))' "$file") || return 1
         semanage fcontext -a -t cert_t "$pattern" 2>/dev/null || semanage fcontext -m -t cert_t "$pattern" || return 1
