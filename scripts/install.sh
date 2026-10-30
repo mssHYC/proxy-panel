@@ -1341,7 +1341,7 @@ do_install() {
 }
 
 # ============================================
-# Managed HTTPS website and HTTPUpgrade reverse proxy
+# Managed HTTPS website and WS/HTTPUpgrade reverse proxy
 # ============================================
 
 website_tool() {
@@ -1432,7 +1432,30 @@ def select_listens(original, available):
 def nginx_config(plan, root):
     listen = '\n'.join('        listen ' + address + ' ssl;' for address in plan['listens'])
     default_listen = listen.replace(' ssl;', ' ssl default_server;')
-    host = quote(plan['host']) if plan['host'] else '$http_host'
+    locations = ''
+    for index, route in enumerate(plan.get('routes', [plan])):
+        host = quote(route['host']) if route['host'] else '$http_host'
+        locations += f'''        location = {quote(route['path'])} {{
+            error_page 418 = @proxy_panel_node_{index};
+            if ($http_upgrade != "") {{ return 418; }}
+            try_files $uri $uri/ =404;
+        }}
+        location @proxy_panel_node_{index} {{
+            proxy_pass https://127.0.0.1:{route.get('port', 443)};
+            proxy_http_version 1.1;
+            proxy_set_header Host {host};
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_ssl_server_name on;
+            proxy_ssl_name {quote(route['sni'])};
+            proxy_ssl_verify on;
+            proxy_ssl_verify_depth 5;
+            proxy_ssl_trusted_certificate {quote(plan['ca'])};
+            proxy_buffering off;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }}
+'''
     return f'''pid /run/proxy-panel-web.pid;
 error_log stderr warn;
 worker_processes auto;
@@ -1456,26 +1479,7 @@ http {{
         root {quote(root)};
         index index.html;
         location / {{ try_files $uri $uri/ =404; }}
-        location = {quote(plan['path'])} {{
-            error_page 418 = @proxy_panel_node;
-            if ($http_upgrade != "") {{ return 418; }}
-            try_files $uri $uri/ =404;
-        }}
-        location @proxy_panel_node {{
-            proxy_pass https://127.0.0.1:443;
-            proxy_http_version 1.1;
-            proxy_set_header Host {host};
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "upgrade";
-            proxy_ssl_server_name on;
-            proxy_ssl_name {quote(plan['sni'])};
-            proxy_ssl_verify on;
-            proxy_ssl_verify_depth 5;
-            proxy_ssl_trusted_certificate {quote(plan['ca'])};
-            proxy_buffering off;
-            proxy_read_timeout 3600s;
-            proxy_send_timeout 3600s;
-        }}
+{locations}
     }}
 }}
 '''
@@ -1490,7 +1494,7 @@ def website_units(nginx, config, cert, key):
     # PathChanged takes the whole absolute path, without ExecStart-style quotes.
     return {
         'proxy-panel-web.service': f'''[Unit]
-Description=ProxyPanel website and HTTPUpgrade reverse proxy
+Description=ProxyPanel website and WS/HTTPUpgrade reverse proxy
 After=network.target xray.service
 [Service]
 Type=simple
@@ -1535,7 +1539,52 @@ article{border-top:1px solid #d7ddcf;margin-top:40px;padding-top:20px}p{color:#6
 再回头看，它会生出新的意思。</p></article></main></html>'''
 
 
-def prepare(config, install, confdir, root, units, stage, website_domain=''):
+def prepare_route(row, current, ca, public_port=False):
+    node_id, node_host, protocol, transport, original, port = row
+    settings = json.loads(original)
+    if transport not in ('ws', 'httpupgrade') or protocol not in ('vless', 'vmess') or settings.get('security') != 'tls' or (public_port and protocol != 'vmess'):
+        raise ValueError(f"节点 {node_id}: 需要 Xray VLESS/VMess + WS/HTTPUpgrade + TLS；附加节点仅支持 VMess，请先在面板调整配置")
+    path = settings.get('path', '/')
+    if not isinstance(path, str) or not re.fullmatch(r'/[A-Za-z0-9/_~.\-]*', path):
+        raise ValueError("WS/HTTPUpgrade 服务端路径应只含 /、字母、数字、_、~、.、-，不含查询参数")
+    sni = domain(settings.get('sni') or settings.get('serverName') or node_host)
+    host = settings.get('host', '')
+    if host and (not isinstance(host, str) or re.search(r'[\s/\\";$]', host)):
+        raise ValueError("WS/HTTPUpgrade Host 格式无效")
+    names = [sni]
+    try:
+        ipaddress.ip_address(node_host)
+    except ValueError:
+        names.append(domain(node_host))
+    # Keep logical certificate paths: certbot/acme can replace their symlink targets.
+    cert = os.path.abspath(settings.get('cert_path') or settings.get('certPath') or '')
+    key = os.path.abspath(settings.get('key_path') or settings.get('keyPath') or '')
+    names = sorted(set(names))
+    verify_cert(cert, key, names, ca)
+    inbounds = [i for i in current.get('inbounds', []) if i.get('tag') == 'node-' + str(node_id)]
+    if len(inbounds) != 1 or inbounds[0].get('port') != port or inbounds[0].get('protocol') != protocol:
+        raise ValueError(f"运行配置与面板节点 {node_id} 不一致，请先同步内核")
+    stream = inbounds[0].get('streamSettings', {})
+    live = stream.get('wsSettings' if transport == 'ws' else 'httpupgradeSettings', {})
+    live_host = live.get('headers', {}).get('Host', '') if transport == 'ws' else live.get('host', '')
+    certificates = stream.get('tlsSettings', {}).get('certificates', [])
+    if stream.get('network') != transport or stream.get('security') != 'tls' or live.get('path', '/') != path or live_host != host or not certificates:
+        raise ValueError(f"运行配置与面板节点 {node_id} 参数不一致，请先同步内核")
+    if os.path.abspath(certificates[0]['certificateFile']) != cert or os.path.abspath(certificates[0]['keyFile']) != key:
+        raise ValueError("运行配置与面板证书路径不一致，请先同步内核")
+    inbounds[0]['listen'] = '127.0.0.1'
+    stream['tlsSettings']['alpn'] = ['http/1.1']
+    next_settings = dict(settings, listen='127.0.0.1', alpn=['http/1.1'])
+    if public_port:
+        next_settings['public_port'] = 443
+    route = dict(node_id=node_id, node_host=node_host, protocol=protocol, transport=transport, port=port,
+                 path=path, host=host, sni=sni, domains=names, cert=cert, key=key)
+    change = dict(node_id=node_id, node_host=node_host, protocol=protocol, transport=transport, port=port,
+                  original_settings=original, settings=json.dumps(next_settings))
+    return route, change
+
+
+def prepare(config, install, confdir, root, units, stage, website_domain='', vmess_ids=''):
     cfg = yaml.safe_load(Path(config).read_text())
     database = str(Path(cfg.get('database', {}).get('path', 'data/panel.db')).resolve())
     kernel_path = str(Path(cfg['kernel']['xray_config']).resolve())
@@ -1547,76 +1596,70 @@ def prepare(config, install, confdir, root, units, stage, website_domain=''):
             if directory.is_symlink() or (directory.exists() and
                     (not directory.is_dir() or any(directory.iterdir()))):
                 raise ValueError("网站目录已存在但不是本脚本托管，拒绝覆盖")
+    if vmess_ids and not re.fullmatch(r'[1-9][0-9]*(,[1-9][0-9]*)*', vmess_ids):
+        raise ValueError('--vmess 需要节点 ID，以逗号分隔，例如 --vmess 2,3')
+    requested = {int(value) for value in vmess_ids.split(',')} if vmess_ids else set()
+    selected = set(managed.get('vmess_ids', [])) if managed else set()
     with closing(sqlite3.connect(Path(database).as_uri() + '?mode=ro', uri=True)) as db:
-        rows = db.execute('SELECT id,host,protocol,transport,settings FROM nodes WHERE enable=1 AND port=443 AND kernel_type="xray"').fetchall()
-    if len(rows) != 1:
-        raise ValueError("需要且只能有一个已启用的 Xray TCP 443 节点；请先在面板创建 HTTPUpgrade + TLS 节点")
-    node_id, node_host, protocol, transport, original = rows[0]
-    settings = json.loads(original)
-    if transport != 'httpupgrade' or protocol not in ('vless', 'vmess') or settings.get('security') != 'tls':
-        raise ValueError("website setup 当前支持 VLESS/VMess + HTTPUpgrade + TLS，其他入口保持原样")
+        rows = db.execute('SELECT id,host,protocol,transport,settings,port,enable,kernel_type FROM nodes').fetchall()
+    primary = [r[:6] for r in rows if r[5] == 443 and r[6] and r[7] == 'xray']
+    if len(primary) != 1:
+        raise ValueError("需要且只能有一个已启用的 Xray 443 节点；请先在面板创建 WS/HTTPUpgrade + TLS 节点")
+    node_id = primary[0][0]
     if managed and managed['node_id'] != node_id:
         raise ValueError("托管网站对应的节点已更换，请先检查现有部署")
-    path = settings.get('path', '/')
-    if not isinstance(path, str) or not re.fullmatch(r'/[A-Za-z0-9/_~.\-]*', path):
-        raise ValueError("HTTPUpgrade 服务端路径应只含 /、字母、数字、_、~、.、-，不含查询参数")
-    sni = domain(settings.get('sni') or settings.get('serverName') or node_host)
-    host = settings.get('host', '')
-    if host and (not isinstance(host, str) or re.search(r'[\s/\\";$]', host)):
-        raise ValueError("HTTPUpgrade Host 格式无效")
-    names = [sni]
-    try:
-        ipaddress.ip_address(node_host)
-    except ValueError:
-        names.append(domain(node_host))
-    if website_domain:
-        names.append(domain(website_domain))
-    # Keep logical certificate paths: certbot/acme can replace their symlink targets.
-    cert = os.path.abspath(settings.get('cert_path') or settings.get('certPath') or '')
-    key = os.path.abspath(settings.get('key_path') or settings.get('keyPath') or '')
+    by_id = {r[0]: r for r in rows}
+    for selected_id in requested:
+        row = by_id.get(selected_id)
+        if not row or not row[6] or row[7] != 'xray' or row[2] != 'vmess':
+            raise ValueError(f'节点 {selected_id} 必须是已启用的 Xray VMess 节点')
+    selected = ((selected | requested) & by_id.keys()) - {node_id}
+    current = json.loads(Path(kernel_path).read_text())
     ca = ssl.get_default_verify_paths().cafile
     if not ca:
         raise ValueError("找不到系统 CA 证书包，请安装 ca-certificates")
-    names = sorted(set(names))
-    verify_cert(cert, key, names, ca)
+    route, change = prepare_route(primary[0], current, ca)
+    routes, changes = [route], [change]
+    for selected_id in sorted(selected):
+        row = by_id[selected_id]
+        if not row[6]:
+            continue
+        if row[7] != 'xray':
+            raise ValueError(f'托管节点 {selected_id} 必须使用 Xray')
+        extra, extra_change = prepare_route(row[:6], current, ca, public_port=True)
+        routes.append(extra)
+        changes.append(extra_change)
+    if len({r['path'] for r in routes}) != len(routes):
+        raise ValueError('托管节点路径重复，请为每个节点配置不同的 WS/HTTPUpgrade 路径')
+    cert, key = route['cert'], route['key']
+    names = {name for r in routes for name in r['domains']}
+    if website_domain:
+        names.add(domain(website_domain))
+    # Nginx terminates the shared 443 endpoint with the primary node's certificate.
+    verify_cert(cert, key, sorted(names), ca)
     # Include the management domain as a website alias only when its certificate matches.
     panel_domain = cfg.get('server', {}).get('domain', '')
     if panel_domain and panel_domain not in names:
         try:
             panel_domain = domain(panel_domain)
             verify_cert(cert, key, [panel_domain], ca)
-            names.append(panel_domain)
+            names.add(panel_domain)
         except (ValueError, ssl.SSLError):
             pass
-    before = settings.get('listen', '0.0.0.0')
+    before = json.loads(primary[0][4]).get('listen', '0.0.0.0')
     if managed and before == '127.0.0.1':
         before = managed['listen_before']
     listens = select_listens(before, interface_ips())
-    next_settings = dict(settings, listen='127.0.0.1', alpn=['http/1.1'])
-    current = json.loads(Path(kernel_path).read_text())
-    inbounds = [i for i in current.get('inbounds', []) if i.get('port') == 443]
-    if len(inbounds) != 1 or inbounds[0].get('tag') != 'node-' + str(node_id):
-        raise ValueError("运行配置与面板 443 节点不一致，请先同步内核")
-    stream = inbounds[0].get('streamSettings', {})
-    live = stream.get('httpupgradeSettings', {})
-    certificates = stream.get('tlsSettings', {}).get('certificates', [])
-    if stream.get('network') != transport or stream.get('security') != 'tls' or live.get('path', '/') != path or live.get('host', '') != host or not certificates:
-        raise ValueError("运行配置与面板节点参数不一致，请先同步内核")
-    if os.path.abspath(certificates[0]['certificateFile']) != cert or os.path.abspath(certificates[0]['keyFile']) != key:
-        raise ValueError("运行配置与面板证书路径不一致，请先同步内核")
-    inbounds[0]['listen'] = '127.0.0.1'
-    stream['tlsSettings']['alpn'] = ['http/1.1']
-    plan = dict(node_id=node_id, original_settings=original, settings=json.dumps(next_settings),
-                database=database, kernel_path=kernel_path, node_host=node_host, protocol=protocol,
-                path=path, host=host, sni=sni, domains=sorted(names), cert=cert, key=key, ca=ca,
-                listens=listens, listen_before=before, webroot=str(root))
+    plan = dict(route, database=database, kernel_path=kernel_path, domains=sorted(names), ca=ca,
+                listens=listens, listen_before=before, webroot=str(root), routes=routes,
+                changes=changes, vmess_ids=sorted(selected))
     nginx = shutil.which('nginx')
     if not nginx:
         raise ValueError("请先安装 Nginx")
     config_file = confdir / 'nginx.conf'
     files = {kernel_path: ('xray.json', json.dumps(current), 0o600),
              str(config_file): ('nginx.conf', nginx_config(plan, root), 0o600),
-             str(state_path): ('managed.json', json.dumps({k: v for k, v in plan.items() if k not in ('original_settings', 'settings')}), 0o600)}
+             str(state_path): ('managed.json', json.dumps({k: v for k, v in plan.items() if k != 'changes'}), 0o600)}
     if not (root / 'index.html').exists():
         files[str(root / 'index.html')] = ('index.html', PAGE, 0o644)
     unit_files = website_units(nginx, config_file, cert, key)
@@ -1637,16 +1680,17 @@ def prepare(config, install, confdir, root, units, stage, website_domain=''):
         raise ValueError('Xray 候选配置检查失败，诊断文件: ' + str(stage / 'xray-check.log')) from exc
     run([nginx, '-t', '-c', str(stage / 'nginx.conf')])
     run(['systemd-analyze', 'verify', '--man=no', *[str(stage / name) for name in unit_files]])
-    print('网站预检通过: ' + ', '.join(plan['domains']) + '；保留端口 443、路径和节点凭据')
+    print('网站预检通过: ' + ', '.join(plan['domains']) + f'；公网 443 托管 {len(routes)} 个节点，保留路径和节点凭据')
 
 
 def apply(stage):
     plan = json.loads((stage / 'plan.json').read_text())
     with closing(sqlite3.connect(plan['database'])) as db, db:
-        changed = db.execute('UPDATE nodes SET settings=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND settings=? AND host=? AND protocol=? AND port=443 AND transport="httpupgrade" AND kernel_type="xray" AND enable=1',
-                             (plan['settings'], plan['node_id'], plan['original_settings'], plan['node_host'], plan['protocol']))
-        if changed.rowcount != 1:
-            raise ValueError("节点在预检后发生变化，拒绝覆盖")
+        for change in plan['changes']:
+            changed = db.execute('UPDATE nodes SET settings=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND settings=? AND host=? AND protocol=? AND port=? AND transport=? AND kernel_type="xray" AND enable=1',
+                                 (change['settings'], change['node_id'], change['original_settings'], change['node_host'], change['protocol'], change['port'], change['transport']))
+            if changed.rowcount != 1:
+                raise ValueError("节点在预检后发生变化，拒绝覆盖")
         # The surrounding process uses umask 077; new public content directories
         # need explicit traversal permissions for Nginx workers.
         public = Path(plan['webroot'])
@@ -1678,16 +1722,16 @@ def health(state):
     for name in plan['domains']:
         ctx = ssl.create_default_context(cafile=plan['ca'])
         ctx.set_alpn_protocols(['http/1.1'])
-        for path, upgrade in [('/', False), (plan['path'], True)]:
+        for path, upgrade in [('/', False)] + [(r['path'], True) for r in plan.get('routes', [plan])]:
             with socket.create_connection((address, 443), timeout=5) as conn:
                 with ctx.wrap_socket(conn, server_hostname=name) as tls:
-                    headers = f'GET {path} HTTP/1.1\r\nHost: {name}\r\nConnection: ' + ('Upgrade\r\nUpgrade: websocket' if upgrade else 'close') + '\r\n\r\n'
+                    headers = f'GET {path} HTTP/1.1\r\nHost: {name}\r\nConnection: ' + ('Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' if upgrade else 'close') + '\r\n\r\n'
                     tls.sendall(headers.encode())
                     response = tls.makefile('rb').readline(8192)
                     expected = b'101' if upgrade else b'200'
                     if response.split()[1:2] != [expected]:
                         raise ValueError(f'{name} {path} 应返回 {expected.decode()}，实际: {response[:160]!r}')
-    print('网站 HTTPS 200、HTTPUpgrade 101 和证书验证均通过')
+    print('网站 HTTPS 200、各节点 WS/HTTPUpgrade 101 和证书验证均通过')
 
 
 def main():
@@ -1695,7 +1739,7 @@ def main():
     os.umask(0o077)
     os.chdir(install)
     if action == 'prepare':
-        prepare(config, install, Path(confdir), Path(root), Path(units), Path(args[0]), args[1] if len(args) > 1 else '')
+        prepare(config, install, Path(confdir), Path(root), Path(units), Path(args[0]), args[1] if len(args) > 1 else '', args[2] if len(args) > 2 else '')
     elif action == 'apply':
         apply(Path(args[0]))
     elif action == 'health':
@@ -1776,7 +1820,7 @@ run_website_setup() (
     cd "$INSTALL_DIR"
     exec 9>"${INSTALL_DIR}/.update.lock"
     flock -n 9 || { warn "另一个升级或网站部署正在运行"; exit 1; }
-    local stage backup phase=prepare file svc index=0 website_domain="${1:-}" active=() enabled=()
+    local stage backup phase=prepare file svc index=0 website_domain="${1:-}" vmess_ids="${2:-}" active=() enabled=()
     stage=$(mktemp -d "${INSTALL_DIR}/.website.XXXXXX")
     backup="${BACKUP_DIR}/website-$(date +%Y%m%d_%H%M%S)-$$"
     finish_website_setup() {
@@ -1801,8 +1845,15 @@ run_website_setup() (
     trap finish_website_setup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
+    if [[ -n "$vmess_ids" ]] || { [[ -f "$WEBSITE_CONFIG_DIR/managed.json" ]] && jq -e '(.vmess_ids // []) | length > 0' "$WEBSITE_CONFIG_DIR/managed.json" >/dev/null; }; then
+        "${INSTALL_DIR}/proxy-panel" -compatibility > "$stage/compatibility.json"
+        jq -e '(.features // []) | index("vmess-public-port") != null' "$stage/compatibility.json" >/dev/null || {
+            warn "请先升级支持 vmess-public-port 的面板程序；旧版本不会生成正确的对外 443 订阅"
+            exit 1
+        }
+    fi
     "${INSTALL_DIR}/proxy-panel" -config "$CONFIG_FILE" -check-update "$stage/panel-check" > "$stage/panel-check.log" 2>&1
-    website_tool prepare "$stage/check" "$website_domain"
+    website_tool prepare "$stage/check" "$website_domain" "$vmess_ids"
     setup_website_selinux "$stage/check/plan.json"
     for svc in "$SERVICE_NAME" "$XRAY_SERVICE" "$SINGBOX_SERVICE" "$WEBSITE_SERVICE" proxy-panel-web-cert.path; do
         if systemctl is-active --quiet "$svc"; then active+=("$svc"); fi
@@ -1824,7 +1875,7 @@ run_website_setup() (
     done < <(jq -r '.files[]' "$stage/state.json")
     cp "$stage/state.json" "$backup/state.json"
     "${INSTALL_DIR}/proxy-panel" -config "$CONFIG_FILE" -check-update "$stage/final-panel-check" > "$stage/final-panel-check.log" 2>&1
-    website_tool prepare "$stage/final" "$website_domain"
+    website_tool prepare "$stage/final" "$website_domain" "$vmess_ids"
     jq -e -s 'length == 2 and .[0] == .[1]' "$stage/check/plan.json" "$stage/final/plan.json" >/dev/null || { warn "预检期间节点或网站配置变化，请重新部署"; exit 1; }
     phase=installed
     website_tool apply "$stage/final"
@@ -1837,31 +1888,42 @@ run_website_setup() (
         if website_tool health && "${INSTALL_DIR}/proxy-panel" -config "$CONFIG_FILE" -check-health; then healthy=true; break; fi
         sleep 1
     done
-    [[ "$healthy" == true ]] || { warn "网站或 HTTPUpgrade 转发验收失败"; exit 1; }
+    [[ "$healthy" == true ]] || { warn "网站或 WS/HTTPUpgrade 转发验收失败"; exit 1; }
     keep_update_services_inactive "$stage/state.json"
     systemctl enable "$WEBSITE_SERVICE" proxy-panel-web-cert.path
     systemctl start proxy-panel-web-cert.path
     phase=complete
-    info "网站和 HTTPUpgrade 反代部署完成；客户端请刷新订阅以同步 ALPN。备份: $backup"
+    info "网站和 WS/HTTPUpgrade 反代部署完成；客户端请刷新订阅以同步对外端口与 ALPN。备份: $backup"
 )
 
 do_website() {
     case "${2:-setup}" in
         setup)
+            local website_domain="" vmess_ids=""
+            set -- "${@:3}"
+            while [[ $# -gt 0 ]]; do
+                case "$1" in
+                    --vmess)
+                        [[ $# -ge 2 && -n "$2" ]] || error "--vmess 后需要节点 ID，例如 --vmess 2,3"
+                        vmess_ids="$2"; shift 2 ;;
+                    --*) error "未知网站选项: $1" ;;
+                    *) [[ -z "$website_domain" ]] || error "只能指定一个额外网站域名"; website_domain="$1"; shift ;;
+                esac
+            done
             check_root
             detect_os
-            [[ -f "$CONFIG_FILE" ]] || error "请先安装面板并创建 HTTPUpgrade + TLS 的 443 节点"
+            [[ -f "$CONFIG_FILE" ]] || error "请先安装面板并创建 WS/HTTPUpgrade + TLS 的 443 节点"
             local svc
             for svc in "$SERVICE_NAME" "$XRAY_SERVICE"; do systemctl is-active --quiet "$svc" || error "$svc 未运行，请先恢复节点服务"; done
             install_website_deps
             local dependency_status=$?
             [[ "$dependency_status" == 0 ]] || return "$dependency_status"
-            run_website_setup "${3:-}"
+            run_website_setup "$website_domain" "$vmess_ids"
             ;;
         status)
             systemctl --no-pager status "$WEBSITE_SERVICE" proxy-panel-web-cert.path
             ;;
-        *) error "用法: proxy-panel website {setup [额外网站域名]|status}" ;;
+        *) error "用法: proxy-panel website {setup [额外网站域名] [--vmess ID,ID]|status}" ;;
     esac
 }
 
@@ -2504,7 +2566,7 @@ show_help() {
     echo "  reset-pwd          重置管理员密码"
     echo "  disable-2fa        应急关闭 2FA (authenticator 设备丢失时)"
     echo "  cert <子命令>      证书管理 (setup|status|renew)"
-    echo "  website setup [域名]  安装 Nginx、部署 443 网站及 HTTPUpgrade 反代"
+    echo "  website setup [域名] [--vmess ID,ID]  部署 443 网站及 WS/HTTPUpgrade 反代，可接入指定 VMess 节点"
     echo "  website status    查看托管网站与证书续期监听状态"
     echo "  firewall <子命令>  防火墙管理 (enable|disable|status)"
     echo ""

@@ -29,9 +29,9 @@ Docker：容器内配置 `server.listen: "0.0.0.0"`，Compose 在宿主机仅发
 
 ## 在 TCP 443 上共用网站和代理
 
-### HTTPUpgrade 节点：管理脚本自动部署
+### WS / HTTPUpgrade 节点：管理脚本自动部署
 
-对于 **Xray / VLESS 或 VMess / HTTPUpgrade / TLS / 443** 节点，无需手工安装 Nginx、写反代或修改数据库。同步新版管理脚本后执行：
+对于 **Xray / VLESS 或 VMess / WS 或 HTTPUpgrade / TLS / 443** 节点，无需手工安装 Nginx、写反代或修改数据库。同步新版管理脚本后执行：
 
 ```bash
 proxy-panel website setup
@@ -44,15 +44,34 @@ proxy-panel website status
 
 脚本通过系统包管理器安装 Nginx、Python 3/PyYAML、OpenSSL 等依赖，支持原有 Debian/Ubuntu 和 AlmaLinux/Rocky/CentOS/Fedora 安装入口。Nginx 需支持 `ssl_reject_handshake`（1.19.4+）。脚本是自包含的，无需单独下载网站助手；面板需支持 `-check-health`（v1.19.1+）。
 
-流量路径为 **公网非回环地址 TCP 443 → Nginx 网站 / HTTPUpgrade 路径 → Xray 127.0.0.1:443**。客户端的服务器地址、对外端口、路径和凭据保留，仅将节点 ALPN 对齐 `http/1.1`；部署后刷新订阅。反代保留 Host/Upgrade，验证到 Xray 的 TLS 证书。未知 SNI 拒绝握手，网站不转发管理面板。直接使用 IP 打开 HTTPS 不是验收方式。
+流量路径为 **公网非回环地址 TCP 443 → Nginx 网站 / WS 或 HTTPUpgrade 路径 → Xray 127.0.0.1:443**。客户端的服务器地址、对外端口、路径和凭据保留，仅将节点 ALPN 对齐 `http/1.1`；部署后刷新订阅。反代保留 Host/Upgrade，验证到 Xray 的 TLS 证书。未知 SNI 拒绝握手，网站不转发管理面板。直接使用 IP 打开 HTTPS 不是验收方式。
 
 托管服务名为 `proxy-panel-web.service`，配置位于 `/etc/nginx/proxy-panel/`，网站位于 `/var/www/proxy-panel-managed-site/`。它使用独立 Nginx 配置，不覆盖已有 Nginx 虚拟主机，也不会启动系统自带的默认 80 网站。重复部署保留已编辑的首页。已有未托管的非空网站目录、回环节点或多个 443 节点会明确中止，避免接管其他部署；首次部署回退留下的空目录允许直接重试。
 
-切换前检查证书/私钥匹配、证书链和域名、Xray 与 Nginx 配置，并用 `systemd-analyze verify` 验证网站服务与证书监控单元；停服后备份数据库、内核及网站配置，再复检并切换。通过网站 HTTPS 200、HTTPUpgrade 101 和面板健康检查后才确认完成。部署失败会恢复原节点、文件和原服务状态；备份保留在 `/opt/proxy-panel/backups/website-*`。依赖软件及为反代安装的 SELinux 支持规则不会在失败时卸载。SELinux 保持 enforcing；按需设置证书标签与 `httpd_can_network_connect`，不会关闭 SELinux。
+切换前检查证书/私钥匹配、证书链和域名、Xray 与 Nginx 配置，并用 `systemd-analyze verify` 验证网站服务与证书监控单元；停服后备份数据库、内核及网站配置，再复检并切换。通过网站 HTTPS 200、各节点 WS/HTTPUpgrade 101 和面板健康检查后才确认完成。部署失败会恢复原节点、文件和原服务状态；备份保留在 `/opt/proxy-panel/backups/website-*`。依赖软件及为反代安装的 SELinux 支持规则不会在失败时卸载。SELinux 保持 enforcing；按需设置证书标签与 `httpd_can_network_connect`，不会关闭 SELinux。
 
 `proxy-panel-web-cert.path` 监听原证书/私钥文件变化，先验证 Nginx 配置再重载网站；继续使用原来的证书签发/续期方式。它不自动申请新域名证书，也不降低证书校验。例如节点 SNI/CDN 域名为 `cdn.example.com`，但证书只覆盖 `origin.example.com`，会在切换前明确中止；必须先申请覆盖所需域名的证书。管理域名仅在被该证书覆盖时自动作为网站别名加入。
 
-上述 101 检查验证 HTTPUpgrade 隧道建立，部署后仍应使用真实客户端验证代理外网访问。
+上述 101 检查验证 WS/HTTPUpgrade 隧道建立，部署后仍应使用真实客户端验证代理外网访问。
+
+### 将其他 VMess 节点接入同一个 443
+
+先升级面板二进制和管理脚本，再按节点列表中的 `#ID` 显式选择：
+
+```bash
+# 示例：把 ID 为 2、3 的 VMess 节点接入现有 443 网站
+proxy-panel website setup site.example.com --vmess 2,3
+# 后续重建会保留已选择的节点，不必重复传 ID
+proxy-panel website setup
+```
+
+仍需一个已启用的 Xray WS/HTTPUpgrade + TLS 443 主节点；它也可以是 VMess。附加节点必须是已启用的 **Xray VMess + WS/HTTPUpgrade + TLS**，监听其他端口，路径互不重复。普通 TCP VMess 不会自动转换；先在面板配置 Web 传输、独立路径和有效证书。未选择的节点保持原状。
+
+公网 443 由 Nginx 按路径分发，附加 VMess 的 UUID、地址、路径和原端口保留，但原端口改为仅监听 `127.0.0.1`。节点设置中的 `public_port: 443` 用于订阅及健康检查，不能拿它替换后端监听端口。部署成功后必须刷新客户端订阅；节点编辑页会区分后端端口与订阅端口。修改已托管节点的域名、端口、证书或路径后，需要重新执行 `website setup`。禁用或删除节点后重新部署会移除其路径；禁用节点重新启用后再部署可恢复路径。
+
+主节点证书必须覆盖所有接入节点的地址域名/SNI 和网站域名；各后端证书也必须有效。证书覆盖不足、路径冲突、旧面板缺少 `vmess-public-port` 能力时，会在停止现有服务前中止。可用 `/opt/proxy-panel/proxy-panel -compatibility` 查看能力；只有更新脚本、未更新面板二进制不能使用这项功能。切换失败沿用数据库、内核、Nginx 配置和服务状态的备份回退流程。
+
+Clash、sing-box 和 VMess URI（含 Shadowrocket）订阅使用公网 443。Surge 仅导出受支持的 VMess WS 节点，不把 HTTPUpgrade 错报为 TCP。已有自行配置 Nginx 的回环 443 节点仍不自动接管；该机器可继续保留原部署。
 
 ### 普通 TCP + TLS：网站回落
 

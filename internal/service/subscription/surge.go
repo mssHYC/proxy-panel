@@ -138,10 +138,13 @@ func surgeOutbound(codeOrLit string, codeToName map[string]string) string {
 
 func (g *SurgeGenerator) buildProxyLine(node model.Node, user *model.User) string {
 	s := parseSettings(node)
-	port := fmt.Sprintf("%d", node.Port)
+	port := fmt.Sprintf("%d", node.PublicPort())
 
 	switch node.Protocol {
 	case "vmess":
+		if node.Transport == "httpupgrade" {
+			return ""
+		}
 		parts := []string{
 			fmt.Sprintf("%s = vmess, %s, %s, username=%s", node.Name, node.Host, port, user.UUID),
 		}

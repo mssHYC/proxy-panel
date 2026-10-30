@@ -240,7 +240,7 @@ func (g *SingboxGenerator) buildVMess(node model.Node, user *model.User, s nodeS
 		"type":        "vmess",
 		"tag":         node.Name,
 		"server":      node.Host,
-		"server_port": node.Port,
+		"server_port": node.PublicPort(),
 		"uuid":        user.UUID,
 		"alter_id":    0,
 		"security":    "auto",

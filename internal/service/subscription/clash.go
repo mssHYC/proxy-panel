@@ -299,7 +299,7 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 		b.WriteString(fmt.Sprintf("  - name: %q\n", node.Name))
 		b.WriteString("    type: vmess\n")
 		b.WriteString(fmt.Sprintf("    server: %s\n", node.Host))
-		b.WriteString(fmt.Sprintf("    port: %d\n", node.Port))
+		b.WriteString(fmt.Sprintf("    port: %d\n", node.PublicPort()))
 		b.WriteString(fmt.Sprintf("    uuid: %s\n", user.UUID))
 		b.WriteString("    alterId: 0\n")
 		b.WriteString("    cipher: auto\n")

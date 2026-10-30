@@ -1,5 +1,6 @@
 """Exercise the website helper shipped inside the standalone management script."""
 import contextlib
+import copy
 import json
 import os
 from pathlib import Path
@@ -78,10 +79,109 @@ class WebsiteTests(unittest.TestCase):
             args = [os.environ['SYSTEMD_ANALYZE_BINARY'], *args[1:]]
         return self.real_run(args)
 
-    def prepare(self):
+    def prepare(self, vmess_ids=''):
         stage = self.root / 'stage'
-        tool.prepare(str(self.config), str(self.root), self.confdir, self.webroot, self.units, stage)
+        tool.prepare(str(self.config), str(self.root), self.confdir, self.webroot, self.units, stage, vmess_ids=vmess_ids)
         return stage, json.loads((stage / 'plan.json').read_text())
+
+    def add_vmess(self, transport='ws', path='/vmess', port=18080):
+        settings = dict(self.settings, path=path)
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('INSERT INTO nodes VALUES (2,?,?,?,?,1,?,"xray",NULL)',
+                       ('cdn.example.com', 'vmess', transport, json.dumps(settings), port))
+        core = json.loads(self.kernel.read_text())
+        inbound = copy.deepcopy(core['inbounds'][0])
+        inbound.update(tag='node-2', port=port, protocol='vmess')
+        inbound['settings'].pop('decryption')
+        stream = inbound['streamSettings']
+        stream['network'] = transport
+        stream.pop('httpupgradeSettings')
+        if transport == 'ws':
+            stream['wsSettings'] = {'path': path, 'headers': {'Host': settings['host']}}
+        elif transport == 'httpupgrade':
+            stream['httpupgradeSettings'] = {'path': path, 'host': settings['host']}
+        core['inbounds'].append(inbound)
+        self.kernel.write_text(json.dumps(core))
+        return settings, inbound
+
+    def test_selected_vmess_joins_443_without_changing_backend_port_or_credentials(self):
+        original, inbound = self.add_vmess()
+        stage, plan = self.prepare('2')
+        self.assertEqual(self.node_settings(), self.settings)
+        self.assertEqual([r['port'] for r in plan['routes']], [443, 18080])
+        tool.apply(stage)
+        with contextlib.closing(sqlite3.connect(self.db)) as db:
+            port, settings = db.execute('SELECT port,settings FROM nodes WHERE id=2').fetchone()
+        self.assertEqual(port, 18080)
+        self.assertEqual(json.loads(settings), dict(original, listen='127.0.0.1', public_port=443, alpn=['http/1.1']))
+        core = json.loads(self.kernel.read_text())
+        self.assertEqual(core['inbounds'][1]['settings'], inbound['settings'])
+        self.assertEqual(core['inbounds'][1]['listen'], '127.0.0.1')
+        conf = (self.confdir / 'nginx.conf').read_text()
+        self.assertIn('location = "/csda"', conf)
+        self.assertIn('location = "/vmess"', conf)
+        self.assertIn('proxy_pass https://127.0.0.1:18080;', conf)
+        self.assertNotIn('listen 192.0.2.10:18080', conf)
+        state = json.loads((self.confdir / 'managed.json').read_text())
+        self.assertEqual(state['vmess_ids'], [2])
+        self.assertNotIn('original_settings', json.dumps(state))
+        self.assertNotIn('changes', state)
+        stage, repeated = self.prepare()
+        self.assertEqual(repeated['vmess_ids'], [2])
+        self.assertEqual(len(repeated['routes']), 2)
+
+    def test_unselected_vmess_is_untouched(self):
+        original, _ = self.add_vmess(transport='tcp')
+        stage, plan = self.prepare()
+        tool.apply(stage)
+        with contextlib.closing(sqlite3.connect(self.db)) as db:
+            self.assertEqual(json.loads(db.execute('SELECT settings FROM nodes WHERE id=2').fetchone()[0]), original)
+        self.assertEqual(len(plan['routes']), 1)
+
+    def test_vmess_tcp_and_duplicate_paths_fail_before_changes(self):
+        self.add_vmess(transport='tcp')
+        with self.assertRaisesRegex(ValueError, 'WS/HTTPUpgrade'):
+            self.prepare('2')
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('DELETE FROM nodes WHERE id=2')
+        self.kernel.write_text(json.dumps(self.original_core))
+        self.add_vmess(path='/csda')
+        with self.assertRaisesRegex(ValueError, '路径重复'):
+            self.prepare('2')
+        self.assertEqual(self.node_settings(), self.settings)
+        self.assertFalse(self.confdir.exists())
+
+    def test_second_node_race_rolls_back_all_database_changes(self):
+        self.add_vmess()
+        stage, _ = self.prepare('2')
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('UPDATE nodes SET host="changed.example.com" WHERE id=2')
+        with self.assertRaisesRegex(ValueError, '节点在预检后发生变化'):
+            tool.apply(stage)
+        self.assertEqual(self.node_settings(), self.settings)
+        self.assertFalse(self.confdir.exists())
+
+    def test_disabled_vmess_route_is_removed_on_next_setup(self):
+        self.add_vmess()
+        stage, _ = self.prepare('2')
+        tool.apply(stage)
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('UPDATE nodes SET enable=0 WHERE id=2')
+        core = json.loads(self.kernel.read_text())
+        core['inbounds'] = core['inbounds'][:1]
+        self.kernel.write_text(json.dumps(core))
+        stage, plan = self.prepare()
+        self.assertEqual(len(plan['routes']), 1)
+        self.assertEqual(plan['vmess_ids'], [2])
+        tool.apply(stage)
+        self.assertNotIn('/vmess', (self.confdir / 'nginx.conf').read_text())
+
+    def test_invalid_or_missing_vmess_id_is_rejected(self):
+        for ids in ('0', '2,', 'abc', '2'):
+            with self.subTest(ids=ids), self.assertRaises(ValueError):
+                self.prepare(ids)
+        self.assertEqual(self.node_settings(), self.settings)
+        self.assertFalse(self.confdir.exists())
 
     def node_settings(self):
         with contextlib.closing(sqlite3.connect(self.db)) as db, db:
@@ -321,6 +421,80 @@ class WebsiteTests(unittest.TestCase):
             with self.assertRaises(ssl.SSLError):
                 ctx.wrap_socket(sock, server_hostname='wrong.example.com')
 
+    @unittest.skipUnless(os.environ.get('NGINX_BINARY') and os.environ.get('XRAY_BINARY'), 'requires Nginx and Xray')
+    def test_real_vmess_ws_data_through_shared_nginx(self):
+        self.check_real_vmess('ws')
+
+    @unittest.skipUnless(os.environ.get('NGINX_BINARY') and os.environ.get('XRAY_BINARY'), 'requires Nginx and Xray')
+    def test_real_vmess_httpupgrade_data_through_shared_nginx(self):
+        self.check_real_vmess('httpupgrade')
+
+    def check_real_vmess(self, transport):
+        self.add_vmess(transport=transport)
+        stage, plan = self.prepare('2')
+        self.root.chmod(0o755)
+        self.webroot.mkdir()
+        (self.webroot / 'index.html').write_text('website-ok')
+
+        def unused_port():
+            with socket.socket() as sock:
+                sock.bind(('127.0.0.1', 0))
+                return sock.getsockname()[1]
+
+        def start(args, port, name):
+            log = (self.root / (name + '.log')).open('w+')
+            self.addCleanup(log.close)
+            process = subprocess.Popen(args, stdout=log, stderr=log)
+            self.addCleanup(lambda: (process.terminate(), process.wait(timeout=5)) if process.poll() is None else None)
+            for _ in range(100):
+                if process.poll() is not None:
+                    log.seek(0)
+                    self.fail(log.read())
+                try:
+                    with socket.create_connection(('127.0.0.1', port), timeout=.1): return
+                except OSError: time.sleep(.05)
+            self.fail(name + ' did not listen')
+
+        # Isolated high ports: no production listeners or system services are changed.
+        core = json.loads((stage / 'xray.json').read_text())
+        core['log'] = {'loglevel': 'debug'}
+        for inbound, route in zip(core['inbounds'], plan['routes']):
+            inbound['port'] = route['port'] = unused_port()
+        server_config = self.root / 'server.json'
+        server_config.write_text(json.dumps(core))
+        xray = os.environ['XRAY_BINARY']
+        start([xray, 'run', '-config', str(server_config)], plan['routes'][1]['port'], 'server')
+        public_port = unused_port()
+        plan['listens'] = [f'127.0.0.1:{public_port}']
+        conf = tool.nginx_config(plan, self.webroot).replace('pid /run/proxy-panel-web.pid;', f'pid {self.root}/nginx.pid;')
+        nginx_conf = self.root / 'nginx-test.conf'
+        nginx_conf.write_text(conf)
+        start([self.nginx, '-p', str(self.root), '-c', str(nginx_conf), '-g', 'daemon off;'], public_port, 'nginx')
+
+        ctx = ssl.create_default_context(cafile=str(self.cert))
+        with socket.create_connection(('127.0.0.1', public_port), timeout=3) as sock:
+            with ctx.wrap_socket(sock, server_hostname='cdn.example.com') as conn:
+                conn.sendall(b'GET / HTTP/1.1\r\nHost: cdn.example.com\r\nConnection: close\r\n\r\n')
+                self.assertIn(b'website-ok', conn.makefile('rb').read())
+
+        proxy_port = unused_port()
+        stream = copy.deepcopy(core['inbounds'][1]['streamSettings'])
+        stream['tlsSettings'] = {'serverName': 'cdn.example.com', 'alpn': ['http/1.1'],
+            'disableSystemRoot': True, 'certificates': [{'certificateFile': str(self.cert), 'usage': 'verify'}]}
+        client = {'log': {'loglevel': 'debug'}, 'inbounds': [{'listen': '127.0.0.1', 'port': proxy_port, 'protocol': 'http'}],
+            'outbounds': [{'protocol': 'vmess', 'settings': {'vnext': [{'address': '127.0.0.1', 'port': public_port,
+                'users': [{'id': core['inbounds'][1]['settings']['clients'][0]['id'], 'security': 'auto'}]}]},
+                'streamSettings': stream}]}
+        client_config = self.root / 'client.json'
+        client_config.write_text(json.dumps(client))
+        start([xray, 'run', '-config', str(client_config)], proxy_port, 'client')
+        # The pinned Xray freedom outbound rejects local targets, even without panel routing rules.
+        # Use the same external positive control as the core integration suite.
+        response = subprocess.run(['curl', '-fsS', '--max-time', '12', '--noproxy', '',
+            '--proxy', f'http://127.0.0.1:{proxy_port}', 'https://1.1.1.1/cdn-cgi/trace'], capture_output=True, text=True)
+        self.assertEqual(response.returncode, 0, response.stderr + (self.root / 'client.log').read_text() + (self.root / 'server.log').read_text() + (self.root / 'nginx.log').read_text())
+        self.assertIn('ip=', response.stdout)
+
 
 class WebsiteDependencyTests(unittest.TestCase):
     def run_deps(self, manager, missing_nginx=False, missing_yaml=False, fail=False):
@@ -372,7 +546,7 @@ install_website_deps
 
 
 class WebsiteTransactionTests(unittest.TestCase):
-    def run_case(self, failure='', offer=False):
+    def run_case(self, failure='', offer=False, vmess=False):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / 'states').mkdir()
@@ -385,7 +559,7 @@ class WebsiteTransactionTests(unittest.TestCase):
             for name, value in originals.items():
                 (root / name).write_bytes(value)
             panel = root / 'proxy-panel'
-            panel.write_text('#!/bin/bash\nexit 0\n')
+            panel.write_text('#!/bin/bash\nif [[ "$1" == -compatibility && "$FAIL" != capability ]]; then echo \'{"features":["vmess-public-port"]}\'; fi\nexit 0\n')
             panel.chmod(0o755)
             (root / 'plan.json').write_text(json.dumps({'files': [str(root / p) for p in list(originals) + new_files]}))
             script = root / 'run.sh'
@@ -406,6 +580,7 @@ setup_website_selinux() { :; }
 website_tool() {
  case "$1" in
  prepare)
+  if [[ "$VMESS" == 1 ]]; then [[ "$3" == site.example.com && "$4" == 2,3 ]] || return 1; fi
   [[ "$FAIL" != preflight ]] || return 1
   [[ "$FAIL" != final-preflight || "$2" != */final ]] || return 1
   mkdir -p "$2"
@@ -441,9 +616,11 @@ systemctl() {
  disable) shift; for svc in "$@"; do rm -f "$TEST_ROOT/enabled/$svc"; done;;
  esac
 }
-if [[ "$OFFER" == 1 ]]; then offer_website_setup; else do_website website setup; fi
+if [[ "$OFFER" == 1 ]]; then offer_website_setup
+elif [[ "$VMESS" == 1 ]]; then do_website website setup site.example.com --vmess 2,3
+else do_website website setup; fi
 ''')
-            env = {**os.environ, 'TEST_ROOT': temp, 'INSTALLER': str(INSTALLER), 'FAIL': failure, 'OFFER': '1' if offer else '0'}
+            env = {**os.environ, 'TEST_ROOT': temp, 'INSTALLER': str(INSTALLER), 'FAIL': failure, 'OFFER': '1' if offer else '0', 'VMESS': '1' if vmess else '0'}
             result = subprocess.run(['bash', str(script)], env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=25)
             self.assertEqual(result.returncode == 0, not failure or offer, result.stdout)
             if failure:
@@ -458,11 +635,14 @@ if [[ "$OFFER" == 1 ]]; then offer_website_setup; else do_website website setup;
                 self.assertTrue((root / 'site/nginx.conf').exists(), result.stdout)
                 self.assertTrue((root / 'states/proxy-panel-web').exists(), result.stdout)
                 self.assertTrue((root / 'states/proxy-panel-web-cert.path').exists(), result.stdout)
-            if failure in ('dependency', 'preflight'):
+            if failure in ('dependency', 'preflight', 'capability'):
                 events = (root / 'events').read_text() if (root / 'events').exists() else ''
                 self.assertNotIn('stop ', events, result.stdout)
 
     def test_success(self): self.run_case()
+    def test_vmess_arguments_reach_both_preflight_passes(self): self.run_case(vmess=True)
+    def test_vmess_old_binary_fails_before_stopping_services(self): self.run_case('capability', vmess=True)
+    def test_vmess_health_failure_restores_originals(self): self.run_case('health', vmess=True)
     def test_dependency_failure_keeps_proxy(self): self.run_case('dependency')
     def test_preflight_failure_keeps_proxy(self): self.run_case('preflight')
     def test_stop_failure_recovers(self): self.run_case('stop')

@@ -120,7 +120,7 @@ func buildVMessURI(node model.Node, user *model.User, s nodeSettings) string {
 		"v":    "2",
 		"ps":   node.Name,
 		"add":  node.Host,
-		"port": node.Port,
+		"port": node.PublicPort(),
 		"id":   user.UUID,
 		"aid":  0,
 		"net":  node.Transport,

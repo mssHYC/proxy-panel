@@ -68,6 +68,17 @@ func ValidateNodeSecurity(node NodeConfig, engine string) error {
 		}
 	}
 	security := nodeSecurity(node.Settings)
+	if value, ok := node.Settings["public_port"]; ok {
+		port := getSettingInt(node.Settings, "public_port", -1)
+		if n, ok := value.(float64); ok && n != float64(port) {
+			return fmt.Errorf("订阅对外端口必须是整数")
+		}
+		if port != 443 || engine != "xray" || node.Protocol != "vmess" ||
+			(node.Transport != "ws" && node.Transport != "httpupgrade") || security != "tls" ||
+			getSettingStr(node.Settings, "listen", "") != "127.0.0.1" {
+			return fmt.Errorf("订阅对外端口仅支持托管到 443 的 Xray VMess WS/HTTPUpgrade + TLS，后端须监听 127.0.0.1")
+		}
+	}
 	if security == "reality" {
 		if _, _, err := RealityTarget(node.Settings); err != nil {
 			return err
