@@ -1708,23 +1708,34 @@ PY_WEBSITE
 
 install_website_deps() (
     set -e
-    local new_nginx=false temporary_policy=false
-    command -v nginx >/dev/null || new_nginx=true
+    local new_nginx=false temporary_policy=false packages=() yaml_package=python3-pyyaml ip_package=iproute
+    if [[ "$PKG_MGR" == apt ]]; then yaml_package=python3-yaml; ip_package=iproute2; fi
+    if ! command -v nginx >/dev/null; then new_nginx=true; packages+=(nginx); fi
+    if ! command -v python3 >/dev/null; then
+        packages+=(python3 "$yaml_package" ca-certificates)
+    else
+        if ! python3 -c 'import yaml' 2>/dev/null; then packages+=("$yaml_package"); fi
+        if ! python3 -c 'import ssl; assert ssl.get_default_verify_paths().cafile' 2>/dev/null; then packages+=(ca-certificates); fi
+    fi
+    command -v openssl >/dev/null || packages+=(openssl)
+    command -v ip >/dev/null || packages+=("$ip_package")
+    command -v jq >/dev/null || packages+=(jq)
+    command -v flock >/dev/null || packages+=(util-linux)
     # Debian packages must not start a default public HTTP site during setup.
     cleanup_website_policy() {
         if [[ "$temporary_policy" == true ]]; then rm -f /usr/sbin/policy-rc.d; fi
     }
     trap cleanup_website_policy EXIT
-    if [[ "$PKG_MGR" == apt ]]; then
+    if [[ ${#packages[@]} -gt 0 && "$PKG_MGR" == apt ]]; then
         if [[ "$new_nginx" == true && ! -e /usr/sbin/policy-rc.d && ! -L /usr/sbin/policy-rc.d ]]; then
             printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
             chmod 755 /usr/sbin/policy-rc.d
             temporary_policy=true
         fi
         apt-get update
-        DEBIAN_FRONTEND=noninteractive apt-get install -y nginx python3 python3-yaml openssl ca-certificates iproute2
-    else
-        yum install -y nginx python3 python3-pyyaml openssl ca-certificates iproute
+        DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}"
+    elif [[ ${#packages[@]} -gt 0 ]]; then
+        yum install -y "${packages[@]}"
     fi
     # The managed site has its own unit/config, leaving existing Nginx sites alone.
     if [[ "$new_nginx" == true ]]; then systemctl disable --now nginx; fi

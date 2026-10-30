@@ -246,6 +246,55 @@ class WebsiteTests(unittest.TestCase):
                 ctx.wrap_socket(sock, server_hostname='wrong.example.com')
 
 
+class WebsiteDependencyTests(unittest.TestCase):
+    def run_deps(self, manager, missing_nginx=False, missing_yaml=False, fail=False):
+        with tempfile.TemporaryDirectory() as temp:
+            script = Path(temp) / 'deps.sh'
+            events = Path(temp) / 'events'
+            script.write_text('''source "$INSTALLER"
+PKG_MGR="$MANAGER"
+command() {
+ if [[ "$1" == -v ]]; then [[ "$2" != nginx || "$NGINX_MISSING" != 1 ]]; else builtin command "$@"; fi
+}
+python3() { [[ "$2" != 'import yaml' || "$YAML_MISSING" != 1 ]]; }
+yum() {
+ echo "yum $*" >> "$EVENTS"
+ [[ "$FAIL" != 1 ]] || return 2
+ NGINX_MISSING=0; YAML_MISSING=0
+}
+apt-get() {
+ echo "apt-get $*" >> "$EVENTS"
+ [[ "$FAIL" != 1 ]] || return 2
+ YAML_MISSING=0
+}
+systemctl() { echo "systemctl $*" >> "$EVENTS"; }
+install_website_deps
+''')
+            env = {**os.environ, 'INSTALLER': str(INSTALLER), 'MANAGER': manager, 'EVENTS': str(events),
+                   'NGINX_MISSING': str(int(missing_nginx)), 'YAML_MISSING': str(int(missing_yaml)), 'FAIL': str(int(fail))}
+            result = subprocess.run(['bash', str(script)], env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode == 0, not fail, result.stderr)
+            return events.read_text() if events.exists() else ''
+
+    def test_almalinux_installs_nginx_and_python_yaml(self):
+        events = self.run_deps('yum', missing_nginx=True, missing_yaml=True)
+        self.assertIn('yum install -y nginx python3-pyyaml', events)
+        self.assertIn('systemctl disable --now nginx', events)
+
+    def test_existing_nginx_is_not_upgraded_or_restarted(self):
+        for manager in ('apt', 'yum'):
+            events = self.run_deps(manager, missing_yaml=True)
+            self.assertNotIn('nginx', events)
+            self.assertNotIn('systemctl', events)
+
+    def test_dependencies_already_present_make_no_package_changes(self):
+        self.assertEqual(self.run_deps('apt'), '')
+
+    def test_package_install_failure_does_not_stop_services(self):
+        events = self.run_deps('yum', missing_nginx=True, fail=True)
+        self.assertNotIn('systemctl', events)
+
+
 class WebsiteTransactionTests(unittest.TestCase):
     def run_case(self, failure='', offer=False):
         with tempfile.TemporaryDirectory() as temp:
