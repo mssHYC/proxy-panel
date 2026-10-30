@@ -28,3 +28,7 @@ runs:
         chmod +x "$DIR/xray" "$DIR/sing-box"
         XRAY_BINARY="$DIR/xray" SINGBOX_BINARY="$DIR/sing-box" go test ./internal/kernel -run 'TestCore(Integration|CompatibilityMatrix)' -count=1
         python3 scripts/tests/test_update.py
+        sudo apt-get update
+        sudo apt-get install -y nginx python3-yaml
+        sudo systemctl stop nginx
+        NGINX_BINARY="$(command -v nginx)" XRAY_BINARY="$DIR/xray" /usr/bin/python3 scripts/tests/test_website.py
