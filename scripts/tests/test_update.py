@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -10,7 +11,7 @@ import unittest
 INSTALLER = Path(__file__).resolve().parents[1] / "install.sh"
 
 class UpdateTests(unittest.TestCase):
-    def run_case(self, failure="", active=True):
+    def run_case(self, failure="", active=True, without_cmp=False):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / "data").mkdir()
@@ -32,6 +33,13 @@ for ((i=1;i<=$#;i++)); do
   [[ "$FAIL" != final-preflight || "${@}" != *final-check* ]] || exit 2
   j=$((i+1)); dir="${!j}"; mkdir -p "$dir"
   cp "$TEST_ROOT/manifest.json" "$dir/manifest.json"
+  if [[ "$dir" == */final-check ]]; then
+   case "$FAIL" in
+    manifest-change) jq '.xray_path += ".changed"' "$TEST_ROOT/manifest.json" > "$dir/manifest.json";;
+    manifest-invalid) echo '{' > "$dir/manifest.json";;
+    manifest-missing) rm "$dir/manifest.json";;
+   esac
+  fi
   exit 0
  fi
  if [[ "${!i}" == -check-health ]]; then
@@ -85,6 +93,14 @@ systemctl() {
 run_safe_update
 ''')
             env = {**os.environ, "TEST_ROOT":temp,"INSTALLER":str(INSTALLER),"FAIL":failure}
+            if without_cmp:
+                bin_dir = root / "bin"
+                bin_dir.mkdir()
+                for command in ("bash", "chmod", "cp", "date", "grep", "gzip", "jq", "mkdir", "mktemp", "mv", "rm", "tar", "touch"):
+                    executable = shutil.which(command)
+                    self.assertIsNotNone(executable, command)
+                    (bin_dir / command).symlink_to(executable)
+                env["PATH"] = str(bin_dir)
             result = subprocess.run(["bash",str(script)],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
             self.assertEqual(result.returncode == 0, not failure, result.stdout)
             if failure:
@@ -98,6 +114,7 @@ run_safe_update
             if failure in ("download","preflight"):
                 events=(root / "events").read_text() if (root / "events").exists() else ""
                 self.assertNotIn("stop ",events,result.stdout)
+            return result.stdout
 
     def test_download_failure_keeps_services(self): self.run_case("download")
     def test_invalid_config_keeps_services(self): self.run_case("preflight")
@@ -107,6 +124,18 @@ run_safe_update
     def test_partial_replacement_restores_files(self): self.run_case("replace")
     def test_start_failure_rolls_back(self): self.run_case("start")
     def test_success_preserves_listen(self): self.run_case()
+    def test_success_without_cmp(self): self.run_case(without_cmp=True)
+    def test_manifest_change_restores_services(self):
+        output = self.run_case("manifest-change")
+        self.assertIn("预检期间配置路径发生变化", output)
+    def test_invalid_manifest_reports_comparison_error(self):
+        output = self.run_case("manifest-invalid")
+        self.assertIn("无法读取或比较升级预检清单", output)
+        self.assertNotIn("预检期间配置路径发生变化", output)
+    def test_missing_manifest_reports_comparison_error(self):
+        output = self.run_case("manifest-missing")
+        self.assertIn("无法读取或比较升级预检清单", output)
+        self.assertNotIn("预检期间配置路径发生变化", output)
     def test_inactive_services_stay_inactive(self): self.run_case(active=False)
 
 if __name__ == "__main__": unittest.main()
