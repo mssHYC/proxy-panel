@@ -367,3 +367,37 @@ func (s *KernelSyncService) loadUserNodeMap() (map[int64][]int64, error) {
 	}
 	return m, rows.Err()
 }
+
+// GenerateForCheck uses the same database readers and generators as Sync, but
+// never writes production configurations or starts/restarts a service.
+func (s *KernelSyncService) GenerateForCheck() (map[string][]byte, error) {
+	nodes, err := s.loadNodes()
+	if err != nil {
+		return nil, err
+	}
+	users, err := s.loadUsers()
+	if err != nil {
+		return nil, err
+	}
+	groups := map[string][]kernel.NodeConfig{"xray": {}}
+	for _, n := range nodes {
+		name := "xray"
+		if n.kernelType == "singbox" {
+			name = "sing-box"
+		}
+		groups[name] = append(groups[name], kernel.NodeConfig{ID: n.id, Tag: fmt.Sprintf("node-%d", n.id), Port: n.port, Protocol: n.protocol, Transport: n.transport, Settings: n.settings})
+	}
+	configs := make(map[string][]byte)
+	for name, ns := range groups {
+		engine, err := s.mgr.Get(name)
+		if err != nil {
+			return nil, err
+		}
+		data, err := engine.GenerateConfig(ns, users)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		configs[name] = data
+	}
+	return configs, nil
+}

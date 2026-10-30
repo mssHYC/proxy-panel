@@ -43,6 +43,15 @@ func parseSettings(node model.Node) nodeSettings {
 	// 兼容前端使用 public_key / short_id / private_key 等 key 名
 	var raw map[string]json.RawMessage
 	if json.Unmarshal([]byte(node.Settings), &raw) == nil {
+		if s.SNI == "" {
+			_ = json.Unmarshal(raw["serverName"], &s.SNI)
+		}
+		if len(s.ServerNames) == 0 {
+			_ = json.Unmarshal(raw["serverNames"], &s.ServerNames)
+		}
+		if s.SNI == "" && len(s.ServerNames) > 0 {
+			s.SNI = s.ServerNames[0]
+		}
 		if v := raw["alpn"]; len(v) > 0 {
 			var values []string
 			if json.Unmarshal(v, &values) == nil {

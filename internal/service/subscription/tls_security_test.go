@@ -44,3 +44,19 @@ func TestClientControllerIsLocalByDefault(t *testing.T) {
 		t.Fatal("subscription exposes the client controller or proxy on the LAN")
 	}
 }
+
+func TestLegacySNIAndStringALPNReachClients(t *testing.T) {
+	for _, settings := range []string{
+		`{"security":"tls","serverName":"cert.example","alpn":"h2, http/1.1"}`,
+		`{"security":"reality","server_names":["cert.example"],"alpn":"h2, http/1.1"}`,
+	} {
+		node := model.Node{Host: "node.example", Settings: settings}
+		s := parseSettings(node)
+		if s.SNI != "cert.example" {
+			t.Fatalf("saved SNI lost: %+v", s)
+		}
+		if values := splitALPN(s.ALPN); len(values) != 2 || values[1] != "http/1.1" {
+			t.Fatalf("ALPN lost: %v", values)
+		}
+	}
+}

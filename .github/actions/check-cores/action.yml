@@ -1,0 +1,30 @@
+name: Test supported core versions
+description: Verify the pinned core pair against generated configurations before release.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        DIR="$RUNNER_TEMP/proxy-panel-cores"
+        mkdir -p "$DIR"
+        XRAY=$(jq -r '.xray' internal/upgrade/compatibility.json)
+        SINGBOX=$(jq -r '."sing-box"' internal/upgrade/compatibility.json)
+        fetch() {
+          local repo="$1" version="$2" asset="$3" dest="$4"
+          gh api "repos/$repo/releases/tags/$version" > "$DIR/release.json"
+          url=$(jq -er --arg name "$asset" '.assets[] | select(.name==$name) | .browser_download_url' "$DIR/release.json")
+          digest=$(jq -er --arg name "$asset" '.assets[] | select(.name==$name) | .digest' "$DIR/release.json")
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          curl -fsSL --retry 3 "$url" -o "$dest"
+          echo "${digest#sha256:}  $dest" | sha256sum --check -
+        }
+        fetch XTLS/Xray-core "$XRAY" Xray-linux-64.zip "$DIR/xray.zip"
+        unzip -p "$DIR/xray.zip" xray > "$DIR/xray"
+        fetch SagerNet/sing-box "$SINGBOX" "sing-box-${SINGBOX#v}-linux-amd64.tar.gz" "$DIR/singbox.tar.gz"
+        tar -xOzf "$DIR/singbox.tar.gz" "sing-box-${SINGBOX#v}-linux-amd64/sing-box" > "$DIR/sing-box"
+        chmod +x "$DIR/xray" "$DIR/sing-box"
+        XRAY_BINARY="$DIR/xray" SINGBOX_BINARY="$DIR/sing-box" go test ./internal/kernel -run 'TestCore(Integration|CompatibilityMatrix)' -count=1
+        python3 scripts/tests/test_update.py

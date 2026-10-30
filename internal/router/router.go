@@ -133,6 +133,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 			auth.PUT("/nodes/:id", nodeHandler.Update)
 			auth.DELETE("/nodes/:id", nodeHandler.Delete)
 			auth.POST("/nodes/generate-reality-keypair", nodeHandler.GenerateRealityKeypair)
+			auth.POST("/nodes/check-reality-target", nodeHandler.CheckRealityTarget)
 
 			// 节点分组
 			auth.GET("/node-groups", nodeGroupHandler.List)

@@ -168,3 +168,22 @@ func TestExistingConfigPermissionsAreRestrictedBeforeWritingSecret(t *testing.T)
 		t.Fatalf("credentials readable by others: %o", info.Mode().Perm())
 	}
 }
+
+func TestSingboxTLSStringALPN(t *testing.T) {
+	tls := buildSingboxTLS(map[string]interface{}{"security": "tls", "sni": "example.com", "alpn": "h2, http/1.1"})
+	alpn, ok := tls["alpn"].([]string)
+	if !ok || len(alpn) != 2 || alpn[1] != "http/1.1" {
+		t.Fatalf("saved ALPN ignored: %v", tls["alpn"])
+	}
+}
+
+func TestRealityRejectsInvalidTarget(t *testing.T) {
+	for _, dest := range []string{"", "https://example.com", "example.com:99999", "127.0.0.1:443", "[::1]:443"} {
+		t.Run(dest, func(t *testing.T) {
+			err := ValidateNodeSecurity(NodeConfig{Protocol: "vless", Transport: "tcp", Settings: map[string]interface{}{"security": "reality", "dest": dest, "server_names": []string{"example.com"}}}, "xray")
+			if err == nil {
+				t.Fatal("invalid Reality target accepted")
+			}
+		})
+	}
+}

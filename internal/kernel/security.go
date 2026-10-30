@@ -68,6 +68,11 @@ func ValidateNodeSecurity(node NodeConfig, engine string) error {
 		}
 	}
 	security := nodeSecurity(node.Settings)
+	if security == "reality" {
+		if _, _, err := RealityTarget(node.Settings); err != nil {
+			return err
+		}
+	}
 	tcp := node.Transport == "" || node.Transport == "tcp" || node.Transport == "raw"
 	if flow := getSettingStr(node.Settings, "flow", ""); flow != "" {
 		if flow != "xtls-rprx-vision" || node.Protocol != "vless" || !tcp || (security != "tls" && security != "reality") {

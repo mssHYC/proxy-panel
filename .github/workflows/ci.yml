@@ -40,6 +40,8 @@ jobs:
           npm ci
           npm run build
 
+      - uses: ./.github/actions/check-cores
+
       - name: Go Test
         run: go test ./...
 

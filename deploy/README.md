@@ -117,3 +117,39 @@ XRAY_BINARY=/绝对路径/xray SINGBOX_BINARY=/绝对路径/sing-box \
 ```
 
 测试只启动临时回环高端口，不操作 systemd；使用测试证书，访问 Cloudflare `https://1.1.1.1/cdn-cgi/trace` 作为正常转发对照，检查网站回落、未知 SNI 拒绝、IPv4/IPv6/localhost 隔离、管理接口及统计采集。需要外网可达。
+
+## Reality 目标检查与 TLS 参数
+
+节点编辑页的「检查目标」从 VPS 出发验证 DNS、证书与 SNI、TLS 1.3 和 HTTP/2。新建 Reality 节点、更换 dest / server_names、从禁用状态重新启用时，后端也会在写入数据库前检查；检查失败保留原配置。修改名称或保存未变化的目标不会重复联网，已有节点也不会因为面板启动时目标网站临时不可用而被关闭。
+
+检查只接受公网地址，拒绝本机接口、内网和保留地址；连接固定到这次解析并验证的 IP，不使用环境代理、不跟随 HTTP 跳转，整个检查限时 10 秒。支持域名、IPv4 和带方括号的 IPv6 目标，省略端口时使用 443。SNI 必须是具体域名且匹配目标证书；CDN/共享边缘响应头和首页跳转会显示风险提示。CDN 检测是启发式提示，不是完整的归属或滥用审计；DNS 在保存后仍可能变化。
+
+普通 TLS 的 ALPN 支持数组和旧版逗号分隔字符串，Xray 与 sing-box 生成器保持一致。订阅同时兼容 `sni`、旧 `serverName` 及 Reality `server_names` 的首项，避免服务端配置了 SNI 而客户端丢失。Xray 普通 TLS 保持 `rejectUnknownSni: true`，由真实内核握手测试覆盖。sing-box 的 `server_name` 不等同于 Xray 的未知 SNI 拒绝策略；若前置 Nginx 终结 TLS，仍需单独配置默认虚拟主机的 `ssl_reject_handshake on`。Hysteria2 的 QUIC/TLS 默认协商方式保持原样。
+
+协议依据：[Reality 目标标准](https://github.com/XTLS/REALITY)、[Xray TLS](https://xtls.github.io/config/transports/tls.html)、[sing-box TLS](https://sing-box.sagernet.org/configuration/shared/tls/)。
+
+## 有预检和回退的升级
+
+新 `scripts/install.sh update`（检测到已有安装时的 `install` 同样走此路径）按以下顺序升级：
+
+1. 当前服务继续运行，下载候选面板；核对 GitHub release asset 的 SHA-256 后才解包、执行。缺少摘要、下载失败或旧候选不支持预检时直接中止。
+2. 可选更新内核时使用候选面板内置 `internal/upgrade/compatibility.json` 的版本，不追随内核的 latest。当前测试组合为 Xray **26.10.29** / sing-box **1.14.4**；CI 和发布流程验证 27 种生成配置，以及真实 TLS / Vision / 网站回落和管理地址隔离。
+3. 使用 SQLite 一致快照，在副本上执行候选面板的迁移和配置生成。候选内核分别检查当前配置和新生成配置，验证面板证书/私钥；不启动服务，不修改线上数据库。
+4. 预检通过后才停服务，备份程序、数据库（含 WAL）、面板配置与内核配置，再对冻结的数据复检。候选文件在目标目录复制后原子重命名；不改写原监听地址、端口或 TLS 设置。
+5. 恢复原本运行的服务，检查 systemd 状态及面板实际 HTTP/TLS 响应。启动或健康检查失败自动恢复旧二进制、数据库和配置；失败诊断目录和备份均仅 root 可访问。正常成功也保留回退备份。
+
+**旧安装需先更新管理脚本，再用新脚本升级**；单独替换面板二进制不会更新 `/usr/local/bin/proxy-panel` 里的旧升级逻辑。应在包含本修复的 release 发布后操作：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mssHYC/proxy-panel/main/scripts/install.sh -o /tmp/proxy-panel-install.sh
+sudo install -m 755 /tmp/proxy-panel-install.sh /usr/local/bin/proxy-panel
+sudo proxy-panel update
+```
+
+手动回退使用升级完成时打印的真实备份目录：
+
+```bash
+sudo proxy-panel rollback-update /opt/proxy-panel/backups/update-实际时间与编号
+```
+
+回退会恢复升级时的数据库，之后新增的数据不会保留。自动回退处理脚本执行期间的失败；断电、`kill -9`、磁盘损坏等需要使用保留备份人工恢复。健康检查验证本机服务，不代替从中国大陆验证线路可达性。
