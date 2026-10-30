@@ -29,6 +29,33 @@ Docker：容器内配置 `server.listen: "0.0.0.0"`，Compose 在宿主机仅发
 
 ## 在 TCP 443 上共用网站和代理
 
+### HTTPUpgrade 节点：管理脚本自动部署
+
+对于 **Xray / VLESS 或 VMess / HTTPUpgrade / TLS / 443** 节点，无需手工安装 Nginx、写反代或修改数据库。同步新版管理脚本后执行：
+
+```bash
+proxy-panel website setup
+# 额外提供网站域名时，该域名也必须被节点证书覆盖：
+proxy-panel website setup site.example.com
+proxy-panel website status
+```
+
+`install` 和成功的 `update` 结束时也会询问是否执行该流程。新安装尚无节点时，先在面板创建上述节点，再执行 `website setup`。非交互安装/升级保留原行为，提示可用命令。普通 TCP、Reality 等其他传输不会被自动改写。
+
+脚本通过系统包管理器安装 Nginx、Python 3/PyYAML、OpenSSL 等依赖，支持原有 Debian/Ubuntu 和 AlmaLinux/Rocky/CentOS/Fedora 安装入口。Nginx 需支持 `ssl_reject_handshake`（1.19.4+）。脚本是自包含的，无需单独下载网站助手；面板需支持 `-check-health`（v1.19.1+）。
+
+流量路径为 **公网非回环地址 TCP 443 → Nginx 网站 / HTTPUpgrade 路径 → Xray 127.0.0.1:443**。客户端的服务器地址、对外端口、路径和凭据保留，仅将节点 ALPN 对齐 `http/1.1`；部署后刷新订阅。反代保留 Host/Upgrade，验证到 Xray 的 TLS 证书。未知 SNI 拒绝握手，网站不转发管理面板。直接使用 IP 打开 HTTPS 不是验收方式。
+
+托管服务名为 `proxy-panel-web.service`，配置位于 `/etc/nginx/proxy-panel/`，网站位于 `/var/www/proxy-panel-managed-site/`。它使用独立 Nginx 配置，不覆盖已有 Nginx 虚拟主机，也不会启动系统自带的默认 80 网站。重复部署保留已编辑的首页。已有未托管的网站目录、回环节点或多个 443 节点会明确中止，避免接管其他部署。
+
+切换前检查证书/私钥匹配、证书链和域名、Xray 与 Nginx 配置；停服后备份数据库、内核及网站配置，再复检并切换。通过网站 HTTPS 200、HTTPUpgrade 101 和面板健康检查后才确认完成。部署失败会恢复原节点、文件和原服务状态；备份保留在 `/opt/proxy-panel/backups/website-*`。依赖软件及为反代安装的 SELinux 支持规则不会在失败时卸载。SELinux 保持 enforcing；按需设置证书标签与 `httpd_can_network_connect`，不会关闭 SELinux。
+
+`proxy-panel-web-cert.path` 监听原证书/私钥文件变化，先验证 Nginx 配置再重载网站；继续使用原来的证书签发/续期方式。它不自动申请新域名证书，也不降低证书校验。例如节点 SNI/CDN 域名为 `cdn.example.com`，但证书只覆盖 `origin.example.com`，会在切换前明确中止；必须先申请覆盖所需域名的证书。管理域名仅在被该证书覆盖时自动作为网站别名加入。
+
+上述 101 检查验证 HTTPUpgrade 隧道建立，部署后仍应使用真实客户端验证代理外网访问。
+
+### 普通 TCP + TLS：网站回落
+
 拓扑：浏览器 / 代理客户端 → **Xray TCP 443（TLS）** → 正常代理流量或 **Nginx 127.0.0.1:8081（HTTP 网站）**。
 
 适用：Xray 的 **VLESS / TCP / TLS** 或 **Trojan / TCP / TLS**。VLESS 可选 `xtls-rprx-vision`。Reality、WS、gRPC 和 sing-box 节点不使用这项回落设置。Reality 的目标站机制不同；不要在同一个 TCP 地址和端口同时开启这两种监听。
