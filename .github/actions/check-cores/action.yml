@@ -34,4 +34,4 @@ runs:
         # nginx -t checks bind addresses; provide the fixture IP on this runner.
         sudo ip address add 192.0.2.10/32 dev lo
         trap 'sudo ip address del 192.0.2.10/32 dev lo' EXIT
-        sudo env NGINX_BINARY="$(command -v nginx)" XRAY_BINARY="$DIR/xray" /usr/bin/python3 scripts/tests/test_website.py
+        sudo env NGINX_BINARY="$(command -v nginx)" XRAY_BINARY="$DIR/xray" SYSTEMD_ANALYZE_BINARY="$(command -v systemd-analyze)" /usr/bin/python3 scripts/tests/test_website.py

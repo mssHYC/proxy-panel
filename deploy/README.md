@@ -46,9 +46,9 @@ proxy-panel website status
 
 流量路径为 **公网非回环地址 TCP 443 → Nginx 网站 / HTTPUpgrade 路径 → Xray 127.0.0.1:443**。客户端的服务器地址、对外端口、路径和凭据保留，仅将节点 ALPN 对齐 `http/1.1`；部署后刷新订阅。反代保留 Host/Upgrade，验证到 Xray 的 TLS 证书。未知 SNI 拒绝握手，网站不转发管理面板。直接使用 IP 打开 HTTPS 不是验收方式。
 
-托管服务名为 `proxy-panel-web.service`，配置位于 `/etc/nginx/proxy-panel/`，网站位于 `/var/www/proxy-panel-managed-site/`。它使用独立 Nginx 配置，不覆盖已有 Nginx 虚拟主机，也不会启动系统自带的默认 80 网站。重复部署保留已编辑的首页。已有未托管的网站目录、回环节点或多个 443 节点会明确中止，避免接管其他部署。
+托管服务名为 `proxy-panel-web.service`，配置位于 `/etc/nginx/proxy-panel/`，网站位于 `/var/www/proxy-panel-managed-site/`。它使用独立 Nginx 配置，不覆盖已有 Nginx 虚拟主机，也不会启动系统自带的默认 80 网站。重复部署保留已编辑的首页。已有未托管的非空网站目录、回环节点或多个 443 节点会明确中止，避免接管其他部署；首次部署回退留下的空目录允许直接重试。
 
-切换前检查证书/私钥匹配、证书链和域名、Xray 与 Nginx 配置；停服后备份数据库、内核及网站配置，再复检并切换。通过网站 HTTPS 200、HTTPUpgrade 101 和面板健康检查后才确认完成。部署失败会恢复原节点、文件和原服务状态；备份保留在 `/opt/proxy-panel/backups/website-*`。依赖软件及为反代安装的 SELinux 支持规则不会在失败时卸载。SELinux 保持 enforcing；按需设置证书标签与 `httpd_can_network_connect`，不会关闭 SELinux。
+切换前检查证书/私钥匹配、证书链和域名、Xray 与 Nginx 配置，并用 `systemd-analyze verify` 验证网站服务与证书监控单元；停服后备份数据库、内核及网站配置，再复检并切换。通过网站 HTTPS 200、HTTPUpgrade 101 和面板健康检查后才确认完成。部署失败会恢复原节点、文件和原服务状态；备份保留在 `/opt/proxy-panel/backups/website-*`。依赖软件及为反代安装的 SELinux 支持规则不会在失败时卸载。SELinux 保持 enforcing；按需设置证书标签与 `httpd_can_network_connect`，不会关闭 SELinux。
 
 `proxy-panel-web-cert.path` 监听原证书/私钥文件变化，先验证 Nginx 配置再重载网站；继续使用原来的证书签发/续期方式。它不自动申请新域名证书，也不降低证书校验。例如节点 SNI/CDN 域名为 `cdn.example.com`，但证书只覆盖 `origin.example.com`，会在切换前明确中止；必须先申请覆盖所需域名的证书。管理域名仅在被该证书覆盖时自动作为网站别名加入。
 
