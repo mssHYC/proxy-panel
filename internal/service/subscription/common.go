@@ -9,27 +9,27 @@ import (
 
 // nodeSettings 节点配置的 JSON 结构
 type nodeSettings struct {
-	SNI            string   `json:"sni"`
-	Host           string   `json:"host"`
-	Path           string   `json:"path"`
-	TLS            bool     `json:"tls"`
-	Method         string   `json:"method"`
-	Password       string   `json:"password"`
-	Flow           string   `json:"flow"`
-	Fingerprint    string   `json:"fingerprint"`
-	PublicKey      string   `json:"pbk"`
-	ShortID        string   `json:"sid"`
-	Security       string   `json:"security"`
-	ALPN           string   `json:"alpn"`
-	UpMbps         int      `json:"up_mbps"`
-	DownMbps       int      `json:"down_mbps"`
-	Obfs           string   `json:"obfs"`
-	ObfsPassword   string   `json:"obfs_password"`
-	AllowInsecure  bool     `json:"allow_insecure"`
-	ServiceName    string   `json:"service_name"`
-	Dest           string   `json:"dest"`
-	ServerNames    []string `json:"server_names"`
-	ShortIDs       []string `json:"short_ids"`
+	SNI           string   `json:"sni"`
+	Host          string   `json:"host"`
+	Path          string   `json:"path"`
+	TLS           bool     `json:"tls"`
+	Method        string   `json:"method"`
+	Password      string   `json:"password"`
+	Flow          string   `json:"flow"`
+	Fingerprint   string   `json:"fingerprint"`
+	PublicKey     string   `json:"pbk"`
+	ShortID       string   `json:"sid"`
+	Security      string   `json:"security"`
+	ALPN          string   `json:"-"`
+	UpMbps        int      `json:"up_mbps"`
+	DownMbps      int      `json:"down_mbps"`
+	Obfs          string   `json:"obfs"`
+	ObfsPassword  string   `json:"obfs_password"`
+	AllowInsecure bool     `json:"allow_insecure"`
+	ServiceName   string   `json:"service_name"`
+	Dest          string   `json:"dest"`
+	ServerNames   []string `json:"server_names"`
+	ShortIDs      []string `json:"short_ids"`
 }
 
 // parseSettings 解析节点 Settings JSON 字段，兼容前端多种 key 名
@@ -43,6 +43,21 @@ func parseSettings(node model.Node) nodeSettings {
 	// 兼容前端使用 public_key / short_id / private_key 等 key 名
 	var raw map[string]json.RawMessage
 	if json.Unmarshal([]byte(node.Settings), &raw) == nil {
+		if v := raw["alpn"]; len(v) > 0 {
+			var values []string
+			if json.Unmarshal(v, &values) == nil {
+				s.ALPN = strings.Join(values, ",")
+			} else {
+				_ = json.Unmarshal(v, &s.ALPN)
+			}
+		}
+		if s.ALPN == "" {
+			var port int
+			if json.Unmarshal(raw["fallback_port"], &port) == nil && port > 0 {
+				s.ALPN = "http/1.1"
+			}
+		}
+
 		if s.PublicKey == "" {
 			if v, ok := raw["public_key"]; ok {
 				var val string
@@ -76,5 +91,8 @@ func parseSettings(node model.Node) nodeSettings {
 		s.SNI = strings.Split(s.SNI, ":")[0]
 	}
 
+	if s.Security == "tls" {
+		s.TLS = true
+	}
 	return s
 }

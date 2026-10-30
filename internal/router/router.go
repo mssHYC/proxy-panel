@@ -14,7 +14,6 @@ import (
 	"proxy-panel/web"
 
 	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Setup 初始化路由，注册所有端点
@@ -33,12 +32,13 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 
 	// Prometheus 指标中间件
 	r.Use(MetricsMiddleware())
-	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// 域名绑定：配置了域名时，拒绝通过 IP 直接访问
 	if cfg.Server.Domain != "" {
 		r.Use(DomainGuard(cfg.Server.Domain))
 	}
+
+	registerMetrics(r, cfg.Server.MetricsToken)
 
 	// 嵌入的前端静态文件
 	distFS, _ := fs.Sub(web.DistFS, "dist")

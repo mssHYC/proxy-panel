@@ -68,6 +68,14 @@ func buildVLESSURI(node model.Node, user *model.User, s nodeSettings) string {
 		}
 	}
 	params.Set("security", security)
+	if security == "tls" {
+		if s.Fingerprint != "" {
+			params.Set("fp", s.Fingerprint)
+		}
+		if s.ALPN != "" {
+			params.Set("alpn", s.ALPN)
+		}
+	}
 
 	if security == "reality" {
 		if s.PublicKey != "" {
@@ -124,6 +132,12 @@ func buildVMessURI(node model.Node, user *model.User, s nodeSettings) string {
 
 	if s.TLS {
 		vmessObj["tls"] = "tls"
+		if s.Fingerprint != "" {
+			vmessObj["fp"] = s.Fingerprint
+		}
+		if s.ALPN != "" {
+			vmessObj["alpn"] = s.ALPN
+		}
 		if s.SNI != "" {
 			vmessObj["sni"] = s.SNI
 		}
@@ -150,6 +164,12 @@ func buildVMessURI(node model.Node, user *model.User, s nodeSettings) string {
 
 func buildTrojanURI(node model.Node, user *model.User, s nodeSettings) string {
 	params := url.Values{}
+	if s.Fingerprint != "" {
+		params.Set("fp", s.Fingerprint)
+	}
+	if s.ALPN != "" {
+		params.Set("alpn", s.ALPN)
+	}
 	if s.SNI != "" {
 		params.Set("sni", s.SNI)
 	}

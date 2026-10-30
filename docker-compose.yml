@@ -4,9 +4,10 @@ services:
     image: proxy-panel:local
     container_name: proxy-panel
     restart: unless-stopped
-    # 订阅/面板端口；如需让面板管理的内核监听低端口，可改 network_mode: host
+    # 容器内 config.yaml 需显式设置 server.listen: "0.0.0.0"。
+    # 宿主机仅本地发布面板端口，通过 SSH 隧道或独立 HTTPS 反代访问。
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./data:/app/data
       - ./config.yaml:/app/config.yaml:ro

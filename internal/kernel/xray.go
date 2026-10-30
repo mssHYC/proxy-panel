@@ -19,6 +19,9 @@ type XrayEngine struct {
 
 // NewXrayEngine 创建 Xray 引擎实例
 func NewXrayEngine(binaryPath, configPath string, apiPort int) *XrayEngine {
+	if binaryPath == "" {
+		binaryPath = "xray"
+	}
 	return &XrayEngine{binaryPath: binaryPath, configPath: configPath, apiPort: apiPort}
 }
 
@@ -117,7 +120,7 @@ func parseXrayClientEmail(email string) (username, nodeTag string) {
 func (e *XrayEngine) GetTrafficStats() ([]TrafficStat, error) {
 	server := fmt.Sprintf("127.0.0.1:%d", e.apiPort)
 	// -reset 让 Xray 返回增量并把内部计数器清零，否则每次采集都是累计值会重复累加
-	out, err := exec.Command("xray", "api", "statsquery",
+	out, err := exec.Command(e.binaryPath, "api", "statsquery",
 		"--server="+server, "-pattern", "user>>>", "-reset").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("xray statsquery 失败: %w, output: %s", err, string(out))
@@ -219,7 +222,7 @@ func (e *XrayEngine) AddUser(tag, uuid, email, protocol string) error {
 		args = append(args, "-id", uuid)
 	}
 
-	out, err := exec.Command("xray", args...).CombinedOutput()
+	out, err := exec.Command(e.binaryPath, args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("xray adi 失败: %w, output: %s", err, string(out))
 	}
@@ -231,7 +234,7 @@ func (e *XrayEngine) AddUser(tag, uuid, email, protocol string) error {
 func (e *XrayEngine) RemoveUser(tag, uuid, email string) error {
 	server := fmt.Sprintf("127.0.0.1:%d", e.apiPort)
 	encodedEmail := xrayClientEmail(email, tag)
-	out, err := exec.Command("xray", "api", "rmi",
+	out, err := exec.Command(e.binaryPath, "api", "rmi",
 		"--server="+server, "-tag", tag, "-email", encodedEmail).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("xray rmi 失败: %w, output: %s", err, string(out))
@@ -278,6 +281,12 @@ func (e *XrayEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) ([]b
 
 	// 为每个节点生成 inbound
 	for _, node := range nodes {
+		if err := ValidateNodeSecurity(node, "xray"); err != nil {
+			return nil, fmt.Errorf("节点 %s: %w", node.Tag, err)
+		}
+		if port := getSettingInt(node.Settings, "fallback_port", 0); port > 0 && port == e.apiPort {
+			return nil, fmt.Errorf("网站回落不能指向 Xray 管理接口")
+		}
 		inbound := e.buildInbound(node, users)
 		inbounds = append(inbounds, inbound)
 	}
@@ -286,8 +295,9 @@ func (e *XrayEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) ([]b
 	// outbounds
 	cfg["outbounds"] = []interface{}{
 		map[string]interface{}{
-			"tag":      "direct",
-			"protocol": "freedom",
+			"tag":            "direct",
+			"protocol":       "freedom",
+			"streamSettings": map[string]interface{}{"sockopt": map[string]interface{}{"domainStrategy": "ForceIP"}},
 		},
 		map[string]interface{}{
 			"tag":      "blocked",
@@ -296,12 +306,19 @@ func (e *XrayEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) ([]b
 	}
 
 	// routing
+	cfg["dns"] = map[string]interface{}{"servers": []string{"localhost"}}
 	cfg["routing"] = map[string]interface{}{
+		"domainStrategy": "IPOnDemand",
 		"rules": []interface{}{
 			map[string]interface{}{
 				"type":        "field",
 				"inboundTag":  []string{"api-inbound"},
 				"outboundTag": "api",
+			},
+			map[string]interface{}{
+				"type":        "field",
+				"ip":          blockedDestinations(),
+				"outboundTag": "blocked",
 			},
 			map[string]interface{}{
 				"type":        "field",
@@ -317,9 +334,9 @@ func (e *XrayEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) ([]b
 // buildInbound 根据节点配置构建 inbound
 func (e *XrayEngine) buildInbound(node NodeConfig, users []UserConfig) map[string]interface{} {
 	inbound := map[string]interface{}{
-		"tag":    node.Tag,
-		"listen": "0.0.0.0",
-		"port":   node.Port,
+		"tag":      node.Tag,
+		"listen":   getSettingStrAny(node.Settings, "0.0.0.0", "listen"),
+		"port":     node.Port,
 		"protocol": node.Protocol,
 	}
 
@@ -378,6 +395,11 @@ func (e *XrayEngine) buildInbound(node NodeConfig, users []UserConfig) map[strin
 		}
 	}
 
+	if port := getSettingInt(node.Settings, "fallback_port", 0); port > 0 {
+		inbound["settings"].(map[string]interface{})["fallbacks"] = []interface{}{
+			map[string]interface{}{"dest": fmt.Sprintf("127.0.0.1:%d", port), "xver": 0},
+		}
+	}
 	// streamSettings
 	stream := e.buildStreamSettings(node)
 	if stream != nil {
@@ -425,14 +447,15 @@ func (e *XrayEngine) buildStreamSettings(node NodeConfig) map[string]interface{}
 	}
 
 	// TLS / Reality
-	security := getSettingStr(node.Settings, "security", "none")
+	security := nodeSecurity(node.Settings)
 	stream["security"] = security
 
 	switch security {
 	case "tls":
 		// 前端存 snake_case (sni / cert_path / key_path)，同时兼容 camelCase
 		tlsSettings := map[string]interface{}{
-			"serverName": getSettingStrAny(node.Settings, "", "sni", "serverName"),
+			"serverName":       getSettingStrAny(node.Settings, "", "sni", "serverName"),
+			"rejectUnknownSni": true,
 		}
 		if certPath := getSettingStrAny(node.Settings, "", "cert_path", "certPath"); certPath != "" {
 			tlsSettings["certificates"] = []interface{}{
@@ -441,6 +464,9 @@ func (e *XrayEngine) buildStreamSettings(node NodeConfig) map[string]interface{}
 					"keyFile":         getSettingStrAny(node.Settings, "", "key_path", "keyPath"),
 				},
 			}
+		}
+		if alpn := tlsALPN(node.Settings); len(alpn) > 0 {
+			tlsSettings["alpn"] = alpn
 		}
 		stream["tlsSettings"] = tlsSettings
 	case "reality":
@@ -462,7 +488,7 @@ func (e *XrayEngine) buildStreamSettings(node NodeConfig) map[string]interface{}
 
 // WriteConfig 将配置写入文件
 func (e *XrayEngine) WriteConfig(data []byte) error {
-	return os.WriteFile(e.configPath, data, 0600)
+	return writePrivateConfig(e.configPath, data)
 }
 
 // ApplyConfig 事务式更新 xray 配置（写入 + Restart + 失败回滚）。详见接口定义。

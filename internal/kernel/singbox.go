@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ type SingboxEngine struct {
 	binaryPath string
 	configPath string
 	apiPort    int
+	apiSecret  string
 	cmd        *exec.Cmd
 	// statsEnabled 标记最近一次生成的配置是否启用了 clash_api；
 	// 未启用时跳过采集，避免反复请求失败刷屏
@@ -40,7 +42,20 @@ type SingboxEngine struct {
 
 // NewSingboxEngine 创建 sing-box 引擎实例
 func NewSingboxEngine(binaryPath, configPath string, apiPort int) *SingboxEngine {
+	// Reuse the persisted secret so a panel restart can still query the running core.
+	secret := rand.Text() + rand.Text()
+	var stored struct {
+		Experimental struct {
+			ClashAPI struct {
+				Secret string `json:"secret"`
+			} `json:"clash_api"`
+		} `json:"experimental"`
+	}
+	if data, err := os.ReadFile(configPath); err == nil && json.Unmarshal(data, &stored) == nil && len(stored.Experimental.ClashAPI.Secret) >= 32 {
+		secret = stored.Experimental.ClashAPI.Secret
+	}
 	return &SingboxEngine{
+		apiSecret:   secret,
 		binaryPath:  binaryPath,
 		configPath:  configPath,
 		apiPort:     apiPort,
@@ -125,7 +140,12 @@ func (e *SingboxEngine) GetTrafficStats() ([]TrafficStat, error) {
 		return nil, nil
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/connections", e.apiPort)
-	resp, err := e.httpClient.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+e.apiSecret)
+	resp, err := e.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("sing-box clash_api 请求失败: %w", err)
 	}
@@ -224,6 +244,9 @@ func (e *SingboxEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) (
 	// - 全局只有 1 人但该节点未关联 → 不能错误归属，必须留空。
 	inboundUserMap := make(map[string]string)
 	for _, node := range nodes {
+		if err := ValidateNodeSecurity(node, "singbox"); err != nil {
+			return nil, fmt.Errorf("节点 %s: %w", node.Tag, err)
+		}
 		inbound := e.buildInbound(node, users)
 		if inbound == nil {
 			continue
@@ -246,15 +269,24 @@ func (e *SingboxEngine) GenerateConfig(nodes []NodeConfig, users []UserConfig) (
 	cfg["inbounds"] = inbounds
 	cfg["outbounds"] = []interface{}{
 		map[string]interface{}{"type": "direct", "tag": "direct"},
-		map[string]interface{}{"type": "block", "tag": "block"},
 	}
 
+	cfg["dns"] = map[string]interface{}{"servers": []interface{}{map[string]interface{}{"type": "local", "tag": "local"}}}
+	cfg["route"] = map[string]interface{}{
+		"default_domain_resolver": "local",
+		"rules": []interface{}{
+			map[string]interface{}{"action": "resolve", "server": "local"},
+			map[string]interface{}{"ip_cidr": blockedDestinations(), "action": "reject"},
+		},
+		"final": "direct",
+	}
 	// 启用 clash_api：只要有 inbound 就开启，panel 通过 /connections 按用户采集流量
 	enableStats := e.apiPort > 0 && len(inbounds) > 0
 	if enableStats {
 		cfg["experimental"] = map[string]interface{}{
 			"clash_api": map[string]interface{}{
 				"external_controller": fmt.Sprintf("127.0.0.1:%d", e.apiPort),
+				"secret":              e.apiSecret,
 			},
 		}
 	}
@@ -286,7 +318,7 @@ func (e *SingboxEngine) buildInbound(node NodeConfig, users []UserConfig) map[st
 		inbound := map[string]interface{}{
 			"type":        "hysteria2",
 			"tag":         node.Tag,
-			"listen":      "::",
+			"listen":      getSettingStrAny(s, "::", "listen"),
 			"listen_port": node.Port,
 			"users":       userList,
 		}
@@ -353,7 +385,7 @@ func (e *SingboxEngine) buildInbound(node NodeConfig, users []UserConfig) map[st
 		inbound := map[string]interface{}{
 			"type":        "shadowsocks",
 			"tag":         node.Tag,
-			"listen":      "::",
+			"listen":      getSettingStrAny(s, "::", "listen"),
 			"listen_port": node.Port,
 			"method":      method,
 		}
@@ -379,7 +411,7 @@ func (e *SingboxEngine) buildInbound(node NodeConfig, users []UserConfig) map[st
 		inbound := map[string]interface{}{
 			"type":        node.Protocol,
 			"tag":         node.Tag,
-			"listen":      "::",
+			"listen":      getSettingStrAny(s, "::", "listen"),
 			"listen_port": node.Port,
 		}
 
@@ -452,7 +484,7 @@ func buildSingboxTransport(node NodeConfig) map[string]interface{} {
 
 // buildSingboxTLS 生成 sing-box inbound.tls 对象；security=none 或未配置返回 nil。
 func buildSingboxTLS(s map[string]interface{}) map[string]interface{} {
-	security := getSettingStr(s, "security", "none")
+	security := nodeSecurity(s)
 	switch security {
 	case "tls":
 		tls := map[string]interface{}{
@@ -519,7 +551,7 @@ func parseIntSafe(s string) (int, error) {
 
 // WriteConfig 将配置写入文件
 func (e *SingboxEngine) WriteConfig(data []byte) error {
-	return os.WriteFile(e.configPath, data, 0600)
+	return writePrivateConfig(e.configPath, data)
 }
 
 // ApplyConfig 事务式更新 sing-box 配置（写入 + Restart + 失败回滚）。详见接口定义。

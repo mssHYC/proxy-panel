@@ -132,13 +132,13 @@ func main() {
 	// 设置路由
 	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc, scheduler, fwSvc, auditSvc, subTokenSvc, cfg.Database.Path)
 
-	addr := fmt.Sprintf(":%d", cfg.Server.Port)
+	addr := cfg.Server.Address()
 	if cfg.Server.Domain != "" {
 		log.Printf("ProxyPanel 启动成功，域名: %s，监听 %s", cfg.Server.Domain, addr)
 	} else {
 		log.Printf("ProxyPanel 启动成功，监听 %s", addr)
 	}
-	if cfg.Server.TLS && cfg.Server.Cert != "" && cfg.Server.Key != "" {
+	if cfg.Server.TLS {
 		log.Printf("TLS 已启用，证书: %s", cfg.Server.Cert)
 		if err := r.RunTLS(addr, cfg.Server.Cert, cfg.Server.Key); err != nil {
 			log.Fatalf("服务器启动失败: %v", err)

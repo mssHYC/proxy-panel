@@ -225,6 +225,9 @@ func (g *SingboxGenerator) buildVLESS(node model.Node, user *model.User, s nodeS
 		if s.ALPN != "" {
 			tls["alpn"] = splitALPN(s.ALPN)
 		}
+		if s.Fingerprint != "" {
+			tls["utls"] = map[string]interface{}{"enabled": true, "fingerprint": s.Fingerprint}
+		}
 		ob["tls"] = tls
 	}
 
@@ -256,6 +259,9 @@ func (g *SingboxGenerator) buildVMess(node model.Node, user *model.User, s nodeS
 		if s.ALPN != "" {
 			tls["alpn"] = splitALPN(s.ALPN)
 		}
+		if s.Fingerprint != "" {
+			tls["utls"] = map[string]interface{}{"enabled": true, "fingerprint": s.Fingerprint}
+		}
 		ob["tls"] = tls
 	}
 
@@ -283,6 +289,9 @@ func (g *SingboxGenerator) buildTrojan(node model.Node, user *model.User, s node
 	}
 	if s.ALPN != "" {
 		tls["alpn"] = splitALPN(s.ALPN)
+	}
+	if s.Fingerprint != "" {
+		tls["utls"] = map[string]interface{}{"enabled": true, "fingerprint": s.Fingerprint}
 	}
 	ob["tls"] = tls
 

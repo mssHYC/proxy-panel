@@ -275,6 +275,11 @@ func (s *KernelSyncService) applyUserOp(op UserKernelOp, kind string) error {
 		if n.kernelType != "xray" {
 			return s.syncLocked()
 		}
+		// The hot-add interface cannot carry VLESS flow. Regenerate Vision
+		// nodes so a newly added user matches the exported client settings.
+		if flow, _ := n.settings["flow"].(string); kind == "add" && flow != "" {
+			return s.syncLocked()
+		}
 	}
 
 	eng, err := s.mgr.Get("xray")

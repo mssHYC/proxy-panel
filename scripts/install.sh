@@ -239,7 +239,7 @@ setup_tls() {
     echo "  [3] DNSPod (腾讯云) DNS API 申请"
     echo "  [4] Aliyun (阿里云) DNS API 申请"
     echo "  [5] 自定义证书 (上传已有证书)"
-    echo "  [6] 不使用 TLS (纯 IP 直连)"
+    echo "  [6] 不使用 TLS (仅本机，通过 SSH 隧道访问)"
     read -p "请选择 [6]: " TLS_MODE
     TLS_MODE=${TLS_MODE:-6}
 
@@ -466,22 +466,16 @@ setup_tls() {
             ;;
 
         6)
-            info "不使用 TLS，面板将以 HTTP 模式运行"
+            info "不使用 TLS，面板将仅在本机以 HTTP 模式运行"
             ;;
         *)
             error "无效的选项: $TLS_MODE"
             ;;
     esac
 
-    # 验证: 如果启用了 TLS 但证书文件不存在，回退到 HTTP 模式
+    # TLS 配置失败时终止，不把管理入口降级到明文 HTTP。
     if [[ "$TLS_ENABLED" == "true" && ( ! -f "$CERT_PATH" || ! -f "$KEY_PATH" ) ]]; then
-        warn "证书文件不存在，回退到 HTTP 模式"
-        warn "  期望证书: $CERT_PATH"
-        warn "  期望私钥: $KEY_PATH"
-        warn "安装完成后可通过 proxy-panel cert setup 重新配置证书"
-        TLS_ENABLED="false"
-        CERT_PATH=""
-        KEY_PATH=""
+        error "TLS 证书或私钥不存在，请修正路径后重试: $CERT_PATH / $KEY_PATH"
     fi
 }
 
@@ -722,6 +716,8 @@ generate_config() {
 
     cat > "$CONFIG_FILE" <<CFGEOF
 server:
+  listen: "127.0.0.1"
+  metrics_token: ""
   port: ${PANEL_PORT}
   tls: ${TLS_ENABLED}
   cert: "${CERT_PATH}"
@@ -1000,28 +996,20 @@ setup_firewall() {
                 detected="ufw"
                 info "ufw 安装成功"
             else
-                warn "ufw 自动安装失败，请手动执行: apt-get install -y ufw；本次将跳过，端口 ${PANEL_PORT} 请手动放行"
+                warn "ufw 自动安装失败，请手动执行: apt-get install -y ufw；本次跳过节点端口同步"
                 FIREWALL_ENABLE="false"
                 FIREWALL_BACKEND=""
                 return
             fi
         else
-            warn "未检测到防火墙工具，请手动放行端口 ${PANEL_PORT}"
+            warn "未检测到防火墙工具，请手动管理需要公开的节点端口"
             FIREWALL_ENABLE="false"
             FIREWALL_BACKEND=""
             return
         fi
     fi
 
-    # 放行面板端口（保持原有逻辑）
-    if [[ "$detected" == "ufw" ]]; then
-        ufw allow "${PANEL_PORT}/tcp" >/dev/null 2>&1
-        info "ufw 已放行端口 ${PANEL_PORT}"
-    else
-        firewall-cmd --permanent --add-port="${PANEL_PORT}/tcp" >/dev/null 2>&1
-        firewall-cmd --reload >/dev/null 2>&1
-        info "firewalld 已放行端口 ${PANEL_PORT}"
-    fi
+    # 管理入口默认只监听本机，不自动开放面板端口。
 
     # 重装场景：若旧 config.yaml 已显式启用防火墙同步，直接继承，不再追问
     local prev_enable=""
@@ -1181,16 +1169,7 @@ firewall_enable() {
         fi
     fi
 
-    # 放行面板端口
     parse_firewall_conf
-    local panel_port
-    panel_port=$(awk '/^server:/{flag=1;next} /^[a-z]/{flag=0} flag && /port:/{print $2; exit}' "$CONFIG_FILE" 2>/dev/null)
-    : "${panel_port:=8080}"
-    if [[ "$detected" == "ufw" ]]; then
-        ufw allow "${panel_port}/tcp" >/dev/null 2>&1
-    else
-        firewall-cmd --permanent --add-port="${panel_port}/tcp" >/dev/null 2>&1
-    fi
 
     # 写回 config.yaml
     rewrite_firewall_section "true" "$detected"
@@ -1304,7 +1283,10 @@ print_summary() {
     echo -e "${GREEN} ProxyPanel 安装完成!${NC}"
     echo "============================================"
     echo ""
-    echo "  访问地址: ${protocol}://${access_host}:${PANEL_PORT}"
+    echo "  本机访问: ${protocol}://127.0.0.1:${PANEL_PORT}"
+    echo "  SSH 隧道: ssh -N -L ${PANEL_PORT}:127.0.0.1:${PANEL_PORT} root@${ip}"
+    echo "  新安装默认仅监听本机；公网管理/订阅请配置独立 HTTPS 反代和访问控制。"
+    echo "  现有安装请核对 config.yaml 的 server.listen；TLS/域名绑定需用对应域名访问。"
     if [[ -n "$DOMAIN" ]]; then
         echo "  域名绑定: ${DOMAIN} (IP 直接访问已禁止)"
     fi
@@ -1812,13 +1794,7 @@ do_port() {
     sed -i "s|^  port:.*|  port: ${new_port}|" "$CONFIG_FILE"
     info "config.yaml 端口已更新: ${cur_port} → ${new_port}"
 
-    # 尽力放行新端口（本机 ufw/firewalld；云安全组需另行放行）
-    if command -v ufw &>/dev/null; then
-        ufw allow "${new_port}/tcp" >/dev/null 2>&1 && info "ufw 已放行 ${new_port}/tcp"
-    elif command -v firewall-cmd &>/dev/null; then
-        firewall-cmd --permanent --add-port="${new_port}/tcp" >/dev/null 2>&1 &&
-            firewall-cmd --reload >/dev/null 2>&1 && info "firewalld 已放行 ${new_port}/tcp"
-    fi
+    # 更换管理端口不自动扩大公网防火墙开放范围。
 
     # 重启面板生效
     systemctl restart "${SERVICE_NAME}" 2>/dev/null && info "ProxyPanel 已重启" \
@@ -1826,7 +1802,7 @@ do_port() {
 
     echo ""
     info "✅ 面板端口已改为 ${new_port}"
-    warn "云服务商安全组需另行放行 ${new_port}/tcp；旧端口 ${cur_port} 如不再使用可自行回收"
+    warn "请同步更新 SSH 隧道或受保护的反代；旧端口 ${cur_port} 如不再使用可自行回收"
     warn "若用 Cloudflare 橙色云代理，HTTPS 仅支持 443/2053/2083/2087/2096/8443 端口"
 }
 
@@ -1848,7 +1824,7 @@ show_help() {
     echo -e "${GREEN}[运维]${NC}"
     echo "  status             查看服务状态"
     echo "  restart            重启所有服务"
-    echo "  port [新端口]      修改面板端口 (改 config + 放行防火墙 + 重启)"
+    echo "  port [新端口]      修改面板端口 (改 config + 重启)"
     echo "  logs [svc] [行数]  查看日志"
     echo "  backup             备份配置和数据"
     echo "  restore [文件]     从备份恢复"

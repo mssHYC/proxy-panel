@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -67,7 +68,11 @@ func (h *NodeHandler) Create(c *gin.Context) {
 
 	node, err := h.svc.Create(&req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		status := http.StatusInternalServerError
+		if errors.Is(err, service.ErrInvalidNodeSettings) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -93,7 +98,11 @@ func (h *NodeHandler) Update(c *gin.Context) {
 
 	node, err := h.svc.Update(id, &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		status := http.StatusInternalServerError
+		if errors.Is(err, service.ErrInvalidNodeSettings) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 	if node == nil {

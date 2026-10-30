@@ -25,14 +25,14 @@ func applyConfigWithRollback(configPath string, restart func() error, data []byt
 		backup = old
 		hadBackup = true
 	}
-	if err := os.WriteFile(configPath, data, 0600); err != nil {
+	if err := writePrivateConfig(configPath, data); err != nil {
 		return fmt.Errorf("写入配置失败: %w", err)
 	}
 	if err := restart(); err != nil {
 		if !hadBackup {
 			return fmt.Errorf("重启失败（无旧配置可回滚）: %w", err)
 		}
-		if rbErr := os.WriteFile(configPath, backup, 0600); rbErr != nil {
+		if rbErr := writePrivateConfig(configPath, backup); rbErr != nil {
 			return fmt.Errorf("重启失败且回滚写入也失败: restart=%v, rollback=%w", err, rbErr)
 		}
 		// 尝试用旧配置重启；失败也不再覆盖原始错误信息。
@@ -139,4 +139,22 @@ type Engine interface {
 	// Restart 失败时把旧配置回写并尝试再次 Restart（best-effort），返回带回滚标记的错误。
 	// 与 WriteConfig + Restart 的差别在于失败语义——单独失败的写入或重启不会留下损坏的运行态。
 	ApplyConfig(data []byte) error
+}
+
+// Restrict an existing file before writing credentials, too: WriteFile's mode
+// argument only applies when creating a new file.
+func writePrivateConfig(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := f.Chmod(0600); err != nil {
+		return err
+	}
+	if err := f.Truncate(0); err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	return err
 }
