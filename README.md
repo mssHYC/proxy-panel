@@ -33,11 +33,15 @@ curl -fsSL https://raw.githubusercontent.com/mssHYC/proxy-panel/main/scripts/ins
 
 系统检测 → 依赖安装 → 内核下载 → 交互配置 → 服务启动，全程自动。
 
+面板默认仅监听本机。升级前请阅读[管理接口隔离与 443 网站部署](deploy/README.md)，包括旧公网订阅迁移、SSH 隧道、TLS 网站回落和验收步骤。
+
 ### Docker
 
 ```bash
+cp config.example.yaml config.yaml
+# 修改默认密码和 JWT 密钥；容器内设置 server.listen: "0.0.0.0"
 docker compose up -d
-# 访问 http://<host>:8080
+# 宿主机访问 http://127.0.0.1:8080；远程通过 SSH 隧道或受保护的反代
 ```
 
 ### 本地开发

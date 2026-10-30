@@ -223,14 +223,17 @@
                 @update:model-value="(v) => (form.fingerprint = String(v))"
               />
             </Field>
-            <Field v-if="form.protocol === 'vless'" label="Flow">
-              <Select
-                :model-value="form.flow || ''"
-                :options="[{label:'无',value:''},{label:'xtls-rprx-vision',value:'xtls-rprx-vision'}]"
-                @update:model-value="(v) => (form.flow = String(v))"
-              />
-            </Field>
           </template>
+          <Field v-if="canUseVision" label="Flow" hint="启用后需更新客户端订阅">
+            <Select
+              :model-value="form.flow"
+              :options="[{label:'无',value:''},{label:'xtls-rprx-vision',value:'xtls-rprx-vision'}]"
+              @update:model-value="(v) => (form.flow = String(v))"
+            />
+          </Field>
+          <Field v-if="canUseFallback" class="nf-col-2" label="网站回落端口" hint="留空关闭。先部署本机静态网站（默认 8081），仅使用 http/1.1；不要填面板或管理接口端口。">
+            <Input v-model="form.fallback_port" type="number" placeholder="8081" />
+          </Field>
         </div>
       </section>
 
@@ -400,12 +403,14 @@ const availableSecurities = computed(() => protocolSecurityMap[form.protocol] ||
 const availableKernels = computed(() => protocolKernelMap[form.protocol] || ['xray'])
 const hasTransport = computed(() => availableTransports.value.length > 0)
 const hasSecurity = computed(() => availableSecurities.value.length > 0)
+const canUseVision = computed(() => form.protocol === 'vless' && form.transport === 'tcp' && ['tls', 'reality'].includes(form.security))
+const canUseFallback = computed(() => form.kernel_type === 'xray' && ['vless', 'trojan'].includes(form.protocol) && form.transport === 'tcp' && form.security === 'tls')
 
 const defaultForm = () => ({
   name: '', listen: '', host: '', port: 443,
   protocol: 'vless', transport: 'tcp', kernel_type: 'xray', sort_order: 0,
   security: 'none', sni: '', fingerprint: 'chrome', alpn: [] as string[],
-  allow_insecure: false, cert_path: '', key_path: '',
+  allow_insecure: false, cert_path: '', key_path: '', fallback_port: '',
   reality_dest: '', reality_private_key: '', reality_public_key: '', reality_short_id: '', flow: '',
   ws_path: '/', ws_host: '',
   grpc_service_name: '', grpc_multi_mode: false,
@@ -445,7 +450,11 @@ function formToSettings(): string {
     if (form.reality_public_key) s.public_key = form.reality_public_key
     if (form.reality_short_id) { s.short_id = form.reality_short_id; s.short_ids = form.reality_short_id.split(',').map(x => x.trim()) }
     if (form.fingerprint) s.fingerprint = form.fingerprint
-    if (form.flow) s.flow = form.flow
+  }
+  if (canUseVision.value && form.flow) s.flow = form.flow
+  if (canUseFallback.value && form.fallback_port !== '') {
+    s.fallback_port = Number(form.fallback_port)
+    if (form.alpn.length === 0) s.alpn = ['http/1.1']
   }
   if (form.transport === 'ws' || form.transport === 'httpupgrade') {
     if (form.ws_path) s.path = form.ws_path
@@ -478,7 +487,9 @@ function settingsToForm(settingsStr: string) {
   form.sni = s.sni || s.serverName || ''
   form.allow_insecure = s.allow_insecure || s.skip_cert_verify || false
   form.fingerprint = s.fingerprint || s.fp || 'chrome'
-  form.alpn = s.alpn || []
+  form.alpn = Array.isArray(s.alpn) ? s.alpn : (typeof s.alpn === 'string' ? s.alpn.split(',').map(x => x.trim()).filter(Boolean) : [])
+  form.flow = s.flow || ''
+  form.fallback_port = s.fallback_port ? String(s.fallback_port) : ''
   form.cert_path = s.cert_path || s.certPath || ''
   form.key_path = s.key_path || s.keyPath || ''
   form.listen = s.listen || ''
@@ -488,7 +499,6 @@ function settingsToForm(settingsStr: string) {
     form.reality_private_key = s.private_key || s.privateKey || ''
     form.reality_public_key = s.public_key || s.publicKey || ''
     form.reality_short_id = s.short_id || (Array.isArray(s.short_ids) ? s.short_ids.join(',') : '') || ''
-    form.flow = s.flow || ''
   } else if (s.tls || s.security === 'tls') {
     form.security = 'tls'
   } else {

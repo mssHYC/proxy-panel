@@ -2,13 +2,32 @@ package service
 
 import (
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"proxy-panel/internal/database"
+	"proxy-panel/internal/kernel"
 	"proxy-panel/internal/model"
 	"proxy-panel/internal/service/firewall"
 )
+
+var ErrInvalidNodeSettings = errors.New("节点设置无效")
+
+func validateNodeSettings(protocol, transport, engine string, port int, settings string) error {
+	var values map[string]interface{}
+	if settings == "" {
+		settings = "{}"
+	}
+	if err := json.Unmarshal([]byte(settings), &values); err != nil || values == nil {
+		return fmt.Errorf("%w: settings 必须是 JSON 对象", ErrInvalidNodeSettings)
+	}
+	if err := kernel.ValidateNodeSecurity(kernel.NodeConfig{Protocol: protocol, Transport: transport, Port: port, Settings: values}, engine); err != nil {
+		return fmt.Errorf("%w: %s", ErrInvalidNodeSettings, err)
+	}
+	return nil
+}
 
 // CreateNodeReq 创建节点请求
 type CreateNodeReq struct {
@@ -125,6 +144,10 @@ func (s *NodeService) Create(req *CreateNodeReq) (*model.Node, error) {
 		settings = "{}"
 	}
 
+	if err := validateNodeSettings(req.Protocol, transport, kernelType, req.Port, settings); err != nil {
+		return nil, err
+	}
+
 	result, err := s.db.Exec(`INSERT INTO nodes (name, host, port, protocol, transport,
 		kernel_type, settings, enable, sort_order, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`,
@@ -153,6 +176,28 @@ func (s *NodeService) Update(id int64, req *UpdateNodeReq) (*model.Node, error) 
 		return nil, nil
 	}
 
+	candidate := *old
+	if req.Protocol != nil {
+		candidate.Protocol = *req.Protocol
+	}
+	if req.Transport != nil {
+		candidate.Transport = *req.Transport
+	}
+	if req.KernelType != nil {
+		candidate.KernelType = *req.KernelType
+	}
+	if req.Port != nil {
+		candidate.Port = *req.Port
+	}
+	if req.Settings != nil {
+		candidate.Settings = *req.Settings
+	}
+	// Allow disabling legacy invalid nodes without first repairing their settings.
+	if req.Protocol != nil || req.Transport != nil || req.KernelType != nil || req.Port != nil || req.Settings != nil || (req.Enable != nil && *req.Enable) {
+		if err := validateNodeSettings(candidate.Protocol, candidate.Transport, candidate.KernelType, candidate.Port, candidate.Settings); err != nil {
+			return nil, err
+		}
+	}
 	sets := []string{}
 	args := []interface{}{}
 

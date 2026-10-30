@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="关于阅读、散步和日常观察的个人笔记。">
+  <title>山间手记</title>
+  <style>
+    :root{color-scheme:light;--ink:#28392e;--muted:#687267;--paper:#f7f5ef;--line:#d7ddcf}
+    *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.9 system-ui,sans-serif}
+    main{max-width:940px;margin:auto;padding:48px 28px 32px}header{display:flex;justify-content:space-between;align-items:center;padding-bottom:24px;border-bottom:1px solid var(--line)}
+    .wordmark{font-weight:650;letter-spacing:.18em}nav{display:flex;gap:24px}a{color:inherit;text-underline-offset:5px}nav a{text-decoration:none;font-size:14px}
+    .intro{padding:75px 0 60px;max-width:670px}.eyebrow{font-size:12px;letter-spacing:.2em;color:var(--muted)}h1{font:400 clamp(36px,7vw,62px)/1.35 Georgia,serif;margin:18px 0 22px;letter-spacing:.03em}
+    .intro p{color:var(--muted);max-width:510px}h2{font-size:14px;font-weight:500;letter-spacing:.12em;padding:16px 0;border-top:1px solid var(--line)}
+    article{display:grid;grid-template-columns:110px 1fr;gap:24px;padding:24px 0;border-bottom:1px solid var(--line)}.label{font-size:13px;color:var(--muted);padding-top:5px}h3{font:400 24px/1.5 Georgia,serif;margin:0 0 10px}article p{margin:0;max-width:620px;color:var(--muted);font-size:16px}
+    #about{padding:48px 0}#about p{max-width:680px;color:var(--muted);font-size:15px}footer{border-top:1px solid var(--line);padding-top:20px;color:var(--muted);font-size:12px;letter-spacing:.1em}
+    @media(max-width:540px){main{padding:28px 22px}.intro{padding:48px 0 40px}article{grid-template-columns:1fr;gap:6px}nav{gap:16px}}
+  </style>
+</head>
+<body>
+<main>
+  <header><span class="wordmark">山间手记</span><nav aria-label="主导航"><a href="#notes">笔记</a><a href="#about">关于</a></nav></header>
+  <section class="intro"><span class="eyebrow">FIELD NOTES · 日常观察</span><h1>慢一点，<br>看见沿途的风景。</h1><p>把读过的书、走过的小路，以及那些值得停留片刻的日常，留在这里。</p></section>
+  <section id="notes" aria-labelledby="notes-title"><h2 id="notes-title">最近的笔记</h2>
+    <article><span class="label">01 / 散步</span><div><h3>没有目的地的下午</h3><p>沿着熟悉的街道多走一个路口，风景就有了变化。树影挪到墙边，街角的花店换了一束花。散步的好处，也许就是重新认识那些习以为常的地方。</p></div></article>
+    <article><span class="label">02 / 阅读</span><div><h3>给书页留一点空白</h3><p>有时候，读完一章比读完一本更让人满足。合上书，让一个句子陪着自己过完一天，再回头看，它会生出新的意思。</p></div></article>
+    <article><span class="label">03 / 日常</span><div><h3>窗边的一小块绿色</h3><p>照顾植物是一件慢事。观察叶子的朝向，等土壤变干，再浇一点水。没有太多需要记录的变化，但每天都能找到一个新的细节。</p></div></article>
+  </section>
+  <section id="about"><h2>关于这里</h2><p>这是一处安静的个人笔记空间。不追赶更新，只记录一些想要记住的时刻。谢谢你的停留。</p></section>
+  <footer>山间手记 &nbsp; / &nbsp; 保持好奇，慢慢记录。</footer>
+</main>
+</body>
+</html>

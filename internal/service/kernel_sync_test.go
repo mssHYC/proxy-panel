@@ -27,10 +27,10 @@ type fakeEngine struct {
 	lastCfg []byte
 }
 
-func (e *fakeEngine) Name() string                { return e.name }
-func (e *fakeEngine) Start() error                { e.running.Store(true); return nil }
-func (e *fakeEngine) Stop() error                 { e.running.Store(false); return nil }
-func (e *fakeEngine) IsRunning() bool             { return e.running.Load() }
+func (e *fakeEngine) Name() string    { return e.name }
+func (e *fakeEngine) Start() error    { e.running.Store(true); return nil }
+func (e *fakeEngine) Stop() error     { e.running.Store(false); return nil }
+func (e *fakeEngine) IsRunning() bool { return e.running.Load() }
 func (e *fakeEngine) GetTrafficStats() ([]kernel.TrafficStat, error) {
 	return nil, nil
 }
@@ -272,5 +272,24 @@ func TestSync_SerializesConcurrentTriggers(t *testing.T) {
 	wg.Wait()
 	if got := xray.applyCalls.Load(); got != int32(N) {
 		t.Errorf("并发 N 次 Sync 应串行执行 N 次 ApplyConfig，got %d", got)
+	}
+}
+
+func TestHotAddVisionUserKeepsFlow(t *testing.T) {
+	db := openSyncTestDB(t)
+	mgr := kernel.NewManager()
+	xray := &fakeEngine{name: "xray"}
+	xray.Start()
+	mgr.Register(xray)
+	id := seedNode(t, db, "xray", "vless")
+	if _, err := db.Exec(`UPDATE nodes SET settings = ? WHERE id = ?`, `{"security":"tls","flow":"xtls-rprx-vision"}`, id); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewKernelSyncService(db, mgr)
+	if err := svc.HotAddUser(UserKernelOp{UUID: "u1", Username: "alice", Protocol: "vless", NodeIDs: []int64{id}}); err != nil {
+		t.Fatal(err)
+	}
+	if xray.applyCalls.Load() != 1 || len(xray.addOps) != 0 {
+		t.Fatal("Vision user was added without flow")
 	}
 }

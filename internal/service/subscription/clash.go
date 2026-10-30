@@ -198,10 +198,10 @@ const clashGlobalPreamble = `log-level: info
 mode: rule
 ipv6: true
 mixed-port: 7890
-allow-lan: true
-bind-address: "*"
+allow-lan: false
+bind-address: "127.0.0.1"
 find-process-mode: strict
-external-controller: 0.0.0.0:9090
+external-controller: 127.0.0.1:9090
 
 geox-url:
   geoip: "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat"
@@ -282,6 +282,17 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 				b.WriteString(fmt.Sprintf("    servername: %s\n", s.SNI))
 			}
 		}
+		if s.Security != "reality" && (s.TLS || node.Protocol == "trojan") {
+			if s.Fingerprint != "" {
+				b.WriteString(fmt.Sprintf("    client-fingerprint: %q\n", s.Fingerprint))
+			}
+			if s.ALPN != "" {
+				b.WriteString("    alpn:\n")
+				for _, alpn := range splitALPN(s.ALPN) {
+					b.WriteString(fmt.Sprintf("      - %q\n", alpn))
+				}
+			}
+		}
 		g.writeTransportOpts(&b, node, s)
 
 	case "vmess":
@@ -301,6 +312,17 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 				b.WriteString(fmt.Sprintf("    servername: %s\n", s.SNI))
 			}
 		}
+		if s.Security != "reality" && (s.TLS || node.Protocol == "trojan") {
+			if s.Fingerprint != "" {
+				b.WriteString(fmt.Sprintf("    client-fingerprint: %q\n", s.Fingerprint))
+			}
+			if s.ALPN != "" {
+				b.WriteString("    alpn:\n")
+				for _, alpn := range splitALPN(s.ALPN) {
+					b.WriteString(fmt.Sprintf("      - %q\n", alpn))
+				}
+			}
+		}
 		g.writeTransportOpts(&b, node, s)
 
 	case "trojan":
@@ -317,6 +339,17 @@ func (g *ClashGenerator) buildProxy(node model.Node, user *model.User) string {
 		}
 		if n := clashNetworkName(node.Transport); n != "" && n != "tcp" {
 			b.WriteString(fmt.Sprintf("    network: %s\n", n))
+		}
+		if s.Security != "reality" && (s.TLS || node.Protocol == "trojan") {
+			if s.Fingerprint != "" {
+				b.WriteString(fmt.Sprintf("    client-fingerprint: %q\n", s.Fingerprint))
+			}
+			if s.ALPN != "" {
+				b.WriteString("    alpn:\n")
+				for _, alpn := range splitALPN(s.ALPN) {
+					b.WriteString(fmt.Sprintf("      - %q\n", alpn))
+				}
+			}
 		}
 		g.writeTransportOpts(&b, node, s)
 

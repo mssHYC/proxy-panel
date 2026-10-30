@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 
 	"gopkg.in/yaml.v3"
 )
@@ -24,11 +26,13 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port   int    `yaml:"port"`
-	TLS    bool   `yaml:"tls"`
-	Cert   string `yaml:"cert"`
-	Key    string `yaml:"key"`
-	Domain string `yaml:"domain"`
+	Listen       string `yaml:"listen"`
+	MetricsToken string `yaml:"metrics_token"`
+	Port         int    `yaml:"port"`
+	TLS          bool   `yaml:"tls"`
+	Cert         string `yaml:"cert"`
+	Key          string `yaml:"key"`
+	Domain       string `yaml:"domain"`
 	// 反代部署时的可信上游列表；未配置时禁用 X-Forwarded-For 解析（仅信任直连 RemoteAddr）
 	// 例如：["127.0.0.1", "10.0.0.0/8"]
 	TrustedProxies []string `yaml:"trusted_proxies"`
@@ -90,7 +94,7 @@ func Load(path string) (*Config, error) {
 	}
 	// 设置默认值
 	cfg := &Config{
-		Server:   ServerConfig{Port: 8080},
+		Server:   ServerConfig{Port: 8080, Listen: "127.0.0.1"},
 		Database: DatabaseConfig{Path: "data/panel.db"},
 		Auth:     AuthConfig{TokenExpiry: 24},
 		Traffic:  TrafficConfig{CollectInterval: 60, WarnPercent: 80, ResetCron: "0 0 1 * *"},
@@ -105,6 +109,16 @@ func Load(path string) (*Config, error) {
 // Validate 校验关键安全字段是否已脱离示例默认值
 // 任一默认凭证/密钥命中即拒绝启动，避免生产裸奔
 func (c *Config) Validate() error {
+	if c.Server.Listen != "" && net.ParseIP(c.Server.Listen) == nil {
+		return fmt.Errorf("server.listen 必须是 IP 地址")
+	}
+	if c.Server.TLS && (c.Server.Cert == "" || c.Server.Key == "") {
+		return fmt.Errorf("启用 TLS 必须提供 server.cert 和 server.key；不会降级为 HTTP")
+	}
+	if c.Server.MetricsToken != "" && len(c.Server.MetricsToken) < 32 {
+		return fmt.Errorf("server.metrics_token 必须至少 32 字节")
+	}
+
 	if c.Auth.JWTSecret == "" || c.Auth.JWTSecret == defaultJWTSecret {
 		return fmt.Errorf("auth.jwt_secret 仍为默认占位值，请修改 config.yaml 设为 32+ 字节的随机字符串后重启")
 	}
@@ -115,4 +129,13 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("auth.admin_pass 仍为默认占位值 %q，请修改 config.yaml 设置强密码后重启", defaultAdminPass)
 	}
 	return nil
+}
+
+// Address defaults to loopback even for a manually constructed config.
+func (s ServerConfig) Address() string {
+	listen := s.Listen
+	if listen == "" {
+		listen = "127.0.0.1"
+	}
+	return net.JoinHostPort(listen, strconv.Itoa(s.Port))
 }
