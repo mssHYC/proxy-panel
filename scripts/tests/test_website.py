@@ -457,6 +457,7 @@ class WebsiteTests(unittest.TestCase):
 
         # Isolated high ports: no production listeners or system services are changed.
         core = json.loads((stage / 'xray.json').read_text())
+        core['log'] = {'loglevel': 'debug'}
         for inbound, route in zip(core['inbounds'], plan['routes']):
             inbound['port'] = route['port'] = unused_port()
         server_config = self.root / 'server.json'
@@ -476,32 +477,23 @@ class WebsiteTests(unittest.TestCase):
                 conn.sendall(b'GET / HTTP/1.1\r\nHost: cdn.example.com\r\nConnection: close\r\n\r\n')
                 self.assertIn(b'website-ok', conn.makefile('rb').read())
 
-        class Target(BaseHTTPRequestHandler):
-            def log_message(self, *args): pass
-            def do_GET(self):
-                self.send_response(200)
-                self.end_headers()
-                self.wfile.write(b'vmess-data-ok')
-
-        target = ThreadingHTTPServer(('127.0.0.1', 0), Target)
-        threading.Thread(target=target.serve_forever, daemon=True).start()
-        self.addCleanup(target.server_close)
-        self.addCleanup(target.shutdown)
         proxy_port = unused_port()
         stream = copy.deepcopy(core['inbounds'][1]['streamSettings'])
         stream['tlsSettings'] = {'serverName': 'cdn.example.com', 'alpn': ['http/1.1'],
             'disableSystemRoot': True, 'certificates': [{'certificateFile': str(self.cert), 'usage': 'verify'}]}
-        client = {'inbounds': [{'listen': '127.0.0.1', 'port': proxy_port, 'protocol': 'http'}],
+        client = {'log': {'loglevel': 'debug'}, 'inbounds': [{'listen': '127.0.0.1', 'port': proxy_port, 'protocol': 'http'}],
             'outbounds': [{'protocol': 'vmess', 'settings': {'vnext': [{'address': '127.0.0.1', 'port': public_port,
                 'users': [{'id': core['inbounds'][1]['settings']['clients'][0]['id'], 'security': 'auto'}]}]},
                 'streamSettings': stream}]}
         client_config = self.root / 'client.json'
         client_config.write_text(json.dumps(client))
         start([xray, 'run', '-config', str(client_config)], proxy_port, 'client')
-        response = subprocess.run(['curl', '-fsS', '--max-time', '10', '--noproxy', '',
-            '--proxy', f'http://127.0.0.1:{proxy_port}', f'http://127.0.0.1:{target.server_port}/'], capture_output=True, text=True)
-        self.assertEqual(response.returncode, 0, response.stderr + (self.root / 'client.log').read_text() + (self.root / 'nginx.log').read_text())
-        self.assertEqual(response.stdout, 'vmess-data-ok')
+        # The pinned Xray freedom outbound rejects local targets, even without panel routing rules.
+        # Use the same external positive control as the core integration suite.
+        response = subprocess.run(['curl', '-fsS', '--max-time', '12', '--noproxy', '',
+            '--proxy', f'http://127.0.0.1:{proxy_port}', 'https://1.1.1.1/cdn-cgi/trace'], capture_output=True, text=True)
+        self.assertEqual(response.returncode, 0, response.stderr + (self.root / 'client.log').read_text() + (self.root / 'server.log').read_text() + (self.root / 'nginx.log').read_text())
+        self.assertIn('ip=', response.stdout)
 
 
 class WebsiteDependencyTests(unittest.TestCase):
