@@ -1,14 +1,59 @@
 """Fault injection for the real installer flow; no root/network/services needed."""
 import json
 import os
+import pty
+import select
 from pathlib import Path
 import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 
 INSTALLER = Path(__file__).resolve().parents[1] / "install.sh"
+
+class PromptTests(unittest.TestCase):
+    def test_no_controlling_terminal_uses_defaults_without_reading_stdin(self):
+        script = '''source "$INSTALLER"
+for prompt in Xray Singbox Website; do
+ if confirm "$prompt"; then exit 4; fi
+done
+confirm_default_yes default_yes || exit 5
+read -r leftover
+[[ "$leftover" == y ]] || exit 6
+'''
+        result = subprocess.run(['bash', '-c', script], env={**os.environ, 'INSTALLER': str(INSTALLER)},
+                                input='y\n', text=True, capture_output=True, start_new_session=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stderr, '')
+        self.assertEqual(result.stdout.count('非交互环境，采用默认值'), 4)
+
+    def test_pipe_install_still_reads_answer_from_controlling_terminal(self):
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.execve('/bin/bash', ['bash', '-c', '''source "$INSTALLER"
+printf 'n\\n' | { if confirm terminal; then echo ANSWER=yes; else echo ANSWER=no; fi; }
+'''], {**os.environ, 'INSTALLER': str(INSTALLER)})
+        output = b''
+        answered = False
+        try:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if not select.select([fd], [], [], .1)[0]: continue
+                try: chunk = os.read(fd, 4096)
+                except OSError: break
+                if not chunk: break
+                output += chunk
+                if b'[y/N]:' in output and not answered:
+                    os.write(fd, b'y\n')
+                    answered = True
+                if b'ANSWER=' in output: break
+            self.assertIn(b'ANSWER=yes', output)
+            self.assertNotIn('非交互环境'.encode(), output)
+        finally:
+            os.close(fd)
+            os.waitpid(pid, 0)
 
 class UpdateTests(unittest.TestCase):
     def run_case(self, failure="", active=True, without_cmp=False):
@@ -25,7 +70,7 @@ class UpdateTests(unittest.TestCase):
             candidate = root / "candidate"
             candidate.write_text('''#!/bin/bash
 case "$1" in
--compatibility) echo '{"xray":"v26.10.29","sing-box":"v1.14.4"}'; exit;;
+-compatibility) echo '{"xray":"v26.10.31","sing-box":"v1.14.4"}'; exit;;
 esac
 for ((i=1;i<=$#;i++)); do
  if [[ "${!i}" == -check-update ]]; then

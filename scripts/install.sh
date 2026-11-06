@@ -80,12 +80,13 @@ detect_arch() {
 _read_answer() {
     local msg="$1"
     local __var="$2"
-    if [[ -r /dev/tty ]]; then
-        read -r -p "${msg}" "${__var}" </dev/tty
+    printf -v "$__var" '%s' ''
+    # The device can be readable even when this process has no controlling TTY.
+    if (: </dev/tty) 2>/dev/null; then
+        read -r -p "${msg}" "${__var}" </dev/tty || true
     else
         # 非交互场景：打印提示但立即返回空串（走默认分支）
         printf '%s' "${msg}"
-        eval "${__var}=''"
         echo "(非交互环境，采用默认值)"
     fi
 }
@@ -1347,7 +1348,7 @@ do_install() {
 website_tool() {
     python3 - "$CONFIG_FILE" "$INSTALL_DIR" "$WEBSITE_CONFIG_DIR" "$WEBSITE_ROOT" "$WEBSITE_UNIT_DIR" "$@" <<'PY_WEBSITE'
 """Embedded by install.sh; prepare is read-only, apply runs while services stop."""
-from contextlib import closing
+from contextlib import closing, ExitStack
 import ipaddress
 import json
 import os
@@ -1432,7 +1433,30 @@ def select_listens(original, available):
 def nginx_config(plan, root):
     listen = '\n'.join('        listen ' + address + ' ssl;' for address in plan['listens'])
     default_listen = listen.replace(' ssl;', ' ssl default_server;')
-    host = quote(plan['host']) if plan['host'] else '$http_host'
+    locations = ''
+    if plan.get('mode') != 'standalone':
+        host = quote(plan['host']) if plan['host'] else '$http_host'
+        locations = f'''        location = {quote(plan['path'])} {{
+            error_page 418 = @proxy_panel_node;
+            if ($http_upgrade != "") {{ return 418; }}
+            try_files $uri $uri/ =404;
+        }}
+        location @proxy_panel_node {{
+            proxy_pass https://127.0.0.1:443;
+            proxy_http_version 1.1;
+            proxy_set_header Host {host};
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_ssl_server_name on;
+            proxy_ssl_name {quote(plan['sni'])};
+            proxy_ssl_verify on;
+            proxy_ssl_verify_depth 5;
+            proxy_ssl_trusted_certificate {quote(plan['ca'])};
+            proxy_buffering off;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }}
+'''
     return f'''pid /run/proxy-panel-web.pid;
 error_log stderr warn;
 worker_processes auto;
@@ -1456,27 +1480,7 @@ http {{
         root {quote(root)};
         index index.html;
         location / {{ try_files $uri $uri/ =404; }}
-        location = {quote(plan['path'])} {{
-            error_page 418 = @proxy_panel_node;
-            if ($http_upgrade != "") {{ return 418; }}
-            try_files $uri $uri/ =404;
-        }}
-        location @proxy_panel_node {{
-            proxy_pass https://127.0.0.1:443;
-            proxy_http_version 1.1;
-            proxy_set_header Host {host};
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "upgrade";
-            proxy_ssl_server_name on;
-            proxy_ssl_name {quote(plan['sni'])};
-            proxy_ssl_verify on;
-            proxy_ssl_verify_depth 5;
-            proxy_ssl_trusted_certificate {quote(plan['ca'])};
-            proxy_buffering off;
-            proxy_read_timeout 3600s;
-            proxy_send_timeout 3600s;
-        }}
-    }}
+{locations}    }}
 }}
 '''
 
@@ -1535,27 +1539,62 @@ article{border-top:1px solid #d7ddcf;margin-top:40px;padding-top:20px}p{color:#6
 再回头看，它会生出新的意思。</p></article></main></html>'''
 
 
-def prepare(config, install, confdir, root, units, stage, website_domain=''):
-    cfg = yaml.safe_load(Path(config).read_text())
-    database = str(Path(cfg.get('database', {}).get('path', 'data/panel.db')).resolve())
+def check_standalone_ports(listens, managed):
+    active = False
+    if managed:
+        active = subprocess.run(['systemctl', 'is-active', '--quiet', 'proxy-panel-web'], capture_output=True).returncode == 0
+    for address in listens:
+        if active and address in managed.get('listens', []):
+            continue
+        host, port = address.rsplit(':', 1)
+        host = host.strip('[]')
+        family = socket.AF_INET6 if ':' in host else socket.AF_INET
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family == socket.AF_INET6:
+                probe.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+            try:
+                probe.bind((host, int(port)))
+            except OSError as exc:
+                raise ValueError(f"无法绑定网站入口 {address}，请用 ss -lntp 检查 TCP 443 占用；不会停止现有服务") from exc
+
+
+def prepare_standalone(cfg, install, managed, root, website_domain):
+    server = cfg.get('server', {})
+    name = website_domain or (managed.get('domains', [''])[0] if managed else '') or server.get('domain', '')
+    if not name:
+        raise ValueError("独立网站需要域名，请执行 proxy-panel website setup 你的域名")
+    name = domain(name)
+    ca = ssl.get_default_verify_paths().cafile
+    if not ca:
+        raise ValueError("找不到系统 CA 证书包，请安装 ca-certificates")
+    candidates = []
+    if managed:
+        candidates.append((managed['cert'], managed['key']))
+    candidates.append((str(Path(install) / 'certs' / (name + '.crt')), str(Path(install) / 'certs' / (name + '.key'))))
+    if server.get('cert') and server.get('key'):
+        candidates.append((server['cert'], server['key']))
+    for cert, key in candidates:
+        cert, key = os.path.abspath(cert), os.path.abspath(key)
+        try:
+            verify_cert(cert, key, [name], ca)
+        except (ValueError, OSError):
+            continue
+        break
+    else:
+        raise ValueError(f"找不到覆盖 {name} 的有效证书和私钥；请将证书安装到 {install}/certs/{name}.crt 和 .key，或使用面板已配置的有效证书")
+    listens = select_listens('::', interface_ips())
+    check_standalone_ports(listens, managed)
+    return dict(mode='standalone', domains=[name], cert=cert, key=key, ca=ca, listens=listens, webroot=str(root))
+
+
+def prepare_proxy(cfg, database, row, managed, root, website_domain):
     kernel_path = str(Path(cfg['kernel']['xray_config']).resolve())
-    state_path = confdir / 'managed.json'
-    managed = json.loads(state_path.read_text()) if state_path.exists() else None
-    if not managed:
-        for directory in (confdir, root):
-            # A failed first deployment can leave empty directories after rollback.
-            if directory.is_symlink() or (directory.exists() and
-                    (not directory.is_dir() or any(directory.iterdir()))):
-                raise ValueError("网站目录已存在但不是本脚本托管，拒绝覆盖")
-    with closing(sqlite3.connect(Path(database).as_uri() + '?mode=ro', uri=True)) as db:
-        rows = db.execute('SELECT id,host,protocol,transport,settings FROM nodes WHERE enable=1 AND port=443 AND kernel_type="xray"').fetchall()
-    if len(rows) != 1:
-        raise ValueError("需要且只能有一个已启用的 Xray TCP 443 节点；请先在面板创建 HTTPUpgrade + TLS 节点")
-    node_id, node_host, protocol, transport, original = rows[0]
+    node_id, node_host, protocol, transport, original = row
     settings = json.loads(original)
     if transport != 'httpupgrade' or protocol not in ('vless', 'vmess') or settings.get('security') != 'tls':
         raise ValueError("website setup 当前支持 VLESS/VMess + HTTPUpgrade + TLS，其他入口保持原样")
-    if managed and managed['node_id'] != node_id:
+    if managed and managed.get('node_id') != node_id:
         raise ValueError("托管网站对应的节点已更换，请先检查现有部署")
     path = settings.get('path', '/')
     if not isinstance(path, str) or not re.fullmatch(r'/[A-Za-z0-9/_~.\-]*', path):
@@ -1606,20 +1645,45 @@ def prepare(config, install, confdir, root, units, stage, website_domain=''):
         raise ValueError("运行配置与面板证书路径不一致，请先同步内核")
     inbounds[0]['listen'] = '127.0.0.1'
     stream['tlsSettings']['alpn'] = ['http/1.1']
-    plan = dict(node_id=node_id, original_settings=original, settings=json.dumps(next_settings),
+    plan = dict(mode='proxy', node_id=node_id, original_settings=original, settings=json.dumps(next_settings),
                 database=database, kernel_path=kernel_path, node_host=node_host, protocol=protocol,
                 path=path, host=host, sni=sni, domains=sorted(names), cert=cert, key=key, ca=ca,
                 listens=listens, listen_before=before, webroot=str(root))
+    return plan, current
+
+
+def prepare(config, install, confdir, root, units, stage, website_domain=''):
+    cfg = yaml.safe_load(Path(config).read_text())
+    database = str(Path(cfg.get('database', {}).get('path', 'data/panel.db')).resolve())
+    state_path = confdir / 'managed.json'
+    managed = json.loads(state_path.read_text()) if state_path.exists() else None
+    if not managed:
+        for directory in (confdir, root):
+            # A failed first deployment can leave empty directories after rollback.
+            if directory.is_symlink() or (directory.exists() and
+                    (not directory.is_dir() or any(directory.iterdir()))):
+                raise ValueError("网站目录已存在但不是本脚本托管，拒绝覆盖")
+    with closing(sqlite3.connect(Path(database).as_uri() + '?mode=ro', uri=True)) as db:
+        rows = db.execute('SELECT id,host,protocol,transport,settings,kernel_type FROM nodes WHERE enable=1 AND port=443 AND protocol NOT IN ("hysteria2","hy2","tuic")').fetchall()
+    if rows:
+        if len(rows) != 1 or rows[0][5] != 'xray' or (managed and managed.get('mode') == 'standalone'):
+            raise ValueError("TCP 443 已分配给其他节点，无法直接开启独立网站；现有反代仅支持单个 Xray HTTPUpgrade + TLS 节点")
+        plan, current = prepare_proxy(cfg, database, rows[0][:5], managed, root, website_domain)
+    else:
+        if managed and managed.get('mode') != 'standalone':
+            raise ValueError("托管网站的代理节点已缺失或禁用，请先检查原节点；不会自动删除反代")
+        plan = prepare_standalone(cfg, install, managed, root, website_domain)
     nginx = shutil.which('nginx')
     if not nginx:
         raise ValueError("请先安装 Nginx")
     config_file = confdir / 'nginx.conf'
-    files = {kernel_path: ('xray.json', json.dumps(current), 0o600),
-             str(config_file): ('nginx.conf', nginx_config(plan, root), 0o600),
+    files = {str(config_file): ('nginx.conf', nginx_config(plan, root), 0o600),
              str(state_path): ('managed.json', json.dumps({k: v for k, v in plan.items() if k not in ('original_settings', 'settings')}), 0o600)}
+    if plan['mode'] == 'proxy':
+        files[plan['kernel_path']] = ('xray.json', json.dumps(current), 0o600)
     if not (root / 'index.html').exists():
         files[str(root / 'index.html')] = ('index.html', PAGE, 0o644)
-    unit_files = website_units(nginx, config_file, cert, key)
+    unit_files = website_units(nginx, config_file, plan['cert'], plan['key'])
     for name, text in unit_files.items():
         files[str(units / name)] = (name, text, 0o644)
     stage.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -1627,26 +1691,30 @@ def prepare(config, install, confdir, root, units, stage, website_domain=''):
         (stage / name).write_text(text)
         os.chmod(stage / name, mode)
     plan['outputs'] = {dest: {'source': entry[0], 'mode': entry[2]} for dest, entry in files.items()}
-    plan['files'] = [database, database + '-wal', database + '-shm'] + list(files)
+    plan['files'] = ([database, database + '-wal', database + '-shm'] if plan['mode'] == 'proxy' else []) + list(files)
     (stage / 'plan.json').write_text(json.dumps(plan))
     os.chmod(stage / 'plan.json', 0o600)
-    try:
-        run([cfg['kernel']['xray_path'], 'run', '-test', '-config', str(stage / 'xray.json')])
-    except ValueError as exc:
-        (stage / 'xray-check.log').write_text(str(exc))
-        raise ValueError('Xray 候选配置检查失败，诊断文件: ' + str(stage / 'xray-check.log')) from exc
+    if plan['mode'] == 'proxy':
+        try:
+            run([cfg['kernel']['xray_path'], 'run', '-test', '-config', str(stage / 'xray.json')])
+        except ValueError as exc:
+            (stage / 'xray-check.log').write_text(str(exc))
+            raise ValueError('Xray 候选配置检查失败，诊断文件: ' + str(stage / 'xray-check.log')) from exc
     run([nginx, '-t', '-c', str(stage / 'nginx.conf')])
     run(['systemd-analyze', 'verify', '--man=no', *[str(stage / name) for name in unit_files]])
-    print('网站预检通过: ' + ', '.join(plan['domains']) + '；保留端口 443、路径和节点凭据')
+    print('网站预检通过: ' + ', '.join(plan['domains']) + ('；独立 HTTPS 网站，无需代理节点' if plan['mode'] == 'standalone' else '；保留端口 443、路径和节点凭据'))
 
 
 def apply(stage):
     plan = json.loads((stage / 'plan.json').read_text())
-    with closing(sqlite3.connect(plan['database'])) as db, db:
-        changed = db.execute('UPDATE nodes SET settings=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND settings=? AND host=? AND protocol=? AND port=443 AND transport="httpupgrade" AND kernel_type="xray" AND enable=1',
-                             (plan['settings'], plan['node_id'], plan['original_settings'], plan['node_host'], plan['protocol']))
-        if changed.rowcount != 1:
-            raise ValueError("节点在预检后发生变化，拒绝覆盖")
+    with ExitStack() as stack:
+        if plan.get('mode') != 'standalone':
+            db = stack.enter_context(closing(sqlite3.connect(plan['database'])))
+            stack.enter_context(db)
+            changed = db.execute('UPDATE nodes SET settings=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND settings=? AND host=? AND protocol=? AND port=443 AND transport="httpupgrade" AND kernel_type="xray" AND enable=1',
+                                 (plan['settings'], plan['node_id'], plan['original_settings'], plan['node_host'], plan['protocol']))
+            if changed.rowcount != 1:
+                raise ValueError("节点在预检后发生变化，拒绝覆盖")
         # The surrounding process uses umask 077; new public content directories
         # need explicit traversal permissions for Nginx workers.
         public = Path(plan['webroot'])
@@ -1674,12 +1742,16 @@ def apply(stage):
 
 def health(state):
     plan = json.loads(state.read_text())
-    address = plan['listens'][0].rsplit(':', 1)[0].strip('[]')
+    address, port = plan['listens'][0].rsplit(':', 1)
+    address = address.strip('[]')
     for name in plan['domains']:
         ctx = ssl.create_default_context(cafile=plan['ca'])
         ctx.set_alpn_protocols(['http/1.1'])
-        for path, upgrade in [('/', False), (plan['path'], True)]:
-            with socket.create_connection((address, 443), timeout=5) as conn:
+        checks = [('/', False)]
+        if plan.get('mode') != 'standalone':
+            checks.append((plan['path'], True))
+        for path, upgrade in checks:
+            with socket.create_connection((address, int(port)), timeout=5) as conn:
                 with ctx.wrap_socket(conn, server_hostname=name) as tls:
                     headers = f'GET {path} HTTP/1.1\r\nHost: {name}\r\nConnection: ' + ('Upgrade\r\nUpgrade: websocket' if upgrade else 'close') + '\r\n\r\n'
                     tls.sendall(headers.encode())
@@ -1687,7 +1759,7 @@ def health(state):
                     expected = b'101' if upgrade else b'200'
                     if response.split()[1:2] != [expected]:
                         raise ValueError(f'{name} {path} 应返回 {expected.decode()}，实际: {response[:160]!r}')
-    print('网站 HTTPS 200、HTTPUpgrade 101 和证书验证均通过')
+    print('网站 HTTPS 200 和证书验证通过' if plan.get('mode') == 'standalone' else '网站 HTTPS 200、HTTPUpgrade 101 和证书验证均通过')
 
 
 def main():
@@ -1767,7 +1839,9 @@ setup_website_selinux() {
         semanage fcontext -a -t cert_t "$pattern" 2>/dev/null || semanage fcontext -m -t cert_t "$pattern" || return 1
         restorecon "$file" || return 1
     done < <(jq -r '.cert,.key' "$1")
-    setsebool -P httpd_can_network_connect on
+    if [[ "$(jq -r '.mode // "proxy"' "$1")" != standalone ]]; then
+        setsebool -P httpd_can_network_connect on
+    fi
 }
 
 run_website_setup() (
@@ -1776,7 +1850,7 @@ run_website_setup() (
     cd "$INSTALL_DIR"
     exec 9>"${INSTALL_DIR}/.update.lock"
     flock -n 9 || { warn "另一个升级或网站部署正在运行"; exit 1; }
-    local stage backup phase=prepare file svc index=0 website_domain="${1:-}" active=() enabled=()
+    local stage backup phase=prepare mode=proxy file svc index=0 website_domain="${1:-}" active=() enabled=()
     stage=$(mktemp -d "${INSTALL_DIR}/.website.XXXXXX")
     backup="${BACKUP_DIR}/website-$(date +%Y%m%d_%H%M%S)-$$"
     finish_website_setup() {
@@ -1785,7 +1859,7 @@ run_website_setup() (
         if [[ "$phase" == stopped || "$phase" == installed ]]; then
             warn "网站部署失败，正在恢复节点配置及服务..."
             systemctl stop "$WEBSITE_SERVICE" proxy-panel-web-cert.path 2>/dev/null || true
-            if stop_update_services && { [[ "$phase" == stopped ]] || restore_update_files "$backup"; } && systemctl daemon-reload && start_update_services "$stage/state.json" && keep_update_services_inactive "$stage/state.json"; then
+            if { [[ "$mode" == standalone ]] || stop_update_services; } && { [[ "$phase" == stopped ]] || restore_update_files "$backup"; } && systemctl daemon-reload && { [[ "$mode" == standalone ]] || { start_update_services "$stage/state.json" && keep_update_services_inactive "$stage/state.json"; }; }; then
                 for svc in "$WEBSITE_SERVICE" proxy-panel-web-cert.path; do
                     if jq -e --arg svc "$svc" '.active | index($svc) != null' "$stage/state.json" >/dev/null; then systemctl start "$svc" || status=1; fi
                     if ! jq -e --arg svc "$svc" '.enabled | index($svc) != null' "$stage/state.json" >/dev/null; then systemctl disable "$svc" 2>/dev/null || true; fi
@@ -1801,8 +1875,12 @@ run_website_setup() (
     trap finish_website_setup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    "${INSTALL_DIR}/proxy-panel" -config "$CONFIG_FILE" -check-update "$stage/panel-check" > "$stage/panel-check.log" 2>&1
     website_tool prepare "$stage/check" "$website_domain"
+    mode=$(jq -r '.mode // "proxy"' "$stage/check/plan.json")
+    if [[ "$mode" != standalone ]]; then
+        systemctl is-active --quiet "$XRAY_SERVICE" || { warn "Xray 未运行，请先恢复节点服务"; exit 1; }
+        "${INSTALL_DIR}/proxy-panel" -config "$CONFIG_FILE" -check-update "$stage/panel-check" > "$stage/panel-check.log" 2>&1
+    fi
     setup_website_selinux "$stage/check/plan.json"
     for svc in "$SERVICE_NAME" "$XRAY_SERVICE" "$SINGBOX_SERVICE" "$WEBSITE_SERVICE" proxy-panel-web-cert.path; do
         if systemctl is-active --quiet "$svc"; then active+=("$svc"); fi
@@ -1816,33 +1894,40 @@ run_website_setup() (
     step "网站与证书预检通过，备份并切换 443 入口..."
     phase=stopped
     if [[ -f "$WEBSITE_CONFIG_DIR/managed.json" ]]; then systemctl stop "$WEBSITE_SERVICE" proxy-panel-web-cert.path; fi
-    stop_update_services
+    if [[ "$mode" != standalone ]]; then stop_update_services; fi
     mkdir -p "$backup"
     while IFS= read -r file; do
         if [[ -f "$file" ]]; then cp -p "$file" "$backup/$index"; fi
         index=$((index+1))
     done < <(jq -r '.files[]' "$stage/state.json")
     cp "$stage/state.json" "$backup/state.json"
-    "${INSTALL_DIR}/proxy-panel" -config "$CONFIG_FILE" -check-update "$stage/final-panel-check" > "$stage/final-panel-check.log" 2>&1
+    if [[ "$mode" != standalone ]]; then
+        "${INSTALL_DIR}/proxy-panel" -config "$CONFIG_FILE" -check-update "$stage/final-panel-check" > "$stage/final-panel-check.log" 2>&1
+    fi
     website_tool prepare "$stage/final" "$website_domain"
     jq -e -s 'length == 2 and .[0] == .[1]' "$stage/check/plan.json" "$stage/final/plan.json" >/dev/null || { warn "预检期间节点或网站配置变化，请重新部署"; exit 1; }
     phase=installed
     website_tool apply "$stage/final"
     if command -v restorecon >/dev/null; then restorecon -R "$WEBSITE_CONFIG_DIR" "$WEBSITE_ROOT" "$WEBSITE_UNIT_DIR/proxy-panel-web.service" "$WEBSITE_UNIT_DIR/proxy-panel-web-reload.service" "$WEBSITE_UNIT_DIR/proxy-panel-web-cert.path"; fi
     systemctl daemon-reload
-    start_update_services "$stage/state.json"
+    if [[ "$mode" != standalone ]]; then start_update_services "$stage/state.json"; fi
     systemctl start "$WEBSITE_SERVICE"
     local healthy=false attempt
     for attempt in {1..10}; do
         if website_tool health && "${INSTALL_DIR}/proxy-panel" -config "$CONFIG_FILE" -check-health; then healthy=true; break; fi
         sleep 1
     done
-    [[ "$healthy" == true ]] || { warn "网站或 HTTPUpgrade 转发验收失败"; exit 1; }
-    keep_update_services_inactive "$stage/state.json"
+    [[ "$healthy" == true ]] || { warn "网站验收失败，请检查诊断目录"; exit 1; }
+    if [[ "$mode" != standalone ]]; then keep_update_services_inactive "$stage/state.json"; fi
     systemctl enable "$WEBSITE_SERVICE" proxy-panel-web-cert.path
     systemctl start proxy-panel-web-cert.path
     phase=complete
-    info "网站和 HTTPUpgrade 反代部署完成；客户端请刷新订阅以同步 ALPN。备份: $backup"
+    if [[ "$mode" == standalone ]]; then
+        info "独立 HTTPS 网站部署完成，无需代理节点。备份: $backup"
+    else
+        info "网站和 HTTPUpgrade 反代部署完成；客户端请刷新订阅以同步 ALPN。备份: $backup"
+    fi
+    info "如有主机防火墙或云安全组，请确保允许网站的 TCP 443 入站"
 )
 
 do_website() {
@@ -1850,9 +1935,8 @@ do_website() {
         setup)
             check_root
             detect_os
-            [[ -f "$CONFIG_FILE" ]] || error "请先安装面板并创建 HTTPUpgrade + TLS 的 443 节点"
-            local svc
-            for svc in "$SERVICE_NAME" "$XRAY_SERVICE"; do systemctl is-active --quiet "$svc" || error "$svc 未运行，请先恢复节点服务"; done
+            [[ -f "$CONFIG_FILE" ]] || error "请先安装面板"
+            systemctl is-active --quiet "$SERVICE_NAME" || error "$SERVICE_NAME 未运行，请先恢复面板服务"
             install_website_deps
             local dependency_status=$?
             [[ "$dependency_status" == 0 ]] || return "$dependency_status"
@@ -1866,13 +1950,13 @@ do_website() {
 }
 
 offer_website_setup() {
-    if confirm "是否安装/配置 Nginx 443 网站与 HTTPUpgrade 反代?（需已有 TLS 节点和有效域名证书）"; then
+    if confirm "是否安装/配置 Nginx 443 网站?（需有效域名证书；支持独立网站或 HTTPUpgrade 反代）"; then
         # Do not put do_website in an `if`/`||`: that disables errexit inside its transaction.
         do_website website setup
         local website_status=$?
         if [[ "$website_status" != 0 ]]; then warn "面板安装/升级已完成，网站尚未配置成功；修正提示后执行 proxy-panel website setup"; fi
     else
-        info "创建 HTTPUpgrade + TLS 的 443 节点后，可执行 proxy-panel website setup 自动部署网站和反代"
+        info "准备有效域名证书后，可执行 proxy-panel website setup 域名 部署 443 网站，无需先创建代理节点"
     fi
 }
 
@@ -2504,7 +2588,7 @@ show_help() {
     echo "  reset-pwd          重置管理员密码"
     echo "  disable-2fa        应急关闭 2FA (authenticator 设备丢失时)"
     echo "  cert <子命令>      证书管理 (setup|status|renew)"
-    echo "  website setup [域名]  安装 Nginx、部署 443 网站及 HTTPUpgrade 反代"
+    echo "  website setup [域名]  部署独立 443 网站，或已有 HTTPUpgrade 节点的反代"
     echo "  website status    查看托管网站与证书续期监听状态"
     echo "  firewall <子命令>  防火墙管理 (enable|disable|status)"
     echo ""

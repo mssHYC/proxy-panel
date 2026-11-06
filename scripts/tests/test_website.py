@@ -78,10 +78,84 @@ class WebsiteTests(unittest.TestCase):
             args = [os.environ['SYSTEMD_ANALYZE_BINARY'], *args[1:]]
         return self.real_run(args)
 
-    def prepare(self):
+    def prepare(self, website_domain=''):
         stage = self.root / 'stage'
-        tool.prepare(str(self.config), str(self.root), self.confdir, self.webroot, self.units, stage)
+        tool.prepare(str(self.config), str(self.root), self.confdir, self.webroot, self.units, stage, website_domain)
         return stage, json.loads((stage / 'plan.json').read_text())
+
+    def standalone(self):
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('DELETE FROM nodes')
+        cfg = json.loads(self.config.read_text())
+        cfg['server'].update(tls=True, cert=str(self.cert), key=str(self.key))
+        # A website must work with no Xray installed or configured.
+        cfg.pop('kernel')
+        self.config.write_text(json.dumps(cfg))
+        self.stack.enter_context(patch.object(tool, 'check_standalone_ports'))
+
+    def test_standalone_site_uses_panel_certificate_without_touching_proxy_data(self):
+        self.standalone()
+        before = {p: p.read_bytes() for p in (self.db, self.kernel, self.config)}
+        stage, plan = self.prepare('site.example.com')
+        self.assertEqual(plan['mode'], 'standalone')
+        self.assertNotIn(str(self.db), plan['files'])
+        self.assertNotIn(str(self.kernel), plan['files'])
+        tool.apply(stage)
+        conf = (self.confdir / 'nginx.conf').read_text()
+        self.assertNotIn('proxy_pass', conf)
+        self.assertIn('server_name site.example.com;', conf)
+        self.assertIn('ssl_reject_handshake on;', conf)
+        for path, contents in before.items():
+            self.assertEqual(path.read_bytes(), contents)
+        (self.webroot / 'index.html').write_text('custom-site')
+        stage, repeated = self.prepare()
+        tool.apply(stage)
+        self.assertEqual(repeated['domains'], ['site.example.com'])
+        self.assertEqual((self.webroot / 'index.html').read_text(), 'custom-site')
+
+    def test_standalone_site_accepts_domain_certificate_without_panel_tls(self):
+        self.standalone()
+        cfg = json.loads(self.config.read_text())
+        cfg['server'] = {'port': 13888}
+        self.config.write_text(json.dumps(cfg))
+        certdir = self.root / 'certs'
+        certdir.mkdir()
+        (certdir / 'site.example.com.crt').write_bytes(self.cert.read_bytes())
+        (certdir / 'site.example.com.key').write_bytes(self.key.read_bytes())
+        _, plan = self.prepare('site.example.com')
+        self.assertEqual(plan['cert'], str(certdir / 'site.example.com.crt'))
+
+    def test_standalone_missing_domain_or_certificate_is_actionable(self):
+        self.standalone()
+        cfg = json.loads(self.config.read_text())
+        cfg['server'] = {'port': 13888}
+        self.config.write_text(json.dumps(cfg))
+        with self.assertRaisesRegex(ValueError, '域名'):
+            self.prepare()
+        with self.assertRaisesRegex(ValueError, '证书'):
+            self.prepare('site.example.com')
+        self.assertFalse(self.confdir.exists())
+
+    def test_standalone_rejects_certificate_for_wrong_domain(self):
+        self.standalone()
+        with self.assertRaisesRegex(ValueError, '证书'):
+            self.prepare('wrong.example.com')
+        self.assertFalse(self.confdir.exists())
+
+    def test_standalone_stays_available_with_hysteria2_on_udp_443(self):
+        self.standalone()
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('INSERT INTO nodes VALUES (2,"site.example.com","hysteria2","","{}",1,443,"sing-box",NULL)')
+        _, plan = self.prepare()
+        self.assertEqual(plan['mode'], 'standalone')
+
+    def test_existing_proxy_site_does_not_silently_drop_route_if_node_disappears(self):
+        stage, _ = self.prepare()
+        tool.apply(stage)
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('DELETE FROM nodes')
+        with self.assertRaisesRegex(ValueError, '节点'):
+            self.prepare()
 
     def node_settings(self):
         with contextlib.closing(sqlite3.connect(self.db)) as db, db:
@@ -250,6 +324,45 @@ class WebsiteTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '不会接管'):
             tool.select_listens('127.0.0.1', ['192.0.2.10'])
 
+    @unittest.skipUnless(os.environ.get('NGINX_BINARY'), 'set NGINX_BINARY for standalone HTTPS integration')
+    def test_real_standalone_nginx_serves_https_without_proxy_backend(self):
+        self.standalone()
+        _, plan = self.prepare()
+        self.root.chmod(0o755)
+        self.webroot.mkdir()
+        (self.webroot / 'index.html').write_text('standalone-website-ok')
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            port = probe.getsockname()[1]
+        plan['listens'] = [f'127.0.0.1:{port}']
+        config = self.root / 'standalone.conf'
+        config.write_text(tool.nginx_config(plan, self.webroot).replace('pid /run/proxy-panel-web.pid;', f'pid {self.root}/nginx.pid;'))
+        log = (self.root / 'nginx.log').open('w+')
+        self.addCleanup(log.close)
+        process = subprocess.Popen([self.nginx, '-p', str(self.root), '-c', str(config), '-g', 'daemon off;'], stdout=log, stderr=log)
+        self.addCleanup(lambda: (process.terminate(), process.wait(timeout=5)) if process.poll() is None else None)
+        for _ in range(40):
+            if process.poll() is not None:
+                log.seek(0)
+                self.fail(log.read())
+            try:
+                with socket.create_connection(('127.0.0.1', port), timeout=.1): break
+            except OSError: time.sleep(.05)
+        state = self.root / 'standalone.json'
+        state.write_text(json.dumps(plan))
+        tool.health(state)
+        ctx = ssl.create_default_context(cafile=str(self.cert))
+        for path, expected in [('/', b'200 OK'), ('/api', b'404 Not Found')]:
+            with socket.create_connection(('127.0.0.1', port), timeout=3) as sock:
+                with ctx.wrap_socket(sock, server_hostname='site.example.com') as conn:
+                    conn.sendall(f'GET {path} HTTP/1.1\r\nHost: site.example.com\r\nConnection: close\r\n\r\n'.encode())
+                    response = conn.makefile('rb').read()
+                    self.assertIn(expected, response)
+                    if path == '/': self.assertIn(b'standalone-website-ok', response)
+        with socket.create_connection(('127.0.0.1', port), timeout=3) as sock:
+            with self.assertRaises(ssl.SSLError):
+                ctx.wrap_socket(sock, server_hostname='wrong.example.com')
+
     @unittest.skipUnless(os.environ.get('NGINX_BINARY'), 'set NGINX_BINARY for real HTTPS/Upgrade integration')
     def test_real_nginx_serves_site_and_tunnels_httpupgrade(self):
         stage, plan = self.prepare()
@@ -322,6 +435,31 @@ class WebsiteTests(unittest.TestCase):
                 ctx.wrap_socket(sock, server_hostname='wrong.example.com')
 
 
+class WebsitePortTests(unittest.TestCase):
+    def test_conflicting_tcp_listener_fails_before_deployment(self):
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen()
+            address = f'127.0.0.1:{listener.getsockname()[1]}'
+            with self.assertRaisesRegex(ValueError, '占用'):
+                tool.check_standalone_ports([address], None)
+        tool.check_standalone_ports([address], None)
+
+    def test_repeat_setup_skips_only_active_managed_listeners(self):
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0))
+            listener.listen()
+            address = f'127.0.0.1:{listener.getsockname()[1]}'
+            managed = {'listens': [address]}
+            with patch.object(tool.subprocess, 'run', return_value=types.SimpleNamespace(returncode=0)):
+                tool.check_standalone_ports([address], managed)
+                with self.assertRaisesRegex(ValueError, '占用'):
+                    tool.check_standalone_ports([address], {'listens': []})
+            with patch.object(tool.subprocess, 'run', return_value=types.SimpleNamespace(returncode=3)):
+                with self.assertRaisesRegex(ValueError, '占用'):
+                    tool.check_standalone_ports([address], managed)
+
+
 class WebsiteDependencyTests(unittest.TestCase):
     def run_deps(self, manager, missing_nginx=False, missing_yaml=False, fail=False):
         with tempfile.TemporaryDirectory() as temp:
@@ -372,12 +510,13 @@ install_website_deps
 
 
 class WebsiteTransactionTests(unittest.TestCase):
-    def run_case(self, failure='', offer=False):
+    def run_case(self, failure='', offer=False, standalone=False):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / 'states').mkdir()
             (root / 'enabled').mkdir()
-            for svc in ['proxy-panel', 'xray']:
+            original_services = ['proxy-panel'] if standalone else ['proxy-panel', 'xray']
+            for svc in original_services:
                 (root / 'states' / svc).touch()
             originals = {'panel.db': b'old-db', 'xray.json': b'old-core', 'config.yaml': b'unchanged-listen'}
             new_files = ['site/nginx.conf', 'site/managed.json', 'html/index.html', 'units/proxy-panel-web.service',
@@ -385,9 +524,10 @@ class WebsiteTransactionTests(unittest.TestCase):
             for name, value in originals.items():
                 (root / name).write_bytes(value)
             panel = root / 'proxy-panel'
-            panel.write_text('#!/bin/bash\nexit 0\n')
+            panel.write_text('#!/bin/bash\nif [[ "$STANDALONE" == 1 && "$*" == *-check-update* ]]; then exit 1; fi\nexit 0\n')
             panel.chmod(0o755)
-            (root / 'plan.json').write_text(json.dumps({'files': [str(root / p) for p in list(originals) + new_files]}))
+            (root / 'plan.json').write_text(json.dumps({'mode': 'standalone' if standalone else 'proxy',
+                'files': [str(root / p) for p in ([] if standalone else list(originals)) + new_files]}))
             script = root / 'run.sh'
             script.write_text('''source "$INSTALLER"
 INSTALL_DIR="$TEST_ROOT"
@@ -414,7 +554,7 @@ website_tool() {
    jq '.changed=true' "$TEST_ROOT/plan.json" > "$2/plan.json"
   fi;;
  apply)
-  echo changed > "$TEST_ROOT/panel.db"
+  if [[ "$STANDALONE" != 1 ]]; then echo changed > "$TEST_ROOT/panel.db"; fi
   [[ "$FAIL" != apply ]] || return 1
   while IFS= read -r file; do
    mkdir -p "$(dirname "$file")"
@@ -443,7 +583,8 @@ systemctl() {
 }
 if [[ "$OFFER" == 1 ]]; then offer_website_setup; else do_website website setup; fi
 ''')
-            env = {**os.environ, 'TEST_ROOT': temp, 'INSTALLER': str(INSTALLER), 'FAIL': failure, 'OFFER': '1' if offer else '0'}
+            env = {**os.environ, 'TEST_ROOT': temp, 'INSTALLER': str(INSTALLER), 'FAIL': failure,
+                   'OFFER': '1' if offer else '0', 'STANDALONE': '1' if standalone else '0'}
             result = subprocess.run(['bash', str(script)], env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=25)
             self.assertEqual(result.returncode == 0, not failure or offer, result.stdout)
             if failure:
@@ -451,7 +592,7 @@ if [[ "$OFFER" == 1 ]]; then offer_website_setup; else do_website website setup;
                     self.assertEqual((root / name).read_bytes(), value, name + result.stdout)
                 for name in new_files:
                     self.assertFalse((root / name).exists(), name + result.stdout)
-                self.assertEqual(sorted(p.name for p in (root / 'states').iterdir()), ['proxy-panel', 'xray'], result.stdout)
+                self.assertEqual(sorted(p.name for p in (root / 'states').iterdir()), original_services, result.stdout)
                 self.assertEqual(list((root / 'enabled').iterdir()), [], result.stdout)
             else:
                 self.assertEqual((root / 'config.yaml').read_bytes(), originals['config.yaml'])
@@ -461,8 +602,20 @@ if [[ "$OFFER" == 1 ]]; then offer_website_setup; else do_website website setup;
             if failure in ('dependency', 'preflight'):
                 events = (root / 'events').read_text() if (root / 'events').exists() else ''
                 self.assertNotIn('stop ', events, result.stdout)
+            if standalone:
+                for name, value in originals.items():
+                    self.assertEqual((root / name).read_bytes(), value, result.stdout)
+                events = (root / 'events').read_text()
+                for svc in ('proxy-panel', 'xray', 'sing-box'):
+                    self.assertNotIn('stop ' + svc + '\n', events)
+                    self.assertNotIn('start ' + svc + '\n', events)
 
     def test_success(self): self.run_case()
+    def test_standalone_success_without_xray(self): self.run_case(standalone=True)
+    def test_standalone_nginx_failure_keeps_panel_running(self): self.run_case('start', standalone=True)
+    def test_standalone_health_failure_keeps_panel_running(self): self.run_case('health', standalone=True)
+    def test_standalone_partial_apply_recovers(self): self.run_case('apply', standalone=True)
+    def test_standalone_watcher_failure_recovers(self): self.run_case('watcher', standalone=True)
     def test_dependency_failure_keeps_proxy(self): self.run_case('dependency')
     def test_preflight_failure_keeps_proxy(self): self.run_case('preflight')
     def test_stop_failure_recovers(self): self.run_case('stop')

@@ -29,6 +29,21 @@ Docker：容器内配置 `server.listen: "0.0.0.0"`，Compose 在宿主机仅发
 
 ## 在 TCP 443 上共用网站和代理
 
+### 没有代理节点：独立 HTTPS 网站
+
+没有配置 HTTPUpgrade + TLS 节点时，也可以同步新版管理脚本后执行：
+
+```bash
+proxy-panel website setup site.example.com
+proxy-panel website status
+```
+
+TCP 443 未分配给代理节点且端口空闲时，脚本自动部署独立静态网站。无需安装或启动 Xray，不修改节点、内核、面板监听配置，也不停止面板和代理服务。UDP 443 上的 Hysteria2 / TUIC 可以共存。独立网站只检查 HTTPS 200 和证书，不要求 HTTPUpgrade 101；网站路径不会反代到管理接口。
+
+网站仍需要有效的域名证书和私钥。脚本依次尝试已托管网站的证书、`/opt/proxy-panel/certs/域名.crt` 与同名 `.key`、面板配置的 `server.cert` / `server.key`，验证域名覆盖、有效期和证书链。省略域名时，使用已托管网站域名或 `server.domain`。没有可用证书会在部署前提示具体路径，不会自动申请证书。重复部署保留自定义首页，失败恢复原网站文件及服务状态。
+
+TCP 443 已被其他服务占用，或已分配给不受支持的代理节点时，脚本会中止并提示冲突，不会强行停止服务。需要在主机防火墙及云安全组放行 TCP 443；脚本不自动更改这些规则。部署后访问 `https://site.example.com/`。管理面板仍使用原来的地址和端口，例如启用了 TLS 的面板应访问 `https://域名:13888/`。
+
 ### HTTPUpgrade 节点：管理脚本自动部署
 
 对于 **Xray / VLESS 或 VMess / HTTPUpgrade / TLS / 443** 节点，无需手工安装 Nginx、写反代或修改数据库。同步新版管理脚本后执行：
@@ -40,7 +55,7 @@ proxy-panel website setup site.example.com
 proxy-panel website status
 ```
 
-`install` 和成功的 `update` 结束时也会询问是否执行该流程。新安装尚无节点时，先在面板创建上述节点，再执行 `website setup`。非交互安装/升级保留原行为，提示可用命令。普通 TCP、Reality 等其他传输不会被自动改写。
+`install` 和成功的 `update` 结束时也会询问是否执行该流程。没有 TCP 443 节点时使用上面的独立网站模式；已有上述节点时部署反代。非交互安装/升级会明确提示采用默认选项，不自动部署网站。普通 TCP、Reality 等其他传输不会被自动改写。
 
 脚本通过系统包管理器安装 Nginx、Python 3/PyYAML、OpenSSL 等依赖，支持原有 Debian/Ubuntu 和 AlmaLinux/Rocky/CentOS/Fedora 安装入口。Nginx 需支持 `ssl_reject_handshake`（1.19.4+）。脚本是自包含的，无需单独下载网站助手；面板需支持 `-check-health`（v1.19.1+）。
 
@@ -156,6 +171,10 @@ XRAY_BINARY=/绝对路径/xray SINGBOX_BINARY=/绝对路径/sing-box \
 协议依据：[Reality 目标标准](https://github.com/XTLS/REALITY)、[Xray TLS](https://xtls.github.io/config/transports/tls.html)、[sing-box TLS](https://sing-box.sagernet.org/configuration/shared/tls/)。
 
 ## 有预检和回退的升级
+
+已验证内核组合改为 Xray `v26.10.31` / sing-box `v1.14.4`。Xray 官方因 MPTCP 安全问题撤回了 `v26.10.29`，详情见 [v26.10.31 发布说明](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31)。升级面板不会默认替换内核；仍使用旧 Xray 的机器应在交互式 SSH 中执行 `proxy-panel update`，对更新 Xray 的询问选择 `y`，并按上游说明更新操作系统内核。
+
+网页命令执行器、没有分配 PTY 的 SSH 等环境可能存在 `/dev/tty` 文件，却无法打开。新版脚本通过实际打开设备检测交互终端，避免出现 `line 84: /dev/tty: No such device or address`。没有终端时保留 `[y/N]` 默认 N、`[Y/n]` 默认 Y，并明确显示采用默认值；正常 SSH 和 `curl | bash` 仍从终端读取回答，不消耗管道里的脚本内容。这项修复需要同步管理脚本，仅更新面板二进制不会替换 `/usr/local/bin/proxy-panel`。
 
 新 `scripts/install.sh update`（检测到已有安装时的 `install` 同样走此路径）按以下顺序升级：
 
