@@ -70,7 +70,7 @@ class UpdateTests(unittest.TestCase):
             candidate = root / "candidate"
             candidate.write_text('''#!/bin/bash
 case "$1" in
--compatibility) echo '{"xray":"v26.10.29","sing-box":"v1.14.4"}'; exit;;
+-compatibility) echo '{"xray":"v26.10.31","sing-box":"v1.14.4"}'; exit;;
 esac
 for ((i=1;i<=$#;i++)); do
  if [[ "${!i}" == -check-update ]]; then

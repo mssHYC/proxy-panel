@@ -172,6 +172,8 @@ XRAY_BINARY=/绝对路径/xray SINGBOX_BINARY=/绝对路径/sing-box \
 
 ## 有预检和回退的升级
 
+已验证内核组合改为 Xray `v26.10.31` / sing-box `v1.14.4`。Xray 官方因 MPTCP 安全问题撤回了 `v26.10.29`，详情见 [v26.10.31 发布说明](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31)。升级面板不会默认替换内核；仍使用旧 Xray 的机器应在交互式 SSH 中执行 `proxy-panel update`，对更新 Xray 的询问选择 `y`，并按上游说明更新操作系统内核。
+
 网页命令执行器、没有分配 PTY 的 SSH 等环境可能存在 `/dev/tty` 文件，却无法打开。新版脚本通过实际打开设备检测交互终端，避免出现 `line 84: /dev/tty: No such device or address`。没有终端时保留 `[y/N]` 默认 N、`[Y/n]` 默认 Y，并明确显示采用默认值；正常 SSH 和 `curl | bash` 仍从终端读取回答，不消耗管道里的脚本内容。这项修复需要同步管理脚本，仅更新面板二进制不会替换 `/usr/local/bin/proxy-panel`。
 
 新 `scripts/install.sh update`（检测到已有安装时的 `install` 同样走此路径）按以下顺序升级：
