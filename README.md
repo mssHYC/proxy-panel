@@ -31,9 +31,9 @@
 curl -fsSL https://raw.githubusercontent.com/mssHYC/proxy-panel/main/scripts/install.sh -o install.sh && bash install.sh install
 ```
 
-系统检测 → 依赖安装 → 内核下载 → 交互配置 → 服务启动，全程自动。
+使用 root 运行。系统检测 → 依赖安装 → 内核下载 → 交互配置 → 服务启动与健康检查，通过后才显示安装完成。TLS 申请或证书安装失败时会停止，并保留原始错误供排查。
 
-面板默认仅监听本机。升级前请阅读[管理接口隔离与 443 网站部署](deploy/README.md)，包括旧公网订阅迁移、SSH 隧道、TLS 网站回落和验收步骤。
+面板默认仅监听 `127.0.0.1:8080`，远程管理使用 SSH 隧道或受保护的 HTTPS 反代；修改端口不会改变监听范围。`website setup` 部署的 443 网站用于展示页面，不提供管理面板入口。启用 TLS / 域名绑定时的访问示例及故障排查见[管理接口隔离与 443 网站部署](deploy/README.md)，升级前也请阅读其中的迁移说明。
 
 ### Docker
 
@@ -129,7 +129,7 @@ restore F   从备份恢复
 | Cloudflare DNS | 通配符 / 橙色云朵 | CF 托管 + API Token |
 | DNSPod / Aliyun DNS | 国内云用户 | 对应 API 凭证 |
 | 自定义证书 | 已有 .crt/.key | 文件路径 |
-| 不启用 | 纯 Reality + IP 直连面板 | — |
+| 不启用 | 面板仅本机 HTTP，通过 SSH 隧道访问 | — |
 
 ## 配置文件
 

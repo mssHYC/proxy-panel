@@ -111,12 +111,15 @@ confirm_default_yes() {
 
 install_deps() {
     step "安装系统依赖..."
+    local cron_service=cron
     if [[ "$PKG_MGR" == "apt" ]]; then
-        apt update -y >/dev/null 2>&1
-        apt install -y curl wget jq sqlite3 unzip tar >/dev/null 2>&1
+        apt update -y || return 1
+        apt install -y curl wget jq sqlite3 unzip tar openssl ca-certificates cron || return 1
     else
-        yum install -y curl wget jq sqlite unzip tar >/dev/null 2>&1
+        yum install -y curl wget jq sqlite unzip tar openssl ca-certificates cronie || return 1
+        cron_service=crond
     fi
+    systemctl enable --now "$cron_service" || return 1
     info "依赖安装完成"
 }
 
@@ -134,13 +137,13 @@ download_panel() {
 
     if [[ -z "$version" || "$version" == "null" ]]; then
         warn "无法获取最新版本，请手动将 proxy-panel 二进制放到 ${INSTALL_DIR}/"
-        return 0
+        return 1
     fi
 
     local download_url="https://github.com/${GITHUB_REPO}/releases/download/${version}/proxy-panel-linux-${ARCH}.tar.gz"
     wget -q --show-progress -O /tmp/proxy-panel.tar.gz "$download_url" || error "下载 ProxyPanel 失败"
-    tar -xzf /tmp/proxy-panel.tar.gz -C "${INSTALL_DIR}/"
-    chmod +x "${INSTALL_DIR}/proxy-panel"
+    tar -xzf /tmp/proxy-panel.tar.gz -C "${INSTALL_DIR}/" || return 1
+    chmod +x "${INSTALL_DIR}/proxy-panel" || return 1
     rm -f /tmp/proxy-panel.tar.gz
     info "ProxyPanel ${version} 安装完成"
 }
@@ -211,13 +214,21 @@ install_acme() {
     local acct_email="admin@${DOMAIN#\*.}"
     if [[ ! -f ~/.acme.sh/acme.sh ]]; then
         info "安装 acme.sh..."
-        curl -s https://get.acme.sh | sh -s email="$acct_email" 2>/dev/null || {
-            warn "acme.sh 安装失败，请检查网络"
+        (set -o pipefail; curl -fsSL https://get.acme.sh | sh -s email="$acct_email") || {
+            warn "acme.sh 安装失败，请查看上方安装错误"
             return 1
         }
     fi
+    # 官方引导脚本可能打印 Install error 后仍返回 0，必须检查安装产物。
+    if [[ ! -x ~/.acme.sh/acme.sh ]] || ! ~/.acme.sh/acme.sh --version >/dev/null; then
+        warn "acme.sh 未正确安装或无法运行，请查看上方错误并检查 cron、openssl 等依赖"
+        return 1
+    fi
     # 设置默认 CA 为 Let's Encrypt
-    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt 2>/dev/null || true
+    ~/.acme.sh/acme.sh --set-default-ca --server letsencrypt || {
+        warn "设置证书签发机构失败，请查看上方 acme.sh 错误"
+        return 1
+    }
     return 0
 }
 
@@ -225,12 +236,19 @@ install_acme() {
 install_cert() {
     local ecc_flag=""
     [[ "$1" == "ecc" ]] && ecc_flag="--ecc"
+    # 首次安装尚未创建服务；续期时只重启已经运行的服务。
     ~/.acme.sh/acme.sh --install-cert -d "$DOMAIN" $ecc_flag \
         --fullchain-file "$CERT_PATH" \
         --key-file "$KEY_PATH" \
-        --reloadcmd "systemctl restart ${SERVICE_NAME} 2>/dev/null; systemctl restart ${XRAY_SERVICE} 2>/dev/null" \
-        2>/dev/null || warn "证书安装失败"
-    chmod 600 "$CERT_PATH" "$KEY_PATH" 2>/dev/null || true
+        --reloadcmd "( ! systemctl is-active --quiet ${SERVICE_NAME} || systemctl restart ${SERVICE_NAME} ) && ( ! systemctl is-active --quiet ${XRAY_SERVICE} || systemctl restart ${XRAY_SERVICE} )" || {
+        warn "证书安装或服务重载失败，请查看上方 acme.sh 错误"
+        return 1
+    }
+    if [[ ! -s "$CERT_PATH" || ! -s "$KEY_PATH" ]]; then
+        warn "证书或私钥未正确写入: $CERT_PATH / $KEY_PATH"
+        return 1
+    fi
+    chmod 600 "$CERT_PATH" "$KEY_PATH" || return 1
     info "证书已安装到: $CERT_PATH"
     info "续期将自动执行 (acme.sh cron)"
 }
@@ -263,10 +281,7 @@ setup_tls() {
             KEY_PATH="${INSTALL_DIR}/certs/${DOMAIN}.key"
             mkdir -p "${INSTALL_DIR}/certs"
 
-            install_acme || {
-                warn "跳过证书申请，安装完成后可手动执行"
-                return 0
-            }
+            install_acme || return 1
 
             info "正在申请证书 (HTTP standalone，需 80 端口空闲)..."
             echo "  域名: $DOMAIN"
@@ -287,12 +302,12 @@ setup_tls() {
                 warn "证书申请失败！可能原因:"
                 warn "  - 域名未正确解析到本机 IP"
                 warn "  - 80 端口被占用 (nginx/apache)"
-                warn "安装完成后可手动执行:"
+                warn "修正上方错误后可重新执行证书设置，或手动申请:"
                 warn "  ~/.acme.sh/acme.sh --issue -d ${DOMAIN} --standalone"
-                return 0
+                return 1
             }
 
-            install_cert "ecc"
+            install_cert "ecc" || return 1
             info "✅ 证书申请成功"
             ;;
 
@@ -320,10 +335,7 @@ setup_tls() {
             # 可选: Zone ID (自动检测或手动输入)
             read -p "Cloudflare Zone ID (留空自动检测): " CF_ZONE_ID
 
-            install_acme || {
-                warn "跳过证书申请"
-                return 0
-            }
+            install_acme || return 1
 
             info "正在通过 Cloudflare DNS API 申请证书..."
             export CF_Token="$CF_TOKEN"
@@ -332,18 +344,18 @@ setup_tls() {
             if [[ "$DOMAIN" == \** ]]; then
                 # 通配符证书: *.example.com + example.com
                 ~/.acme.sh/acme.sh --issue -d "$MAIN_DOMAIN" -d "$DOMAIN" --dns dns_cf --keylength ec-256 --force || {
-                    warn "证书申请失败，请检查 API Token 权限和域名是否在 Cloudflare"
-                    return 0
+                    warn "证书申请失败，请查看上方 acme.sh 错误（DNS/API、网络或证书签发机构）"
+                    return 1
                 }
                 DOMAIN="$MAIN_DOMAIN"
             else
                 ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_cf --keylength ec-256 --force || {
-                    warn "证书申请失败，请检查 API Token 权限"
-                    return 0
+                    warn "证书申请失败，请查看上方 acme.sh 错误（DNS/API、网络或证书签发机构）"
+                    return 1
                 }
             fi
 
-            install_cert "ecc"
+            install_cert "ecc" || return 1
             info "✅ 证书申请成功 (Cloudflare DNS)"
             ;;
 
@@ -367,21 +379,18 @@ setup_tls() {
             echo
             [[ -z "$DP_ID" || -z "$DP_KEY" ]] && error "API ID 和 Token 不能为空"
 
-            install_acme || {
-                warn "跳过证书申请"
-                return 0
-            }
+            install_acme || return 1
 
             info "正在通过 DNSPod DNS API 申请证书..."
             export DP_Id="$DP_ID"
             export DP_Key="$DP_KEY"
 
             ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_dp --keylength ec-256 --force || {
-                warn "证书申请失败，请检查 API Token 和域名是否托管在 DNSPod"
-                return 0
+                warn "证书申请失败，请查看上方 acme.sh 错误（DNS/API、网络或证书签发机构）"
+                return 1
             }
 
-            install_cert "ecc"
+            install_cert "ecc" || return 1
             info "✅ 证书申请成功 (DNSPod)"
             ;;
 
@@ -405,21 +414,18 @@ setup_tls() {
             echo
             [[ -z "$ALI_KEY" || -z "$ALI_SECRET" ]] && error "AccessKey 不能为空"
 
-            install_acme || {
-                warn "跳过证书申请"
-                return 0
-            }
+            install_acme || return 1
 
             info "正在通过阿里云 DNS API 申请证书..."
             export Ali_Key="$ALI_KEY"
             export Ali_Secret="$ALI_SECRET"
 
             ~/.acme.sh/acme.sh --issue -d "$DOMAIN" --dns dns_ali --keylength ec-256 --force || {
-                warn "证书申请失败，请检查 AccessKey 和域名是否托管在阿里云"
-                return 0
+                warn "证书申请失败，请查看上方 acme.sh 错误（DNS/API、网络或证书签发机构）"
+                return 1
             }
 
-            install_cert "ecc"
+            install_cert "ecc" || return 1
             info "✅ 证书申请成功 (阿里云 DNS)"
             ;;
 
@@ -479,9 +485,11 @@ setup_tls() {
     esac
 
     # TLS 配置失败时终止，不把管理入口降级到明文 HTTP。
-    if [[ "$TLS_ENABLED" == "true" && ( ! -f "$CERT_PATH" || ! -f "$KEY_PATH" ) ]]; then
-        error "TLS 证书或私钥不存在，请修正路径后重试: $CERT_PATH / $KEY_PATH"
+    if [[ "$TLS_ENABLED" == "true" && ( ! -s "$CERT_PATH" || ! -s "$KEY_PATH" ) ]]; then
+        warn "TLS 证书或私钥不存在或为空，请修正路径后重试: $CERT_PATH / $KEY_PATH"
+        return 1
     fi
+    return 0
 }
 
 # ============================================
@@ -573,20 +581,20 @@ cert_setup() {
     echo ""
 
     # 执行 TLS 设置
-    setup_tls
+    setup_tls || return 1
 
     # 更新 config.yaml
     if [[ -f "$CONFIG_FILE" ]]; then
-        sed -i "s|^  tls:.*|  tls: ${TLS_ENABLED}|" "$CONFIG_FILE"
-        sed -i "s|^  cert:.*|  cert: \"${CERT_PATH}\"|" "$CONFIG_FILE"
-        sed -i "/^  cert:/{ n; s|^  key:.*|  key: \"${KEY_PATH}\"|; }" "$CONFIG_FILE"
-        sed -i "s|^  domain:.*|  domain: \"${DOMAIN}\"|" "$CONFIG_FILE"
+        sed -i "s|^  tls:.*|  tls: ${TLS_ENABLED}|" "$CONFIG_FILE" || return 1
+        sed -i "s|^  cert:.*|  cert: \"${CERT_PATH}\"|" "$CONFIG_FILE" || return 1
+        sed -i "/^  cert:/{ n; s|^  key:.*|  key: \"${KEY_PATH}\"|; }" "$CONFIG_FILE" || return 1
+        sed -i "s|^  domain:.*|  domain: \"${DOMAIN}\"|" "$CONFIG_FILE" || return 1
         info "config.yaml 已更新"
     fi
 
     # 重启所有服务使证书生效
     stop_all_services
-    start_services
+    start_services || return 1
     info "✅ 证书设置完成"
 }
 
@@ -664,7 +672,7 @@ interactive_config() {
     done
 
     # TLS 方案选择
-    setup_tls
+    setup_tls || return 1
 
     # Telegram 通知
     echo ""
@@ -1237,38 +1245,94 @@ stop_all_services() {
 # 启动服务
 # ============================================
 
+wait_panel_ready() {
+    local attempt
+    for attempt in {1..10}; do
+        if systemctl is-active --quiet "$SERVICE_NAME" && \
+            "${INSTALL_DIR}/proxy-panel" -config "$CONFIG_FILE" -check-health >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    warn "ProxyPanel 未通过启动健康检查，请检查以下服务日志"
+    "${INSTALL_DIR}/proxy-panel" -config "$CONFIG_FILE" -check-health >&2
+    journalctl -u "$SERVICE_NAME" -n 40 --no-pager >&2
+    return 1
+}
+
 start_services() {
     step "启动服务..."
     systemctl start ${XRAY_SERVICE} 2>/dev/null || warn "Xray 启动失败 (需要先配置节点后重启)"
     [[ -f /etc/systemd/system/${SINGBOX_SERVICE}.service ]] && \
         systemctl start ${SINGBOX_SERVICE} 2>/dev/null || true
-    systemctl start ${SERVICE_NAME} 2>/dev/null || warn "ProxyPanel 启动失败，请检查配置"
-    info "服务启动完成"
+    if ! systemctl start "$SERVICE_NAME"; then
+        warn "ProxyPanel 启动失败"
+        journalctl -u "$SERVICE_NAME" -n 40 --no-pager >&2
+        return 1
+    fi
+    wait_panel_ready || return 1
+    info "ProxyPanel 启动并通过健康检查"
 }
 
 # ============================================
 # 安装完成信息
 # ============================================
 
+show_panel_access() {
+    local listen port tls domain protocol=http ip="${1:-YOUR_SERVER_IP}"
+    read -r listen port tls domain < <(awk '
+        BEGIN { listen="0.0.0.0"; port=8080; tls="false" }
+        /^server:/ { server=1; next }
+        /^[^[:space:]#]/ { server=0 }
+        server {
+            value=$2; gsub(/["\047]/, "", value)
+            if ($1 == "listen:") listen=(value == "" ? "127.0.0.1" : value)
+            if ($1 == "port:") port=value
+            if ($1 == "tls:") tls=value
+            if ($1 == "domain:") domain=value
+        }
+        END { print listen, port, tls, domain }
+    ' "$CONFIG_FILE")
+    [[ "$tls" == true ]] && protocol=https
+    echo "  管理监听: ${listen}:${port} (${protocol})"
+    case "$listen" in
+        127.*|::1)
+            echo "  仅本机可达；修改端口不会开放公网访问。"
+            echo "  在你的电脑建立 SSH 隧道: ssh -N -L ${port}:[${listen}]:${port} root@${ip}"
+            if [[ -n "$domain" ]]; then
+                echo "  隧道访问前，在你电脑的 hosts 临时加入: 127.0.0.1 ${domain}"
+                echo "  隧道浏览器地址: ${protocol}://${domain}:${port}/"
+                echo "  访问结束后移除该 hosts 记录，以恢复此域名的正常解析。"
+            else
+                echo "  隧道浏览器地址: ${protocol}://127.0.0.1:${port}/"
+                [[ "$tls" == true ]] && echo "  TLS 访问需使用证书覆盖的域名，并在本机解析到 127.0.0.1。"
+            fi
+            echo "  公网管理访问需要独立 HTTPS 反代和访问控制。"
+            ;;
+        *)
+            echo "  管理访问: ${protocol}://${domain:-${ip}}:${port}/"
+            echo "  请核对主机防火墙、云安全组及管理入口的访问限制。"
+            ;;
+    esac
+    echo "  website setup 的 443 网站是展示页，不会自动转发管理面板。"
+    if [[ "$tls" == true ]]; then
+        case "$port" in
+            443|2053|2083|2087|2096|8443) ;;
+            *) echo "  Cloudflare 橙云不支持 HTTPS ${port}；支持 443/2053/2083/2087/2096/8443。" ;;
+        esac
+    fi
+}
+
 print_summary() {
     local ip
     ip=$(curl -s4 --connect-timeout 5 ip.sb 2>/dev/null || curl -s4 --connect-timeout 5 ifconfig.me 2>/dev/null || echo "YOUR_SERVER_IP")
-    local protocol="http"
-    [[ "$TLS_ENABLED" == "true" ]] && protocol="https"
-    local access_host="${DOMAIN:-${ip}}"
 
     echo ""
     echo "============================================"
     echo -e "${GREEN} ProxyPanel 安装完成!${NC}"
     echo "============================================"
     echo ""
-    echo "  本机访问: ${protocol}://127.0.0.1:${PANEL_PORT}"
-    echo "  SSH 隧道: ssh -N -L ${PANEL_PORT}:127.0.0.1:${PANEL_PORT} root@${ip}"
-    echo "  新安装默认仅监听本机；公网管理/订阅请配置独立 HTTPS 反代和访问控制。"
-    echo "  现有安装请核对 config.yaml 的 server.listen；TLS/域名绑定需用对应域名访问。"
-    if [[ -n "$DOMAIN" ]]; then
-        echo "  域名绑定: ${DOMAIN} (IP 直接访问已禁止)"
-    fi
+    show_panel_access "$ip"
     echo "  管理员:   ${ADMIN_USER}"
     echo "  密码:     ********"
     echo ""
@@ -1324,19 +1388,19 @@ do_install() {
         return
     fi
 
-    install_deps
+    install_deps || return 1
 
-    interactive_config
+    interactive_config || return 1
     setup_firewall
     generate_config
     generate_default_xray_config
     generate_default_singbox_config
     download_xray
     download_singbox
-    download_panel
+    download_panel || return 1
     install_cli
     setup_systemd
-    start_services
+    start_services || return 1
     print_summary
     offer_website_setup
 }
@@ -2291,8 +2355,9 @@ do_restart() {
             info "Sing-box 已重启" || warn "Sing-box 重启失败"
     fi
 
-    systemctl restart ${SERVICE_NAME} 2>/dev/null && \
-        info "ProxyPanel 已重启" || warn "ProxyPanel 重启失败"
+    systemctl restart "$SERVICE_NAME" || return 1
+    wait_panel_ready || return 1
+    info "ProxyPanel 已重启并通过健康检查"
     if [[ -f "$WEBSITE_CONFIG_DIR/managed.json" ]]; then
         nginx -t -c "$WEBSITE_CONFIG_DIR/nginx.conf" && systemctl restart "$WEBSITE_SERVICE" || warn "网站重启失败，请执行 proxy-panel website status 查看"
     fi
@@ -2545,19 +2610,18 @@ do_port() {
     fi
 
     # 仅修改 server.port 这一行
-    sed -i "s|^  port:.*|  port: ${new_port}|" "$CONFIG_FILE"
+    sed -i "s|^  port:.*|  port: ${new_port}|" "$CONFIG_FILE" || return 1
     info "config.yaml 端口已更新: ${cur_port} → ${new_port}"
 
     # 更换管理端口不自动扩大公网防火墙开放范围。
 
     # 重启面板生效
-    systemctl restart "${SERVICE_NAME}" 2>/dev/null && info "ProxyPanel 已重启" \
-        || warn "ProxyPanel 重启失败，请执行 proxy-panel status 查看"
+    systemctl restart "$SERVICE_NAME" || return 1
+    wait_panel_ready || return 1
 
     echo ""
     info "✅ 面板端口已改为 ${new_port}"
-    warn "请同步更新 SSH 隧道或受保护的反代；旧端口 ${cur_port} 如不再使用可自行回收"
-    warn "若用 Cloudflare 橙色云代理，HTTPS 仅支持 443/2053/2083/2087/2096/8443 端口"
+    show_panel_access
 }
 
 # ============================================
