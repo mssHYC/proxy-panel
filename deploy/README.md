@@ -13,19 +13,43 @@
 
 ## 管理入口
 
-新安装默认只监听 `127.0.0.1:8080`，从自己的电脑运行：
+新安装默认只监听 `127.0.0.1:8080`。`proxy-panel port` 只修改端口，不会改为公网监听；例如改成 8081 后，`127.0.0.1:8081` 仍只能在服务器本机访问。先确认 `config.yaml` 中的 `server.listen`、`server.port`、`server.tls` 和 `server.domain`，以下示例以端口 8080 为例，从自己的电脑运行：
 
 ```sh
-ssh -N -L 8080:127.0.0.1:8080 root@你的服务器
+ssh -N -L 127.0.0.1:8080:127.0.0.1:8080 root@服务器IP
 ```
 
-HTTP 模式在浏览器打开 `http://127.0.0.1:8080`。启用了 TLS 或 `server.domain` 时，需要使用证书对应域名并将该域名在本机解析到回环地址；Host 限制不能代替访问鉴权。
+未设置 `server.domain` 的 HTTP 模式在浏览器打开 `http://127.0.0.1:8080`。启用了 TLS 或 `server.domain` 时，浏览器地址必须与证书和配置域名匹配。例如配置域名为 `panel.example.com`，在自己电脑的 hosts 文件中临时加入：
+
+```text
+127.0.0.1 panel.example.com
+```
+
+保持 SSH 隧道运行，打开 `https://panel.example.com:8080/`（HTTP 模式用 `http://`）。使用完毕后删除这条 hosts 映射，恢复该域名的正常解析。也可以不修改 hosts，在自己的电脑通过隧道验证 HTTPS：
+
+```sh
+curl --noproxy '*' --resolve panel.example.com:8080:127.0.0.1 -I https://panel.example.com:8080/
+```
+
+证书申请成功不会改变监听范围。Cloudflare 橙色云代理支持的 HTTPS 端口包括 443、8443，**不包括 8080、8081**；公网反代入口需使用其[支持的端口](https://developers.cloudflare.com/fundamentals/reference/network-ports/)。SSH 隧道直接连接服务器 IP，不经过 Cloudflare 代理。Host 限制不能代替访问鉴权。
 
 需要长期公网订阅时，使用单独的 HTTPS 域名/入口，反代只放行所需订阅路径，其他面板路径限制管理员来源或使用 VPN。不要把面板页面、`/api` 或 `/metrics` 接到下面的 443 网站回落上。已有防火墙放行规则不会自动删除，应在确认新访问方式后关闭不再需要的管理端口；保留 SSH。
 
 Xray API 继续监听回环，保留用户热更新所需的 HandlerService；代理出站拒绝访问管理网段及本机地址。sing-box 的 Clash API 增加随机 Bearer secret，面板采集携带该令牌，核心配置文件保留 0600 权限。出站规则是防护的一层，不替代主机/云防火墙和进程隔离，尤其不能把它当作对所有 DNS 重绑定、NAT64 或其他网络转换的完整防御。
 
 Docker：容器内配置 `server.listen: "0.0.0.0"`，Compose 在宿主机仅发布 `127.0.0.1:8080`。不要把容器内回环监听与宿主机回环端口映射混淆。
+
+### 安装或证书配置失败
+
+安装和证书配置只有在面板启动健康检查通过后才显示完成。失败时先看最早出现的错误，再在服务器以 root 执行：
+
+```sh
+/root/.acme.sh/acme.sh --version
+proxy-panel cert status
+journalctl -u proxy-panel -b -n 100 --no-pager
+```
+
+若第一条提示文件不存在，说明 acme.sh 尚未安装成功，不能据此判断 DNS API Token 权限；保留安装器的原始错误排查。启用了 TLS 但证书文件不存在时，面板会拒绝启动。修复安装或签发错误后，执行 `proxy-panel cert setup`，确认面板正常运行再部署网站。已有面板在证书申请失败时不会写入失败的 TLS 配置或重启服务。
 
 ## 在 TCP 443 上共用网站和代理
 
@@ -42,7 +66,7 @@ TCP 443 未分配给代理节点且端口空闲时，脚本自动部署独立静
 
 网站仍需要有效的域名证书和私钥。脚本依次尝试已托管网站的证书、`/opt/proxy-panel/certs/域名.crt` 与同名 `.key`、面板配置的 `server.cert` / `server.key`，验证域名覆盖、有效期和证书链。省略域名时，使用已托管网站域名或 `server.domain`。没有可用证书会在部署前提示具体路径，不会自动申请证书。重复部署保留自定义首页，失败恢复原网站文件及服务状态。
 
-TCP 443 已被其他服务占用，或已分配给不受支持的代理节点时，脚本会中止并提示冲突，不会强行停止服务。需要在主机防火墙及云安全组放行 TCP 443；脚本不自动更改这些规则。部署后访问 `https://site.example.com/`。管理面板仍使用原来的地址和端口，例如启用了 TLS 的面板应访问 `https://域名:13888/`。
+TCP 443 已被其他服务占用，或已分配给不受支持的代理节点时，脚本会中止并提示冲突，不会强行停止服务。需要在主机防火墙及云安全组放行 TCP 443；脚本不自动更改这些规则。部署后访问 `https://site.example.com/` 可看到展示网站。管理面板仍使用原来的监听地址和端口，回环监听需按上面的“管理入口”通过 SSH 隧道或受保护的反代访问，不能直接从公网访问 `https://域名:面板端口/`。
 
 ### HTTPUpgrade 节点：管理脚本自动部署
 
