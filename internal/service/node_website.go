@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -27,6 +28,9 @@ func (s *NodeService) UpdateAndSync(id int64, req *UpdateNodeReq) (*model.Node, 
 	if s.syncSvc != nil {
 		s.syncSvc.syncMu.Lock()
 		defer s.syncSvc.syncMu.Unlock()
+	}
+	if err := s.recoverManagedWebsiteLocked(); err != nil {
+		return nil, false, err
 	}
 	old, err := s.GetByID(id)
 	if err != nil || old == nil {
@@ -75,6 +79,9 @@ func (s *NodeService) UpdateAndSync(id int64, req *UpdateNodeReq) (*model.Node, 
 	if err != nil {
 		return nil, false, err
 	}
+	if err := change.Begin(*old, candidate); err != nil {
+		return nil, false, fmt.Errorf("保存路径恢复记录失败，节点未修改: %w", err)
+	}
 	rollback := func(cause error) (*model.Node, bool, error) {
 		rollbackCtx, stop := context.WithTimeout(context.Background(), 45*time.Second)
 		defer stop()
@@ -94,6 +101,9 @@ func (s *NodeService) UpdateAndSync(id int64, req *UpdateNodeReq) (*model.Node, 
 		if len(failures) > 0 {
 			return nil, false, fmt.Errorf("节点未保存；%v；回退未完成: %w", cause, errors.Join(failures...))
 		}
+		if err := change.Complete(); err != nil {
+			return nil, false, fmt.Errorf("已恢复旧配置，但恢复记录清理失败: %v；原错误: %w", err, cause)
+		}
 		return nil, false, fmt.Errorf("节点未保存，已恢复旧配置: %w", cause)
 	}
 	if err := boundedEngine.ApplyConfigContext(ctx, next); err != nil {
@@ -107,6 +117,11 @@ func (s *NodeService) UpdateAndSync(id int64, req *UpdateNodeReq) (*model.Node, 
 	node, err := s.updateStored(old, candidate, req)
 	if err != nil {
 		return rollback(err)
+	}
+	// Once the DB commit succeeds the new path is authoritative. A failed
+	// journal cleanup must never turn a successful save into an old-path rollback.
+	if err := change.Complete(); err != nil {
+		log.Printf("[网站同步] 节点 %d 已保存，恢复记录待下次启动或保存时清理: %v", node.ID, err)
 	}
 	return node, true, nil
 }

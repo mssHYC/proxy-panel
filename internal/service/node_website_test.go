@@ -243,9 +243,12 @@ if [ "$1" = restart ] && [ "$2" = xray ]; then
     if [ -f "$NODE_WEBSITE_TEST_ROOT/fail-xray" ] && grep -q '"/new"' "$NODE_WEBSITE_TEST_ROOT/xray.json"; then exit 1; fi
     if [ -f "$NODE_WEBSITE_TEST_ROOT/fail-rollback" ] && grep -q '"/old"' "$NODE_WEBSITE_TEST_ROOT/xray.json"; then exit 1; fi
     cp "$NODE_WEBSITE_TEST_ROOT/xray.json" "$NODE_WEBSITE_TEST_ROOT/active-xray.json"
-elif [ "$1" = reload ] && [ "$2" = proxy-panel-web.service ]; then
+    if [ -f "$NODE_WEBSITE_TEST_ROOT/kill-after-xray" ]; then rm "$NODE_WEBSITE_TEST_ROOT/kill-after-xray"; kill -KILL "$PPID"; exit 0; fi
+elif { [ "$1" = reload ] || [ "$1" = reload-or-restart ]; } && [ "$2" = proxy-panel-web.service ]; then
     if [ -f "$NODE_WEBSITE_TEST_ROOT/fail-nginx" ] && grep -q '"/new"' "$NODE_WEBSITE_TEST_ROOT/nginx.conf"; then exit 1; fi
     cp "$NODE_WEBSITE_TEST_ROOT/nginx.conf" "$NODE_WEBSITE_TEST_ROOT/active-nginx.conf"
+    if [ -f "$NODE_WEBSITE_TEST_ROOT/kill-after-nginx" ]; then rm "$NODE_WEBSITE_TEST_ROOT/kill-after-nginx"; kill -KILL "$PPID"; exit 0; fi
+    if [ -f "$NODE_WEBSITE_TEST_ROOT/fail-clear" ]; then chmod 500 "$NODE_WEBSITE_TEST_ROOT"; fi
 fi
 `), 0755)
 	t.Setenv("NODE_WEBSITE_TEST_ROOT", f.root)

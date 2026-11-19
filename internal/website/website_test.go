@@ -297,3 +297,92 @@ func TestPathSaveAcceptsOmittedEmptyHost(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMetadataEditsIgnoreBrokenWebsiteManifest(t *testing.T) {
+	for _, broken := range []string{"invalid-json", "unreadable"} {
+		t.Run(broken, func(t *testing.T) {
+			f := newFixture(t)
+			if broken == "invalid-json" {
+				write(t, f.manifest, []byte("{"))
+			} else {
+				if err := os.Remove(f.manifest); err != nil {
+					t.Fatal(err)
+				}
+				// A directory reliably fails ReadFile, including tests run as root.
+				if err := os.Mkdir(f.manifest, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			candidate := f.node
+			candidate.Name = "renamed"
+			candidate.SortOrder = 7
+			if change, err := f.manager.Prepare(f.node, candidate); err != nil || change != nil {
+				t.Fatalf("metadata-only edit depends on broken website state: %v %v", change, err)
+			}
+		})
+	}
+}
+
+func TestEquivalentFormSettingsIgnoreBrokenWebsiteManifest(t *testing.T) {
+	f := newFixture(t)
+	write(t, f.manifest, []byte("{"))
+	legacy := f.node
+	legacy.Settings = strings.ReplaceAll(legacy.Settings, `"sni":`, `"serverName":`)
+	legacy.Settings = strings.ReplaceAll(legacy.Settings, `"cert_path":`, `"certPath":`)
+	legacy.Settings = strings.ReplaceAll(legacy.Settings, `"key_path":`, `"keyPath":`)
+	legacy.Settings = strings.Replace(legacy.Settings, `"host":"example.com"`, `"host":""`, 1)
+	legacy.Settings = strings.Replace(legacy.Settings, `"alpn":["http/1.1"]`, `"alpn":"http/1.1"`, 1)
+	candidate := f.node
+	candidate.Name = "renamed through the complete settings form"
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(candidate.Settings), &settings); err != nil {
+		t.Fatal(err)
+	}
+	delete(settings, "host")
+	settings["tls"] = true
+	settings["fingerprint"] = "chrome"
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.Settings = string(encoded)
+	if change, err := f.manager.Prepare(legacy, candidate); err != nil || change != nil {
+		t.Fatalf("equivalent form settings depend on broken website state: %v %v", change, err)
+	}
+}
+
+func TestRouteChangesStillRequireReadableWebsiteManifest(t *testing.T) {
+	f := newFixture(t)
+	write(t, f.manifest, []byte("{"))
+	changes := map[string]func(*model.Node){
+		"address":   func(node *model.Node) { node.Host = "other.example.com" },
+		"port":      func(node *model.Node) { node.Port = 8443 },
+		"protocol":  func(node *model.Node) { node.Protocol = "vmess" },
+		"transport": func(node *model.Node) { node.Transport = "ws" },
+		"engine":    func(node *model.Node) { node.KernelType = "singbox" },
+		"disabled":  func(node *model.Node) { node.Enable = false },
+	}
+	for _, field := range []string{"path", "host", "sni", "listen", "security", "alpn", "cert_path", "key_path"} {
+		changes[field] = func(node *model.Node) {
+			var settings map[string]any
+			if err := json.Unmarshal([]byte(node.Settings), &settings); err != nil {
+				t.Fatal(err)
+			}
+			settings[field] = "different"
+			encoded, err := json.Marshal(settings)
+			if err != nil {
+				t.Fatal(err)
+			}
+			node.Settings = string(encoded)
+		}
+	}
+	for name, change := range changes {
+		t.Run(name, func(t *testing.T) {
+			candidate := f.node
+			change(&candidate)
+			if _, err := f.manager.Prepare(f.node, candidate); err == nil {
+				t.Fatal("route edit bypassed a broken managed website manifest")
+			}
+		})
+	}
+}

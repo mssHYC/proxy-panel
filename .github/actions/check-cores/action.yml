@@ -35,6 +35,9 @@ runs:
         sudo apt-get install -y nginx python3-yaml
         sudo systemctl stop nginx
         NGINX_BINARY="$(command -v nginx)" go test ./internal/website -count=1
+        go test -c ./internal/website -o "$DIR/website.test"
+        sudo env NGINX_BINARY="$(command -v nginx)" WEBSITE_SYSTEMD_TEST=1 \
+          "$DIR/website.test" -test.run '^TestRealSystemdManagedPathPermissions$' -test.v
         # nginx -t checks bind addresses; standalone sites use both address families.
         sudo ip address add 192.0.2.10/32 dev lo
         trap 'sudo ip address del 192.0.2.10/32 dev lo; sudo ip -6 address del 2001:db8::10/128 dev lo' EXIT

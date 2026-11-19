@@ -62,6 +62,11 @@ var routePath = regexp.MustCompile(`^/[A-Za-z0-9/_~.\-]*$`)
 // Prepare is read-only except for a temporary nginx -t configuration, removed before return.
 // Unmanaged sites and unrelated nodes do not participate in the synchronous update.
 func (m *Manager) Prepare(old, candidate model.Node) (*Change, error) {
+	// Display metadata does not affect the managed route and must remain editable
+	// even when the independently managed website manifest needs repair.
+	if sameWebsiteRoute(old, candidate) {
+		return nil, nil
+	}
 	data, err := os.ReadFile(m.manifestPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -83,10 +88,13 @@ func (m *Manager) Prepare(old, candidate model.Node) (*Change, error) {
 	if candidate.ID != old.ID || candidate.Host != old.Host || candidate.Port != old.Port || candidate.Protocol != old.Protocol || candidate.Transport != old.Transport || candidate.KernelType != old.KernelType || candidate.Enable != old.Enable {
 		return nil, errors.New("托管网站依赖此节点的地址、端口、协议和启用状态；请先调整网站部署，面板当前仅自动同步路径")
 	}
-	for _, key := range []string{"security", "listen", "alpn"} {
+	for _, key := range []string{"security", "listen"} {
 		if !reflect.DeepEqual(before[key], after[key]) {
 			return nil, fmt.Errorf("托管网站依赖节点的 %s 设置，请先调整网站部署；面板当前仅自动同步路径", key)
 		}
+	}
+	if !reflect.DeepEqual(routeALPN(before), routeALPN(after)) {
+		return nil, errors.New("托管网站依赖节点的 ALPN 设置，请先调整网站部署")
 	}
 	if text(before, "host") != text(after, "host") {
 		return nil, errors.New("托管网站依赖节点的 Host 设置，请先调整网站部署；面板当前仅自动同步路径")
@@ -170,6 +178,66 @@ func (m *Manager) Prepare(old, candidate model.Node) (*Change, error) {
 		return nil, fmt.Errorf("Nginx 路径预检失败: %w", err)
 	}
 	return &Change{manager: m, state: state, oldManifest: data, newManifest: nextManifest, oldConfig: config, newConfig: nextConfig, newPath: newPath}, nil
+}
+
+func sameWebsiteRoute(a, b model.Node) bool {
+	if a.ID != b.ID || a.Host != b.Host || a.Port != b.Port ||
+		a.Protocol != b.Protocol || a.Transport != b.Transport ||
+		a.KernelType != b.KernelType || a.Enable != b.Enable {
+		return false
+	}
+	if a.Settings == b.Settings {
+		return true
+	}
+	var before, after map[string]any
+	if json.Unmarshal([]byte(a.Settings), &before) != nil || json.Unmarshal([]byte(b.Settings), &after) != nil || before == nil || after == nil {
+		return false
+	}
+	// A full form save normalizes aliases and adds client-only defaults. Compare
+	// the values used by the website route rather than the JSON representation.
+	security := func(settings map[string]any) string {
+		if value := text(settings, "security"); value != "" {
+			return value
+		}
+		if settings["tls"] == true {
+			return "tls"
+		}
+		return "none"
+	}
+	if security(before) != security(after) || !reflect.DeepEqual(routeALPN(before), routeALPN(after)) ||
+		firstText(before, "listen", "listen", "0.0.0.0") != firstText(after, "listen", "listen", "0.0.0.0") ||
+		firstText(before, "path", "path", "/") != firstText(after, "path", "path", "/") ||
+		text(before, "host") != text(after, "host") ||
+		firstText(before, "sni", "serverName", a.Host) != firstText(after, "sni", "serverName", b.Host) {
+		return false
+	}
+	for _, aliases := range [][2]string{{"cert_path", "certPath"}, {"key_path", "keyPath"}} {
+		oldPath := firstText(before, aliases[0], aliases[1], "")
+		newPath := firstText(after, aliases[0], aliases[1], "")
+		if oldPath != newPath && !sameFilePath(oldPath, newPath) {
+			return false
+		}
+	}
+	return true
+}
+
+func routeALPN(settings map[string]any) []string {
+	var result []string
+	switch value := settings["alpn"].(type) {
+	case []any:
+		for _, part := range value {
+			if text, ok := part.(string); ok {
+				result = append(result, text)
+			}
+		}
+	case string:
+		for _, part := range strings.Split(value, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				result = append(result, part)
+			}
+		}
+	}
+	return result
 }
 
 func text(settings map[string]any, key string) string {
@@ -260,10 +328,22 @@ func atomicWrite(filename string, data []byte) error {
 		file.Close()
 		return err
 	}
+	if err = file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
 	if err = file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(file.Name(), filename)
+	if err := os.Rename(file.Name(), filename); err != nil {
+		return err
+	}
+	directory, err := os.Open(filepath.Dir(filename))
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 func command(ctx context.Context, name string, args ...string) error {

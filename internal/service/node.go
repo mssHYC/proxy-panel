@@ -292,6 +292,9 @@ func (s *NodeService) Delete(id int64) error {
 		s.syncSvc.syncMu.Lock()
 		defer s.syncSvc.syncMu.Unlock()
 	}
+	if err := s.recoverManagedWebsiteLocked(); err != nil {
+		return err
+	}
 	old, err := s.GetByID(id)
 	if err != nil {
 		return err
