@@ -96,7 +96,7 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		return
 	}
 
-	node, err := h.svc.Update(id, &req)
+	node, synced, err := h.svc.UpdateAndSync(id, &req)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, service.ErrInvalidNodeSettings) {
@@ -110,8 +110,9 @@ func (h *NodeHandler) Update(c *gin.Context) {
 		return
 	}
 
-	// 同步内核配置（5s 防抖合并）
-	h.syncSvc.Trigger()
+	if !synced {
+		h.syncSvc.Trigger()
+	}
 
 	c.JSON(http.StatusOK, withFirewallWarning(h, node))
 }

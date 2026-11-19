@@ -56,13 +56,17 @@ printf 'n\\n' | { if confirm terminal; then echo ANSWER=yes; else echo ANSWER=no
             os.waitpid(pid, 0)
 
 class UpdateTests(unittest.TestCase):
-    def run_case(self, failure="", active=True, without_cmp=False):
+    def run_case(self, failure="", active=True, without_cmp=False, existing_access=False):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / "data").mkdir()
             (root / "states").mkdir()
             originals = {"proxy-panel": b"old-binary", "config.yaml": b"listen: 0.0.0.0", "data/panel.db": b"old-db", "xray.json": b"old-config", "xray": b"old-core"}
+            access_name = "units/proxy-panel.service.d/managed-website.conf"
+            if existing_access:
+                originals[access_name] = b"[Service]\nReadWritePaths=-/old-managed-directory\n"
             for name, data in originals.items():
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
                 (root / name).write_bytes(data)
             services = ["proxy-panel", "xray"] if active else []
             for svc in services:
@@ -104,6 +108,8 @@ exit 1
 INSTALL_DIR="$TEST_ROOT"
 CONFIG_FILE="$TEST_ROOT/config.yaml"
 BACKUP_DIR="$TEST_ROOT/backups"
+WEBSITE_UNIT_DIR="$TEST_ROOT/units"
+WEBSITE_CONFIG_DIR="$TEST_ROOT/website"
 ARCH=amd64
 flock() { :; }
 sleep() { :; }
@@ -120,6 +126,8 @@ systemctl() {
  local op="$1" svc="${@: -1}"
  echo "$op $svc" >> "$TEST_ROOT/events"
  case "$op" in
+ daemon-reload)
+  if [[ "$FAIL" == daemon-reload && ! -f "$TEST_ROOT/failed-once" ]]; then touch "$TEST_ROOT/failed-once"; return 1; fi;;
  show) if [[ "$svc" == sing-box ]]; then echo not-found; else echo loaded; fi;;
  is-active) [[ -f "$TEST_ROOT/states/$svc" ]];;
  stop)
@@ -152,9 +160,14 @@ run_safe_update
                 for name, data in originals.items():
                     self.assertEqual((root / name).read_bytes(), data, name + result.stdout)
                 self.assertFalse((root / "data/panel.db-wal").exists(),result.stdout)
+                if not existing_access:
+                    self.assertFalse((root / access_name).exists(), "failed upgrade left new permissions")
             else:
                 self.assertEqual((root / "config.yaml").read_bytes(),originals["config.yaml"])
                 self.assertEqual((root / "proxy-panel").read_bytes(),candidate.read_bytes(),result.stdout)
+                access = root / "units/proxy-panel.service.d/managed-website.conf"
+                self.assertTrue(access.exists(), "upgraded panel needs managed Nginx write access")
+                self.assertEqual(access.read_text(), f"[Service]\nReadWritePaths=-{root}/website\n")
             self.assertEqual(sorted(p.name for p in (root / "states").iterdir()),sorted(services))
             if failure in ("download","preflight"):
                 events=(root / "events").read_text() if (root / "events").exists() else ""
@@ -168,6 +181,8 @@ run_safe_update
     def test_second_preflight_failure_restores_service_state(self): self.run_case("final-preflight")
     def test_partial_replacement_restores_files(self): self.run_case("replace")
     def test_start_failure_rolls_back(self): self.run_case("start")
+    def test_unit_reload_failure_restores_files_and_permissions(self): self.run_case("daemon-reload")
+    def test_health_failure_restores_existing_permissions(self): self.run_case("health", existing_access=True)
     def test_success_preserves_listen(self): self.run_case()
     def test_success_without_cmp(self): self.run_case(without_cmp=True)
     def test_manifest_change_restores_services(self):

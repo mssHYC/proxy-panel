@@ -831,6 +831,16 @@ SBEOF
 # systemd 服务配置
 # ============================================
 
+# Keep the exception scoped to this project's managed Nginx directory. The
+# optional path lets the panel start before website setup creates the directory.
+setup_website_write_access() {
+    local directory="${WEBSITE_UNIT_DIR}/${SERVICE_NAME}.service.d"
+    mkdir -p "$directory" || return 1
+    printf '[Service]\nReadWritePaths=-%s\n' "$WEBSITE_CONFIG_DIR" > "$directory/managed-website.conf.update-new" &&
+        chmod 644 "$directory/managed-website.conf.update-new" &&
+        mv -f "$directory/managed-website.conf.update-new" "$directory/managed-website.conf"
+}
+
 setup_systemd() {
     step "配置 systemd 服务..."
 
@@ -951,6 +961,7 @@ WantedBy=multi-user.target
 SVCEOF
     fi
 
+    setup_website_write_access || return 1
     systemctl daemon-reload
     systemctl enable ${SERVICE_NAME} >/dev/null 2>&1
     systemctl enable ${XRAY_SERVICE} >/dev/null 2>&1
@@ -2059,6 +2070,7 @@ restore_update_files() {
         fi
         index=$((index+1))
     done < <(jq -r '.files[]' "$backup/state.json")
+    systemctl daemon-reload
 }
 
 stop_update_services() {
@@ -2150,7 +2162,10 @@ run_safe_update() (
     for svc in "$SERVICE_NAME" "$XRAY_SERVICE" "$SINGBOX_SERVICE"; do
         if systemctl is-active --quiet "$svc"; then active+=("$svc"); fi
     done
-    jq --arg panel "${INSTALL_DIR}/proxy-panel" --argjson active "$(printf '%s\n' "${active[@]}" | jq -Rsc 'split("\n") | map(select(length>0))')" '.files += [$panel] | .files |= unique | .active=$active' "$stage/check/manifest.json" > "$stage/state.json"
+    jq --arg panel "${INSTALL_DIR}/proxy-panel" \
+        --arg website_access "${WEBSITE_UNIT_DIR}/${SERVICE_NAME}.service.d/managed-website.conf" \
+        --argjson active "$(printf '%s\n' "${active[@]}" | jq -Rsc 'split("\n") | map(select(length>0))')" \
+        '.files += [$panel, $website_access] | .files |= unique | .active=$active' "$stage/check/manifest.json" > "$stage/state.json"
     step "预检通过，停止服务并创建一致备份..."
     phase="stopped"
     stop_update_services
@@ -2178,6 +2193,8 @@ run_safe_update() (
     replace_update_binary "$stage/proxy-panel" "${INSTALL_DIR}/proxy-panel"
     if [[ -n "$xray_candidate" ]]; then replace_update_binary "$xray_candidate" "$xray_path"; fi
     if [[ -n "$singbox_candidate" ]]; then replace_update_binary "$singbox_candidate" "$singbox_path"; fi
+    setup_website_write_access
+    systemctl daemon-reload
     start_update_services "$stage/state.json"
     for i in {1..15}; do
         sleep 1
@@ -2255,6 +2272,7 @@ do_uninstall() {
 
     # 删除 systemd 服务文件
     rm -f /etc/systemd/system/${SERVICE_NAME}.service
+    rm -f "${WEBSITE_UNIT_DIR}/${SERVICE_NAME}.service.d/managed-website.conf"
     rm -f /etc/systemd/system/${XRAY_SERVICE}.service
     rm -f /etc/systemd/system/${SINGBOX_SERVICE}.service
     systemctl daemon-reload

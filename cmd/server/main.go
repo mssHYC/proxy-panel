@@ -16,6 +16,7 @@ import (
 	"proxy-panel/internal/service/firewall"
 	notify "proxy-panel/internal/service/notify"
 	"proxy-panel/internal/upgrade"
+	"proxy-panel/internal/website"
 )
 
 func main() {
@@ -120,6 +121,11 @@ func main() {
 
 	// 启动时同步内核配置（确保 Xray/Sing-box 配置与数据库一致）
 	syncSvc := service.NewKernelSyncService(db, mgr)
+	nodeSvc.ConfigureManagedWebsite(syncSvc, website.New("/etc/nginx/proxy-panel/managed.json",
+		"/etc/nginx/proxy-panel/nginx.conf", cfg.Database.Path, cfg.Kernel.XrayConfig), cfg.Kernel.XrayConfig)
+	if err := nodeSvc.RecoverManagedWebsite(); err != nil {
+		log.Fatalf("恢复未完成的网站路径变更失败（保留恢复记录，停止启动）: %v", err)
+	}
 	if err := syncSvc.Sync(); err != nil {
 		log.Printf("启动时同步内核配置失败: %v", err)
 	}
@@ -154,7 +160,7 @@ func main() {
 	defer scheduler.Stop()
 
 	// 设置路由
-	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc, scheduler, fwSvc, auditSvc, subTokenSvc, cfg.Database.Path)
+	r := router.Setup(cfg, db, mgr, userSvc, nodeSvc, trafficSvc, notifySvc, authSvc, scheduler, fwSvc, auditSvc, subTokenSvc, cfg.Database.Path, syncSvc)
 
 	addr := cfg.Server.Address()
 	if cfg.Server.Domain != "" {
