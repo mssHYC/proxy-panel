@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"proxy-panel/internal/model"
@@ -22,11 +23,14 @@ type fixture struct {
 	manifest, config string
 }
 
-func newFixture(t *testing.T) *fixture {
+func newFixture(t *testing.T, intercept ...func(http.ResponseWriter, *http.Request) bool) *fixture {
 	t.Helper()
 	dir := t.TempDir()
 	f := &fixture{manifest: filepath.Join(dir, "managed.json"), config: filepath.Join(dir, "nginx.conf")}
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(intercept) > 0 && intercept[0](w, r) {
+			return
+		}
 		data, _ := os.ReadFile(f.config)
 		if r.URL.Path == "/" {
 			w.WriteHeader(http.StatusOK)
@@ -68,6 +72,29 @@ func newFixture(t *testing.T) *fixture {
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	f.manager = website.New(f.manifest, f.config, db, core)
 	return f
+}
+
+func TestPathSaveWaitsPastTransientWorkerSuccess(t *testing.T) {
+	var upgrades atomic.Int32
+	f := newFixture(t, func(w http.ResponseWriter, r *http.Request) bool {
+		// A stale worker briefly reports success while another generation still
+		// serves the previous route. The next new connection exposes the gap.
+		if r.URL.Path == "/new" && upgrades.Add(1) == 2 {
+			w.WriteHeader(http.StatusNotFound)
+			return true
+		}
+		return false
+	})
+	candidate := f.node
+	candidate.Settings = strings.Replace(candidate.Settings, `"/old"`, `"/new"`, 1)
+	change, err := f.manager.Prepare(f.node, candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := change.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertUpgradeStatus(t, f.server.Listener.Addr().String(), filepath.Join(filepath.Dir(f.config), "ca.pem"), "/new", 101)
 }
 
 func write(t *testing.T, path string, data []byte) {

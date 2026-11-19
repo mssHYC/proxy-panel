@@ -371,6 +371,7 @@ func (c *Change) health(ctx context.Context, route string) error {
 		return errors.New("托管网站 CA 文件无效")
 	}
 	var last error
+	consecutive := 0
 	for {
 		last = nil
 		for _, domain := range c.state.Domains {
@@ -388,10 +389,20 @@ func (c *Change) health(ctx context.Context, route string) error {
 			}
 		}
 		if last == nil {
-			return nil
+			// A reload briefly overlaps worker generations. A single healthy
+			// connection can hit a draining worker before the new route settles.
+			consecutive++
+			if consecutive >= 3 {
+				return nil
+			}
+		} else {
+			consecutive = 0
 		}
 		select {
 		case <-ctx.Done():
+			if last == nil {
+				return fmt.Errorf("托管网站稳定性验证超时: %w", ctx.Err())
+			}
 			return fmt.Errorf("托管网站路径验证失败: %w", last)
 		case <-time.After(100 * time.Millisecond):
 		}
