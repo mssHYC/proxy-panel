@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"proxy-panel/internal/database"
 	"proxy-panel/internal/kernel"
 	"proxy-panel/internal/model"
 	"proxy-panel/internal/service/firewall"
+	"proxy-panel/internal/website"
 )
 
 var ErrInvalidNodeSettings = errors.New("节点设置无效")
@@ -60,6 +62,10 @@ type NodeService struct {
 	db           *database.DB
 	fw           *firewall.Service
 	realityCheck func(context.Context, map[string]interface{}) (*RealityCheck, error)
+	mutationMu   sync.Mutex
+	syncSvc      *KernelSyncService
+	website      *website.Manager
+	xrayConfig   string
 }
 
 // NewNodeService 创建节点服务
@@ -174,41 +180,11 @@ func (s *NodeService) Create(req *CreateNodeReq) (*model.Node, error) {
 
 // Update 更新节点（部分更新）
 func (s *NodeService) Update(id int64, req *UpdateNodeReq) (*model.Node, error) {
-	old, err := s.GetByID(id)
-	if err != nil {
-		return nil, err
-	}
-	if old == nil {
-		return nil, nil
-	}
+	node, _, err := s.UpdateAndSync(id, req)
+	return node, err
+}
 
-	candidate := *old
-	if req.Protocol != nil {
-		candidate.Protocol = *req.Protocol
-	}
-	if req.Transport != nil {
-		candidate.Transport = *req.Transport
-	}
-	if req.KernelType != nil {
-		candidate.KernelType = *req.KernelType
-	}
-	if req.Port != nil {
-		candidate.Port = *req.Port
-	}
-	if req.Settings != nil {
-		candidate.Settings = *req.Settings
-	}
-	// Allow disabling legacy invalid nodes without first repairing their settings.
-	if req.Protocol != nil || req.Transport != nil || req.KernelType != nil || req.Port != nil || req.Settings != nil || (req.Enable != nil && *req.Enable) {
-		if err := validateNodeSettings(candidate.Protocol, candidate.Transport, candidate.KernelType, candidate.Port, candidate.Settings); err != nil {
-			return nil, err
-		}
-	}
-	if req.Settings != nil || (req.Enable != nil && *req.Enable) {
-		if err := s.validateRealityChange(old.Settings, candidate.Settings, req.Enable != nil && *req.Enable && !old.Enable); err != nil {
-			return nil, err
-		}
-	}
+func (s *NodeService) updateStored(old *model.Node, candidate model.Node, req *UpdateNodeReq) (*model.Node, error) {
 	sets := []string{}
 	args := []interface{}{}
 
@@ -254,8 +230,9 @@ func (s *NodeService) Update(id int64, req *UpdateNodeReq) (*model.Node, error) 
 	}
 
 	sets = append(sets, "updated_at = ?")
-	args = append(args, time.Now())
-	args = append(args, id)
+	candidate.UpdatedAt = time.Now()
+	args = append(args, candidate.UpdatedAt)
+	args = append(args, old.ID)
 
 	query := "UPDATE nodes SET "
 	for i, part := range sets {
@@ -272,7 +249,7 @@ func (s *NodeService) Update(id int64, req *UpdateNodeReq) (*model.Node, error) 
 
 	s.syncFirewallOnUpdate(old, req)
 
-	return s.GetByID(id)
+	return &candidate, nil
 }
 
 // syncFirewallOnUpdate 按新旧状态差异触发防火墙操作；所有调用都是异步的
@@ -309,6 +286,12 @@ func (s *NodeService) syncFirewallOnUpdate(old *model.Node, req *UpdateNodeReq) 
 
 // Delete 删除节点
 func (s *NodeService) Delete(id int64) error {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	if s.syncSvc != nil {
+		s.syncSvc.syncMu.Lock()
+		defer s.syncSvc.syncMu.Unlock()
+	}
 	old, err := s.GetByID(id)
 	if err != nil {
 		return err

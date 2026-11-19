@@ -22,7 +22,7 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	trafficSvc *service.TrafficService, notifySvc *notify.NotifyService,
 	authSvc *service.AuthService, scheduler *service.Scheduler,
 	fwSvc *firewall.Service, auditSvc *service.AuditService,
-	subTokenSvc *service.SubscriptionTokenService, dbPath string) *gin.Engine {
+	subTokenSvc *service.SubscriptionTokenService, dbPath string, syncSvc *service.KernelSyncService) *gin.Engine {
 
 	r := gin.Default()
 
@@ -56,9 +56,6 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 	r.NoRoute(func(c *gin.Context) {
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
 	})
-
-	// 初始化内核同步服务
-	syncSvc := service.NewKernelSyncService(db, mgr)
 
 	// 初始化 Handlers
 	authHandler := handler.NewAuthHandler(cfg, authSvc)

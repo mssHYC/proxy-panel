@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -71,6 +72,17 @@ func (e *XrayEngine) Restart() error {
 	}
 	e.Stop()
 	return e.Start()
+}
+
+// RestartContext bounds a synchronous managed website save or recovery.
+func (e *XrayEngine) RestartContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if hasSystemctl() {
+		return exec.CommandContext(ctx, "systemctl", "restart", "xray").Run()
+	}
+	return e.Restart()
 }
 
 func (e *XrayEngine) IsRunning() bool {
@@ -490,6 +502,12 @@ func (e *XrayEngine) WriteConfig(data []byte) error {
 // ApplyConfig 事务式更新 xray 配置（写入 + Restart + 失败回滚）。详见接口定义。
 func (e *XrayEngine) ApplyConfig(data []byte) error {
 	return applyConfigWithRollback(e.configPath, e.Restart, data)
+}
+
+// ApplyConfigContext leaves recovery health verification to the coordinator,
+// which retries restoration with a fresh deadline after a cancelled save.
+func (e *XrayEngine) ApplyConfigContext(ctx context.Context, data []byte) error {
+	return applyConfigWithRollback(e.configPath, func() error { return e.RestartContext(ctx) }, data)
 }
 
 // getSettingStr 从 Settings 中安全获取字符串值
