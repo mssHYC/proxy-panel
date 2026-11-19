@@ -1,12 +1,15 @@
 package website_test
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -107,13 +110,14 @@ func TestRealSystemdManagedPathPermissions(t *testing.T) {
 	encoded, _ = json.Marshal(manifest)
 	write(t, f.manifest, encoded)
 	write(t, f.config, []byte(fmt.Sprintf(`pid /run/proxy-panel-web.pid;
-error_log stderr warn;
+error_log stderr notice;
 events { worker_connections 64; }
 http {
     access_log off;
     server {
         listen 127.0.0.2:443 ssl;
         server_name example.com;
+        add_header X-Website-Test-Worker $pid always;
         ssl_certificate "%s";
         ssl_certificate_key "%s";
         root "%s";
@@ -201,13 +205,62 @@ TimeoutStopSec=5
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		output, err := exec.CommandContext(ctx, "systemd-run", args...).CombinedOutput()
 		cancel()
+		t.Logf("sandbox writable=%t:\n%s", writable, output)
 		if err != nil {
 			diagnostics, _ := exec.Command("journalctl", "--no-pager", "-n", "30", "-u", service).CombinedOutput()
 			t.Fatalf("sandbox writable=%t: %v\n%s\n%s", writable, err, output, diagnostics)
 		}
-		assertUpgradeStatus(t, "127.0.0.2:443", cert, "/old", 101)
-		assertUpgradeStatus(t, "127.0.0.2:443", cert, "/new", 404)
+		for _, check := range []struct {
+			path   string
+			status int
+		}{{"/old", 101}, {"/new", 404}} {
+			status, worker, err := systemdUpgradeResponse(cert, check.path)
+			t.Logf("writable=%t path=%s status=%d worker=%s error=%v", writable, check.path, status, worker, err)
+			if err != nil || status != check.status {
+				// Keep the original failure; subsequent samples only diagnose whether
+				// reload generations overlap or the persisted configuration is wrong.
+				config, readErr := os.ReadFile(f.config)
+				t.Logf("config old=%t new=%t read_error=%v", strings.Contains(string(config), `location = "/old"`), strings.Contains(string(config), `location = "/new"`), readErr)
+				for sample := 0; sample < 5; sample++ {
+					time.Sleep(100 * time.Millisecond)
+					code, pid, probeErr := systemdUpgradeResponse(cert, check.path)
+					t.Logf("sample=%d status=%d worker=%s error=%v", sample, code, pid, probeErr)
+				}
+				diagnostics, _ := exec.Command("journalctl", "--no-pager", "-n", "100", "-u", service).CombinedOutput()
+				t.Fatalf("sandbox writable=%t %s expected %d, got %d (%v)\n%s", writable, check.path, check.status, status, err, diagnostics)
+			}
+		}
 	}
+}
+
+func systemdUpgradeResponse(ca, route string) (int, string, error) {
+	data, err := os.ReadFile(ca)
+	if err != nil {
+		return 0, "", err
+	}
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(data)
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: time.Second}, "tcp", "127.0.0.2:443", &tls.Config{RootCAs: pool, ServerName: "example.com"})
+	if err != nil {
+		return 0, "", err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(time.Second))
+	req, err := http.NewRequest("GET", "https://example.com"+route, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	if err := req.Write(conn); err != nil {
+		return 0, "", err
+	}
+	response, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer response.Body.Close()
+	return response.StatusCode, response.Header.Get("X-Website-Test-Worker"), nil
 }
 
 func TestWebsiteSystemdSandboxHelper(t *testing.T) {
