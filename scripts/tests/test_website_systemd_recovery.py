@@ -129,13 +129,13 @@ run_website_setup "" share-reality 2
                 ctl('stop', watcher, check=False)
                 ctl('stop', worker, web, cert, panel, xray, check=False)
                 ctl('disable', watcher, web, cert, check=False)
+                ctl('reset-failed', watcher, worker, web, cert, panel, xray, check=False)
                 for entry in units.glob(prefix + '*'):
                     if entry.is_dir():
                         shutil.rmtree(entry)
                     else:
                         entry.unlink()
                 ctl('daemon-reload')
-                ctl('reset-failed', worker, web, check=False)
 
 
 if __name__ == '__main__':
