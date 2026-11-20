@@ -2263,7 +2263,9 @@ website_restore_locked() {
     # Starts gated during early boot may have hit systemd's restart limit.
     for svc in "${affected[@]}"; do
         if jq -e --arg svc "$svc" '.active | index($svc) != null' "$state" >/dev/null; then
-            systemctl reset-failed "$svc" || return 1
+            # systemd may garbage-collect a clean stopped unit. Its next start
+            # loads it again; start and health below report actual failures.
+            systemctl reset-failed "$svc" 2>/dev/null || true
             active+=("$svc")
             if [[ "$svc" == "$SERVICE_NAME" ]]; then panel_active=true; fi
         fi
@@ -2313,6 +2315,8 @@ RECOVER
     cat > "$WEBSITE_UNIT_DIR/$unit.service.new" <<EOF
 [Unit]
 Description=Recover interrupted proxy-panel website deployment
+StartLimitIntervalSec=infinity
+StartLimitBurst=3
 [Service]
 Type=oneshot
 TimeoutStartSec=infinity
@@ -2337,8 +2341,11 @@ EOF
         printf '[Service]\nExecStartPre=+/bin/bash "%s" gate %s\n' "$helper" "$role" > "$dir/website-recovery.conf.new" && \
             chmod 644 "$dir/website-recovery.conf.new" && mv -f "$dir/website-recovery.conf.new" "$dir/website-recovery.conf" || return 1
     done
-    touch "$INSTALL_DIR/.website-start.lock" && systemctl daemon-reload && \
-        systemctl enable "$unit.path" && systemctl start "$unit.path"
+    touch "$INSTALL_DIR/.website-start.lock" && systemctl daemon-reload || return 1
+    # Each new deployment starts with its own retry budget. Newly installed
+    # units may not have been loaded (and therefore have no counter to reset).
+    systemctl reset-failed "$unit.service" "$unit.path" 2>/dev/null || true
+    systemctl enable "$unit.path" && systemctl start "$unit.path"
 }
 
 run_website_setup() (

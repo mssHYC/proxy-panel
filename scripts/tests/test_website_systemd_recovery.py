@@ -27,6 +27,7 @@ class WebsiteSystemdRecoveryTests(unittest.TestCase):
             root = Path(tmp)
             prefix = root.name
             web = prefix + '-web.service'
+            panel, xray = prefix + '-panel.service', prefix + '-xray.service'
             cert = prefix + '-web-cert.path'
             watcher = prefix + '-website-recover.path'
             worker = prefix + '-website-recover.service'
@@ -39,7 +40,10 @@ class WebsiteSystemdRecoveryTests(unittest.TestCase):
             # Only unit names and paths are redirected. PID 1 loads the generated
             # recovery worker and drop-ins and runs their original ExecStart commands.
             installer = root / 'install.sh'
-            installer.write_text(INSTALLER.read_text().replace('proxy-panel', prefix))
+            installer.write_text(INSTALLER.read_text().replace('proxy-panel-web', prefix + '-web'))
+            (root / 'proxy-panel').symlink_to('/bin/true')
+            for name in (panel, xray):
+                (units / name).write_text('[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n')
             (root / 'managed.json').write_text('committed\n')
             history = root / 'served'
             (units / web).write_text(f"""[Service]
@@ -60,26 +64,27 @@ WantedBy=multi-user.target
             # stops the website, and registers its own recovery units.
             deploy = r'''
 source "$1/install.sh"
-INSTALL_DIR=$1 BACKUP_DIR=$1/backups WEBSITE_CONFIG_DIR=$1 WEBSITE_UNIT_DIR=/run/systemd/system
+INSTALL_DIR=$1 BACKUP_DIR=$1/backups CONFIG_FILE=$1/config.yaml
+WEBSITE_CONFIG_DIR=$1 WEBSITE_UNIT_DIR=/run/systemd/system
 SERVICE_NAME=$2-panel XRAY_SERVICE=$2-xray SINGBOX_SERVICE=$2-sing-box WEBSITE_SERVICE=$2-web
 setup_website_selinux() { :; }
 website_tool() {
     case "$1" in
         prepare)
             mkdir -p "$2"
-            jq -n --arg f "$INSTALL_DIR/managed.json" '{mode:"standalone",files:[$f]}' > "$2/plan.json" ;;
+            jq -n --arg f "$INSTALL_DIR/managed.json" '{mode:"proxy",files:[$f]}' > "$2/plan.json" ;;
         apply)
             echo partial > "$INSTALL_DIR/managed.json"
             touch "$INSTALL_DIR/applying"
             sleep 120 ;;
     esac
 }
-run_website_setup
+run_website_setup "" share-reality 2
 '''
             process = None
             try:
                 ctl('daemon-reload')
-                ctl('start', web)
+                ctl('start', web, panel, xray)
                 with (root / 'deployment.log').open('w') as log:
                     process = subprocess.Popen(['bash', '-c', deploy, 'deploy-test', tmp, prefix],
                                                stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -88,6 +93,9 @@ run_website_setup
                     if process.poll() is not None or time.monotonic() > deadline:
                         self.fail((root / 'deployment.log').read_text())
                     time.sleep(.05)
+                limits = ctl('show', '-p', 'StartLimitIntervalUSec', '-p', 'StartLimitBurst', worker).stdout.splitlines()
+                self.assertIn('StartLimitIntervalUSec=infinity', limits)
+                self.assertIn('StartLimitBurst=3', limits)
                 if restart_watcher:
                     # At boot the path unit starts with a journal already on disk.
                     ctl('stop', watcher)
@@ -112,12 +120,14 @@ run_website_setup
                     time.sleep(.1)
                 self.assertEqual(history.read_text().splitlines(), ['committed', 'committed'])
                 self.assertEqual((root / 'managed.json').read_text(), 'committed\n')
+                ctl('is-active', '--quiet', panel)
+                ctl('is-active', '--quiet', xray)
             finally:
                 if process is not None and process.poll() is None:
                     os.killpg(process.pid, signal.SIGKILL)
                     process.wait(timeout=5)
                 ctl('stop', watcher, check=False)
-                ctl('stop', worker, web, cert, check=False)
+                ctl('stop', worker, web, cert, panel, xray, check=False)
                 ctl('disable', watcher, web, cert, check=False)
                 for entry in units.glob(prefix + '*'):
                     if entry.is_dir():

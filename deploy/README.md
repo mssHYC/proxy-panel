@@ -115,7 +115,12 @@ Nginx 需要支持 stream 和 ssl_preread；Debian/Ubuntu 的动态模块包为 
 
 在启用 SELinux enforcing 的主机上，脚本会在停服前让 systemd 启动 Nginx，检验它能否监听计划中的回环端口。如果策略拒绝绑定，当前服务继续运行。请根据预检输出和 AVC 日志检查端口用途。RHEL 系列策略可能已将 9443 分配给 PKI 服务。
 
-网站切换前会启用 `proxy-panel-website-recover.path` 并在 `/opt/proxy-panel/.website-transaction` 写入待恢复记录。切换进程中断或主机重启后，systemd 会启动恢复服务，按备份还原受影响的文件和服务状态。可用 `journalctl -u proxy-panel-website-recover.service` 查看结果，备份位于 `/opt/proxy-panel/backups/website-*`。
+网站切换前会启用 `proxy-panel-website-recover.path` 并在 `/opt/proxy-panel/.website-transaction` 写入待恢复记录。切换进程中断或主机重启后，systemd 会启动恢复服务，按备份还原受影响的文件和服务状态。可用 `journalctl -u proxy-panel-website-recover.service` 查看结果，备份位于 `/opt/proxy-panel/backups/website-*`。连续三次恢复失败后，记录会保留。根据日志修复原因后，执行以下命令重新触发恢复。
+
+```bash
+systemctl reset-failed proxy-panel-website-recover.service proxy-panel-website-recover.path
+systemctl start proxy-panel-website-recover.path
+```
 
 执行 `proxy-panel website unshare-reality` 可将 Reality 恢复到共享前的监听 IP 和端口，网站继续提供 HTTPUpgrade。旧的共享部署若未记录原地址，须显式提供端口和 IP，例如 `proxy-panel website unshare-reality 1279 0.0.0.0`。请按实际需要选择监听范围、检查防火墙，并刷新订阅。运行普通 `website setup` 会保留已有共享入口。
 
