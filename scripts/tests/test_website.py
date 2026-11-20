@@ -28,7 +28,8 @@ class WebsiteTests(unittest.TestCase):
         cls.cert = Path(cls.cert_temp.name) / 'site.crt'
         cls.key = Path(cls.cert_temp.name) / 'site.key'
         subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
-                        '-subj', '/CN=site.example.com', '-addext', 'subjectAltName=DNS:site.example.com,DNS:cdn.example.com',
+                        '-subj', '/CN=site.example.com', '-addext',
+                        'subjectAltName=DNS:site.example.com,DNS:cdn.example.com,DNS:archive.example.com',
                         '-keyout', str(cls.key), '-out', str(cls.cert)], check=True, capture_output=True)
 
     @classmethod
@@ -78,9 +79,9 @@ class WebsiteTests(unittest.TestCase):
             args = [os.environ['SYSTEMD_ANALYZE_BINARY'], *args[1:]]
         return self.real_run(args)
 
-    def prepare(self, website_domain=''):
+    def prepare(self, website_domain='', action='setup', *args):
         stage = self.root / 'stage'
-        tool.prepare(str(self.config), str(self.root), self.confdir, self.webroot, self.units, stage, website_domain)
+        tool.prepare(str(self.config), str(self.root), self.confdir, self.webroot, self.units, stage, website_domain, action, *args)
         return stage, json.loads((stage / 'plan.json').read_text())
 
     def standalone(self):
@@ -160,6 +161,223 @@ class WebsiteTests(unittest.TestCase):
     def node_settings(self):
         with contextlib.closing(sqlite3.connect(self.db)) as db, db:
             return json.loads(db.execute('SELECT settings FROM nodes WHERE id=1').fetchone()[0])
+
+    def enable_reality_frontend(self):
+        stage, _ = self.prepare()
+        tool.apply(stage)
+        path = self.confdir / 'managed.json'
+        state = json.loads(path.read_text())
+        front = {'node_id': 2, 'sni': 'target.example.com', 'listen': '127.0.0.2:443',
+                 'web_listen': '127.0.0.1:9443', 'stream_module': ''}
+        state['reality_frontend'] = front
+        path.write_text(json.dumps(state))
+        settings = {'security': 'reality', 'listen': '127.0.0.2', 'sni': front['sni']}
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('INSERT INTO nodes VALUES (2,?,?,?,?,1,443,"xray",NULL)',
+                       ('site.example.com', 'vless', 'tcp', json.dumps(settings)))
+        kernel = json.loads(self.kernel.read_text())
+        kernel['inbounds'].append({'tag': 'node-2', 'listen': '127.0.0.2', 'port': 443, 'protocol': 'vless',
+                                   'streamSettings': {'network': 'tcp', 'security': 'reality',
+                                                      'realitySettings': {'serverNames': [front['sni']]}}})
+        self.kernel.write_text(json.dumps(kernel))
+        return front
+
+    def add_independent_reality(self, website_domain='', sni='target.example.com'):
+        stage, _ = self.prepare(website_domain)
+        tool.apply(stage)
+        settings = {'security': 'reality', 'sni': sni, 'private_key': 'test-only'}
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('INSERT INTO nodes VALUES (2,?,?,?,?,1,1279,"xray",NULL)',
+                       ('site.example.com', 'vless', 'tcp', json.dumps(settings)))
+        kernel = json.loads(self.kernel.read_text())
+        kernel['inbounds'].append({'tag': 'node-2', 'listen': '0.0.0.0', 'port': 1279, 'protocol': 'vless',
+                                   'streamSettings': {'network': 'tcp', 'security': 'reality',
+                                                      'realitySettings': {'serverNames': [sni]}}})
+        self.kernel.write_text(json.dumps(kernel))
+
+    def test_share_and_unshare_use_the_existing_real_node_and_restore_it(self):
+        self.add_independent_reality('archive.example.com')
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            before = db.execute('SELECT port,settings FROM nodes WHERE id=2').fetchone()
+        original_kernel = json.loads(self.kernel.read_bytes())
+        with patch.object(tool, 'check_standalone_ports'), patch.object(tool, 'run', return_value=''):
+            stage, _ = self.prepare('', 'share-reality', '2')
+            tool.apply(stage)
+            state = (self.confdir / 'managed.json').read_text()
+            self.assertNotIn('test-only', state)
+            self.assertIn('archive.example.com', json.loads(state)['domains'])
+            self.assertIn('server_name archive.example.com ', (self.confdir / 'nginx.conf').read_text())
+            self.assertIn('target.example.com 127.0.0.2:443;', (self.confdir / 'nginx.conf').read_text())
+            with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+                port, settings = db.execute('SELECT port,settings FROM nodes WHERE id=2').fetchone()
+                self.assertEqual((port, json.loads(settings)['listen']), (443,'127.0.0.2'))
+                self.assertEqual(json.loads(settings)['private_key'], 'test-only')
+            stage, _ = self.prepare('', 'unshare-reality')
+            tool.apply(stage)
+            with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+                port, settings = db.execute('SELECT port,settings FROM nodes WHERE id=2').fetchone()
+                self.assertEqual((port,json.loads(settings)), (before[0],json.loads(before[1])))
+            self.assertEqual(json.loads(self.kernel.read_bytes()), original_kernel)
+            state = json.loads((self.confdir / 'managed.json').read_bytes())
+            self.assertNotIn('reality_frontend', state)
+            self.assertIn('archive.example.com', state['domains'])
+            self.assertIn('server_name archive.example.com ', (self.confdir / 'nginx.conf').read_text())
+
+    def test_share_rejects_reality_sni_reserved_by_existing_website_alias(self):
+        self.add_independent_reality('archive.example.com', 'ARCHIVE.example.com.')
+        files = (self.db, self.kernel, self.confdir / 'managed.json', self.confdir / 'nginx.conf')
+        before = [path.read_bytes() for path in files]
+        with self.assertRaisesRegex(ValueError, 'SNI'):
+            self.prepare('', 'share-reality', '2')
+        self.assertEqual([path.read_bytes() for path in files], before)
+
+    def test_share_rejects_target_with_more_than_one_sni(self):
+        self.add_independent_reality()
+        cfg = json.loads(self.kernel.read_bytes())
+        cfg['inbounds'][-1]['streamSettings']['realitySettings']['serverNames'].append('cdn.example.com')
+        self.kernel.write_text(json.dumps(cfg))
+        with self.assertRaisesRegex(ValueError, 'SNI'):
+            self.prepare('', 'share-reality', '2')
+        self.assertNotIn('reality_frontend', json.loads((self.confdir/'managed.json').read_bytes()))
+
+    def test_share_uses_the_same_server_names_alias_as_xray(self):
+        self.add_independent_reality()
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            settings = json.loads(db.execute('SELECT settings FROM nodes WHERE id=2').fetchone()[0])
+            settings.update(server_names='old invalid scalar', serverNames=[settings.pop('sni')])
+            db.execute('UPDATE nodes SET settings=? WHERE id=2', (json.dumps(settings),))
+        with patch.object(tool, 'check_standalone_ports'), patch.object(tool, 'run', return_value=''):
+            stage, plan = self.prepare('', 'share-reality', '2')
+            tool.apply(stage)
+        self.assertEqual(plan['reality_frontend']['sni'], 'target.example.com')
+
+    def test_share_detects_racing_reality_edit_before_applying(self):
+        self.add_independent_reality()
+        with patch.object(tool, 'check_standalone_ports'), patch.object(tool, 'run', return_value=''):
+            stage, _ = self.prepare('', 'share-reality', '2')
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('UPDATE nodes SET port=9922 WHERE id=2')
+        with self.assertRaisesRegex(ValueError, '预检'):
+            tool.apply(stage)
+        self.assertNotIn('reality_frontend', json.loads((self.confdir/'managed.json').read_bytes()))
+
+    def test_rebind_requires_old_id_to_be_gone_and_the_new_id_to_match(self):
+        stage, _ = self.prepare('archive.example.com')
+        tool.apply(stage)
+        manifest_path = self.confdir / 'managed.json'
+        legacy = json.loads(manifest_path.read_text())
+        del legacy['mode']
+        manifest_path.write_text(json.dumps(legacy))
+        with self.assertRaisesRegex(ValueError, '仍存在'):
+            self.prepare('', 'rebind', '4')
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('UPDATE nodes SET id=4 WHERE id=1')
+        state = json.loads(self.kernel.read_text())
+        state['inbounds'][0]['tag'] = 'node-4'
+        self.kernel.write_text(json.dumps(state))
+        with self.assertRaisesRegex(ValueError, '指定节点'):
+            self.prepare('', 'rebind', '5')
+        with self.assertRaisesRegex(ValueError, '节点已更换'):
+            self.prepare()
+        stage, _ = self.prepare('', 'rebind', '4')
+        tool.apply(stage)
+        manifest = json.loads((self.confdir/'managed.json').read_text())
+        self.assertEqual(manifest['node_id'], 4)
+        self.assertEqual(manifest['mode'], 'proxy')
+        self.assertNotIn('rebind_from', manifest)
+        self.assertIn('archive.example.com', manifest['domains'])
+        self.assertIn('server_name archive.example.com ', (self.confdir / 'nginx.conf').read_text())
+        self.assertIn('127.0.0.1:443', (self.confdir/'nginx.conf').read_text())
+
+
+    def test_repeated_setup_keeps_shared_443_and_both_nodes(self):
+        front = self.enable_reality_frontend()
+        before = json.loads(self.kernel.read_text())
+        # This fixture checks DB/manifest/config round-tripping without REALITY credentials.
+        with patch.object(tool, 'run', side_effect=lambda args: '' if args[0] in
+                          (self.nginx, os.environ.get('XRAY_BINARY', '/fixture/xray')) else self.checked_run(args)):
+            stage, _ = self.prepare()
+        tool.apply(stage)
+        new_state = json.loads((self.confdir / 'managed.json').read_text())
+        self.assertEqual(new_state['reality_frontend'], front)
+        self.assertEqual(new_state['listens'], ['192.0.2.10:443'])
+        self.assertEqual(json.loads(self.kernel.read_text()), before)
+        nginx = (self.confdir / 'nginx.conf').read_text()
+        self.assertIn('listen 192.0.2.10:443;', nginx)
+        self.assertIn('target.example.com 127.0.0.2:443;', nginx)
+        self.assertIn('default 127.0.0.1:9443;', nginx)
+        self.assertIn('listen 127.0.0.1:9443 ssl;', nginx)
+        self.assertIn('proxy_pass https://127.0.0.1:443;', nginx)
+
+    def test_extra_443_rejected_after_frontend_is_managed(self):
+        self.enable_reality_frontend()
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('INSERT INTO nodes SELECT 3,host,protocol,transport,settings,enable,port,kernel_type,updated_at FROM nodes WHERE id=2')
+            for addr in ('0.0.0.0', '::', '::ffff:192.0.2.10', '127.0.0.1', '127.0.0.2'):
+                with self.subTest(addr=addr):
+                    db.execute('UPDATE nodes SET settings=? WHERE id=3', (json.dumps({'listen': addr}),))
+                    db.commit()
+                    with self.assertRaisesRegex(ValueError, '443 节点'):
+                        self.prepare()
+
+    def test_disjoint_443_bindings_survive_share_and_unshare(self):
+        self.add_independent_reality()
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            db.execute('INSERT INTO nodes VALUES (3, "other.example.com", "vless","tcp",?,1,443,"xray",NULL)',
+                       (json.dumps({'listen': '127.0.0.3'}),))
+        other = {'tag': 'node-3', 'listen': '127.0.0.3', 'port': 443, 'protocol': 'vless'}
+        kernel = json.loads(self.kernel.read_text())
+        kernel['inbounds'].append(other)
+        self.kernel.write_text(json.dumps(kernel))
+        with patch.object(tool, 'check_standalone_ports'), patch.object(tool, 'run', return_value=''):
+            stage, _ = self.prepare('', 'share-reality', '2')
+            tool.apply(stage)
+            kernel = json.loads(self.kernel.read_text())
+            self.assertIn(other, kernel['inbounds'])
+            kernel['inbounds'][-1]['listen'] = '::'
+            self.kernel.write_text(json.dumps(kernel))
+            with self.assertRaisesRegex(ValueError, '443 节点'):
+                self.prepare('', 'unshare-reality')
+            kernel['inbounds'][-1] = other
+            self.kernel.write_text(json.dumps(kernel))
+            stage, _ = self.prepare('', 'unshare-reality')
+            tool.apply(stage)
+        self.assertIn(other, json.loads(self.kernel.read_text())['inbounds'])
+
+    def test_rebind_moves_temporary_loopback_to_shared_website_backend(self):
+        front = self.enable_reality_frontend()
+        with contextlib.closing(sqlite3.connect(self.db)) as db, db:
+            settings = json.loads(db.execute('SELECT settings FROM nodes WHERE id=1').fetchone()[0])
+            settings.update(listen='127.0.0.3', path='/replacement')
+            db.execute('UPDATE nodes SET id=4,settings=? WHERE id=1', (json.dumps(settings),))
+        config = json.loads(self.kernel.read_text())
+        inbound = config['inbounds'][0]
+        inbound['tag'] = 'node-4'
+        inbound['streamSettings']['httpupgradeSettings']['path'] = '/replacement'
+        self.kernel.write_text(json.dumps(config))
+        with self.assertRaisesRegex(ValueError, '运行监听'):
+            self.prepare('', 'rebind', '4')
+        inbound['listen'] = '127.0.0.3'
+        self.kernel.write_text(json.dumps(config))
+        with patch.object(tool, 'run', return_value=''):
+            stage, plan = self.prepare('', 'rebind', '4')
+        tool.apply(stage)
+        self.assertEqual(plan['reality_frontend'], front)
+        self.assertEqual(plan['listen_before'], '0.0.0.0')
+        self.assertEqual(plan['listens'], ['192.0.2.10:443'])
+        self.assertEqual(json.loads(self.kernel.read_text())['inbounds'][0]['listen'], '127.0.0.1')
+        with contextlib.closing(sqlite3.connect(self.db)) as db:
+            settings = json.loads(db.execute('SELECT settings FROM nodes WHERE id=4').fetchone()[0])
+            self.assertEqual(settings['listen'], '127.0.0.1')
+        self.assertIn('location = "/replacement"', (self.confdir / 'nginx.conf').read_text())
+
+    def test_stale_reality_kernel_listener_is_rejected(self):
+        self.enable_reality_frontend()
+        kernel = json.loads(self.kernel.read_text())
+        kernel['inbounds'][1]['listen'] = '0.0.0.0'
+        self.kernel.write_text(json.dumps(kernel))
+        with self.assertRaisesRegex(ValueError, '托管 Reality 入口'):
+            self.prepare()
 
     def test_prepare_and_apply_preserve_subscription_and_credentials(self):
         before = self.kernel.read_bytes()
@@ -435,6 +653,122 @@ class WebsiteTests(unittest.TestCase):
                 ctx.wrap_socket(sock, server_hostname='wrong.example.com')
 
 
+    @unittest.skipUnless(os.environ.get('NGINX_BINARY') and os.environ.get('XRAY_BINARY'),
+                         'set NGINX_BINARY and XRAY_BINARY for the authenticated shared-port test')
+    def test_real_shared_port_authenticates_reality_and_serves_httpupgrade(self):
+        # All services, including the REALITY TLS target and client destination, are local.
+        xray = os.environ['XRAY_BINARY']
+
+        class Site(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'through-proxy')
+
+            def handle(self):
+                try:
+                    super().handle()
+                except ssl.SSLError:
+                    # Reality's unauthenticated target connections may close mid-handshake.
+                    if not isinstance(self.connection, ssl.SSLSocket):
+                        raise
+
+            def log_message(self, *args):
+                pass
+
+        def server(tls=False):
+            srv = ThreadingHTTPServer(('127.0.0.1', 0), Site)
+            if tls:
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                ctx.load_cert_chain(self.cert, self.key)
+                ctx.set_alpn_protocols(['h2', 'http/1.1'])
+                srv.socket = ctx.wrap_socket(srv.socket, server_side=True, do_handshake_on_connect=False)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            self.addCleanup(srv.server_close)
+            self.addCleanup(srv.shutdown)
+            return srv.server_port
+
+        target, origin = server(tls=True), server()
+        with contextlib.ExitStack() as allocated:
+            ports = []
+            for _ in range(6):
+                sock = allocated.enter_context(socket.socket())
+                sock.bind(('127.0.0.1', 0))
+                ports.append(sock.getsockname()[1])
+        public, web, backend, reality, reality_socks, http_socks = ports
+
+        def start(args, port):
+            log = tempfile.TemporaryFile()
+            self.addCleanup(log.close)
+            proc = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT)
+            self.addCleanup(lambda: (proc.terminate(), proc.wait(timeout=5)) if proc.poll() is None else None)
+            for _ in range(60):
+                if proc.poll() is not None:
+                    log.seek(0)
+                    self.fail(log.read().decode())
+                try:
+                    with socket.create_connection(('127.0.0.1', port), .2): return
+                except OSError: time.sleep(.05)
+            self.fail('local listener did not start: ' + str(port))
+
+        self.root.chmod(0o755)
+        self.webroot.mkdir()
+        (self.webroot/'index.html').write_text('website')
+        ctx = self.original_core['inbounds'][0]
+        uuid = ctx['settings']['clients'][0]['id']
+        ctx.update(listen='127.0.0.1', port=backend)
+        keys = dict(line.split(': ', 1) for line in
+                    subprocess.check_output([xray, 'x25519'], text=True).splitlines() if ': ' in line)
+        reality_inbound = {'listen': '127.0.0.1', 'port': reality, 'protocol': 'vless',
+            'settings': {'decryption':'none', 'clients':[{'id':uuid, 'flow':'xtls-rprx-vision'}]},
+            'streamSettings': {'network':'tcp', 'security':'reality', 'realitySettings': {
+                'target': f'127.0.0.1:{target}', 'serverNames':['site.example.com'],
+                'privateKey':keys['PrivateKey'], 'shortIds':['12345678']}}}
+        self.original_core['inbounds'].append(reality_inbound)
+        # The real server permits the test's local HTTP origin as its only destination.
+        self.original_core['outbounds'][0]['settings'] = {'finalRules': [
+            {'action': 'allow', 'network': 'tcp', 'ip': ['127.0.0.1/32'], 'port': origin},
+            {'action': 'block'},
+        ]}
+        self.kernel.write_text(json.dumps(self.original_core))
+        start([xray, 'run', '-config', str(self.kernel)], backend)
+        plan = dict(mode='proxy', domains=['cdn.example.com'], host='cdn.example.com', sni='cdn.example.com',
+                    path='/csda', cert=str(self.cert), key=str(self.key), ca=str(self.cert), listens=[f'127.0.0.1:{public}'])
+        plan['reality_frontend'] = dict(node_id=2, sni='site.example.com', listen=f'127.0.0.1:{reality}',
+                                       web_listen=f'127.0.0.1:{web}', stream_module=next((p for p in tool.STREAM_MODULES if Path(p).is_file()), ''))
+        c = tool.nginx_config(plan, self.webroot).replace('/run/proxy-panel-web.pid', str(self.root/'nginx.pid'))
+        c = c.replace('https://127.0.0.1:443;', f'https://127.0.0.1:{backend};')
+        conf = self.root/'nginx.conf'
+        conf.write_text(c)
+        start([self.nginx, '-c', str(conf), '-g', 'daemon off;'], public)
+        state = self.root/'managed.json'
+        state.write_text(json.dumps(plan))
+        tool.health(state)
+        reality_stream = {'network': 'tcp', 'security': 'reality', 'realitySettings': {
+            'fingerprint': 'chrome', 'serverName': 'site.example.com',
+            'shortId': '12345678', 'password': keys['Password (PublicKey)'],
+        }}
+        http_stream = {'network': 'httpupgrade', 'security': 'tls',
+                       'httpupgradeSettings': {'path': '/csda', 'host': 'cdn.example.com'},
+                       'tlsSettings': {'serverName': 'cdn.example.com', 'alpn': ['http/1.1'],
+                                       'certificates': [{'usage': 'verify', 'certificateFile': str(self.cert)}]}}
+        for stream, socks, flow in [(reality_stream, reality_socks, 'xtls-rprx-vision'),
+                                    (http_stream, http_socks, '')]:
+            with self.subTest(transport=stream['network']):
+                server = {'address': '127.0.0.1', 'port': public, 'users': [
+                    {'id': uuid, 'encryption': 'none', 'flow': flow},
+                ]}
+                client = {'inbounds': [{'listen': '127.0.0.1', 'port': socks, 'protocol': 'socks'}],
+                          'outbounds': [{'protocol': 'vless', 'settings': {'vnext': [server]},
+                                         'streamSettings': stream}]}
+                path = self.root / (stream['network'] + '-client.json')
+                path.write_text(json.dumps(client))
+                start([xray, 'run', '-config', str(path)], socks)
+                output = subprocess.check_output(['curl', '--noproxy', '', '--proxy', f'socks5://127.0.0.1:{socks}',
+                                                  '--max-time', '10', '-fsS', f'http://127.0.0.1:{origin}/'], text=True)
+                self.assertEqual(output, 'through-proxy')
+
+
 class WebsitePortTests(unittest.TestCase):
     def test_conflicting_tcp_listener_fails_before_deployment(self):
         with socket.socket() as listener:
@@ -565,6 +899,7 @@ website_tool() {
 }
 systemctl() {
  local op="$1" svc="${@: -1}"
+ if [[ "$svc" == proxy-panel-website-recover.path ]]; then return 0; fi
  echo "$*" >> "$TEST_ROOT/events"
  case "$op" in
  show) echo loaded;;

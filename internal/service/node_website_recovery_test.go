@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -118,7 +119,7 @@ func TestCommittedNodeSurvivesFailedJournalCleanupAndRestart(t *testing.T) {
 	}
 }
 
-func TestDeleteFinishesPendingPathRecoveryBeforeRemovingNode(t *testing.T) {
+func TestDeleteFinishesPendingPathRecoveryBeforeRejectingBoundNode(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("directory write denial requires an unprivileged process")
 	}
@@ -135,11 +136,14 @@ func TestDeleteFinishesPendingPathRecoveryBeforeRemovingNode(t *testing.T) {
 	if err := os.Remove(filepath.Join(f.root, "fail-clear")); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.nodes.Delete(f.node.ID); err != nil {
-		t.Fatal(err)
+	if err := f.nodes.Delete(f.node.ID); !errors.Is(err, website.ErrManagedConflict) {
+		t.Fatalf("expected managed delete conflict: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.root, "path-update.json")); !os.IsNotExist(err) {
+		t.Fatalf("pending recovery survived rejected delete: %v", err)
 	}
 	if output, err := runNodeRecoveryProcess(t, f, "recover"); err != nil {
-		t.Fatalf("delete left a journal referencing a missing node: %v\n%s", err, output)
+		t.Fatalf("restart after rejected delete: %v\n%s", err, output)
 	}
 }
 

@@ -112,7 +112,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           go build -o proxy-panel ./cmd/server/
-          tar -czf proxy-panel-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz proxy-panel
+          tar -czf proxy-panel-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz proxy-panel scripts/install.sh
           sha256sum proxy-panel-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz \
             > proxy-panel-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz.sha256
 

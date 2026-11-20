@@ -83,7 +83,7 @@
           <Field label="监听 IP" hint="留空使用 0.0.0.0">
             <Input v-model="form.listen" placeholder="0.0.0.0" />
           </Field>
-          <Field label="端口" :error="errors.port">
+          <Field label="端口" :error="errors.port" :hint="realityPortHint">
             <NumberInput v-model="form.port" :min="1" :max="65535" />
           </Field>
           <Field label="排序" hint="数值越小越靠前">
@@ -424,6 +424,13 @@ const defaultForm = () => ({
   hy2_max_up_mbps: 10, hy2_max_down_mbps: 10, hy2_ignore_client_bandwidth: false,
 })
 const form = reactive(defaultForm())
+
+const realityPortHint = computed(() => {
+  if (form.kernel_type !== 'xray' || form.protocol !== 'vless' || form.transport !== 'tcp' || form.security !== 'reality') return ''
+  const listen = form.listen.trim().toLowerCase()
+  if (listen.startsWith('127.') || listen === '::1' || listen === 'localhost') return ''
+  return '若要与托管网站共用 443，先将此节点保存到空闲端口，再在服务器运行 proxy-panel website share-reality <节点ID>。'
+})
 
 function onProtocolChange() {
   const trs = protocolTransportMap[form.protocol] || []

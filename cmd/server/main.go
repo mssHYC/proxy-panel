@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"flag"
 	"fmt"
@@ -151,7 +150,7 @@ func main() {
 			for _, n := range nodes {
 				ports = append(ports, n.Port)
 			}
-			fwSvc.EnsureAll(context.Background(), ports)
+			nodeSvc.EnsureFirewallPorts(ports)
 			log.Printf("[防火墙] 启动对齐完成，处理 %d 个节点端口", len(ports))
 		}()
 	}

@@ -56,12 +56,16 @@ printf 'n\\n' | { if confirm terminal; then echo ANSWER=yes; else echo ANSWER=no
             os.waitpid(pid, 0)
 
 class UpdateTests(unittest.TestCase):
-    def run_case(self, failure="", active=True, without_cmp=False, existing_access=False):
+    def run_case(self, failure="", active=True, without_cmp=False, existing_access=False, tag=None, rollback=False):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             (root / "data").mkdir()
             (root / "states").mkdir()
             originals = {"proxy-panel": b"old-binary", "config.yaml": b"listen: 0.0.0.0", "data/panel.db": b"old-db", "xray.json": b"old-config", "xray": b"old-core"}
+            if failure == "pending-website":
+                (root / ".website-transaction").symlink_to(root / "website-backup")
+            cli_name = "bin-managed/proxy-panel"
+            originals[cli_name] = b"#!/bin/sh\necho old-cli\n"
             access_name = "units/proxy-panel.service.d/managed-website.conf"
             if existing_access:
                 originals[access_name] = b"[Service]\nReadWritePaths=-/old-managed-directory\n"
@@ -101,13 +105,16 @@ exit 1
             candidate.chmod(0o755)
             with tarfile.open(root / "release.tar.gz", "w:gz") as archive:
                 archive.add(candidate, arcname="proxy-panel")
-            manifest = {"files": [str(root / name) for name in originals if name != "proxy-panel"] + [str(root / "data/panel.db-wal")], "xray_path":str(root / "xray"), "singbox_path":str(root / "sing-box")}
+                if failure != "missing-cli":
+                    archive.add(INSTALLER, arcname="scripts/install.sh")
+            manifest = {"files": [str(root / name) for name in originals if name not in ("proxy-panel", cli_name)] + [str(root / "data/panel.db-wal")], "xray_path":str(root / "xray"), "singbox_path":str(root / "sing-box")}
             (root / "manifest.json").write_text(json.dumps(manifest))
             script = root / "run.sh"
             script.write_text('''source "$INSTALLER"
 INSTALL_DIR="$TEST_ROOT"
 CONFIG_FILE="$TEST_ROOT/config.yaml"
 BACKUP_DIR="$TEST_ROOT/backups"
+CLI_PATH="$TEST_ROOT/bin-managed/proxy-panel"
 WEBSITE_UNIT_DIR="$TEST_ROOT/units"
 WEBSITE_CONFIG_DIR="$TEST_ROOT/website"
 ARCH=amd64
@@ -119,6 +126,7 @@ replace_update_binary() {
  [[ "$FAIL" != replace ]]
 }
 fetch_update_asset() {
+ echo "$2" > "$TEST_ROOT/fetched-release"
  [[ "$FAIL" != download ]] || return 1
  cp "$TEST_ROOT/release.tar.gz" "$4"
 }
@@ -143,9 +151,26 @@ systemctl() {
   fi;;
  esac
 }
-run_safe_update
+if [[ -n "$REQUESTED_TAG" ]]; then
+ check_root() { :; }
+ detect_os() { :; }
+ detect_arch() { :; }
+ offer_website_setup() { :; }
+ main update "$REQUESTED_TAG"
+else
+ run_safe_update
+fi
+rc=$?
+if [[ "$rc" == 0 && "$ROLLBACK" == 1 ]]; then
+ check_root() { :; }
+ confirm() { return 0; }
+ do_rollback_update "$BACKUP_DIR"/update-*
+else
+ exit "$rc"
+fi
 ''')
-            env = {**os.environ, "TEST_ROOT":temp,"INSTALLER":str(INSTALLER),"FAIL":failure}
+            env = {**os.environ, "TEST_ROOT":temp,"INSTALLER":str(INSTALLER),"FAIL":failure,
+                   "REQUESTED_TAG": tag or "", "ROLLBACK": str(int(rollback))}
             if without_cmp:
                 bin_dir = root / "bin"
                 bin_dir.mkdir()
@@ -156,7 +181,12 @@ run_safe_update
                 env["PATH"] = str(bin_dir)
             result = subprocess.run(["bash",str(script)],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
             self.assertEqual(result.returncode == 0, not failure, result.stdout)
-            if failure:
+            release = root / "fetched-release"
+            if failure in ("invalid-tag", "pending-website"):
+                self.assertFalse(release.exists())
+            else:
+                self.assertEqual(release.read_text().strip(), "tags/" + tag if tag else "latest")
+            if failure or rollback:
                 for name, data in originals.items():
                     self.assertEqual((root / name).read_bytes(), data, name + result.stdout)
                 self.assertFalse((root / "data/panel.db-wal").exists(),result.stdout)
@@ -165,14 +195,24 @@ run_safe_update
             else:
                 self.assertEqual((root / "config.yaml").read_bytes(),originals["config.yaml"])
                 self.assertEqual((root / "proxy-panel").read_bytes(),candidate.read_bytes(),result.stdout)
+                self.assertEqual((root / cli_name).read_bytes(), INSTALLER.read_bytes(), "old CLI still installed")
+                usage = subprocess.check_output([str(root / cli_name), "help"], text=True)
+                for command in ("share-reality", "unshare-reality", "rebind"):
+                    self.assertIn("website " + command, usage)
                 access = root / "units/proxy-panel.service.d/managed-website.conf"
                 self.assertTrue(access.exists(), "upgraded panel needs managed Nginx write access")
                 self.assertEqual(access.read_text(), f"[Service]\nReadWritePaths=-{root}/website\n")
             self.assertEqual(sorted(p.name for p in (root / "states").iterdir()),sorted(services))
-            if failure in ("download","preflight"):
+            if failure in ("download","preflight","invalid-tag","missing-cli","pending-website"):
                 events=(root / "events").read_text() if (root / "events").exists() else ""
                 self.assertNotIn("stop ",events,result.stdout)
             return result.stdout
+
+    def test_pending_website_recovery_blocks_update(self): self.run_case("pending-website")
+    def test_pinned_update_installs_matching_cli(self): self.run_case(tag="v9.8.7")
+    def test_missing_release_cli_keeps_installed_pair(self): self.run_case("missing-cli")
+    def test_invalid_tag_rejected_before_download(self): self.run_case("invalid-tag", tag="../latest")
+    def test_explicit_rollback_restores_original_cli(self): self.run_case(rollback=True)
 
     def test_download_failure_keeps_services(self): self.run_case("download")
     def test_invalid_config_keeps_services(self): self.run_case("preflight")
