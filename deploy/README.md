@@ -103,6 +103,8 @@ proxy-panel website status
 
 ### 已托管 HTTPUpgrade 的网站与 Reality 共用 TCP 443
 
+如果 `proxy-panel help` 列出的网站子命令只有 `website setup` 和 `website status`，先完成[旧版管理脚本迁移](#旧版管理脚本迁移)，再使用 `share-reality` 或 `unshare-reality`。
+
 先用 `proxy-panel website setup` 托管 HTTPUpgrade 节点。准备一个已能独立连接的 Xray VLESS/TCP Reality 节点，使用独立端口和单一 SNI，该 SNI 须与网站域名不同。在服务器上执行以下命令，例中的 `17` 要换成自己的 Reality 节点 ID：
 
 ```sh
@@ -111,9 +113,15 @@ proxy-panel website share-reality 17
 
 Nginx 需要支持 stream 和 ssl_preread；Debian/Ubuntu 的动态模块包为 `libnginx-mod-stream`，版本须与安装的 Nginx 匹配。命令会预检、备份并短暂停止相关服务，应用变更后检查网站和两个 SNI 分支。公网 443 由 Nginx 接收，Reality 握手透传至 `127.0.0.2:443`。网站在 `127.0.0.1:9443` 终止 TLS，按已有路径转到 HTTPUpgrade 的 `127.0.0.1:443`。订阅同时公布两个节点的 443 端口。刷新订阅并用客户端分别验证它们能否出网，服务端对 Reality SNI 的普通 TLS 检查不验证订阅凭据。改变端口不能解除已有 IP 封锁。
 
+在启用 SELinux enforcing 的主机上，脚本会在停服前让 systemd 启动 Nginx，检验它能否监听计划中的回环端口。如果策略拒绝绑定，当前服务继续运行。请根据预检输出和 AVC 日志检查端口用途。RHEL 系列策略可能已将 9443 分配给 PKI 服务。
+
+网站切换前会启用 `proxy-panel-website-recover.path` 并在 `/opt/proxy-panel/.website-transaction` 写入待恢复记录。切换进程中断或主机重启后，systemd 会启动恢复服务，按备份还原受影响的文件和服务状态。可用 `journalctl -u proxy-panel-website-recover.service` 查看结果，备份位于 `/opt/proxy-panel/backups/website-*`。
+
 执行 `proxy-panel website unshare-reality` 可将 Reality 恢复到共享前的监听 IP 和端口，网站继续提供 HTTPUpgrade。旧的共享部署若未记录原地址，须显式提供端口和 IP，例如 `proxy-panel website unshare-reality 1279 0.0.0.0`。请按实际需要选择监听范围、检查防火墙，并刷新订阅。运行普通 `website setup` 会保留已有共享入口。
 
 ### 删除、替换托管节点
+
+旧版 CLI 缺少 `website rebind` 时，请先完成[旧版管理脚本迁移](#旧版管理脚本迁移)。
 
 面板会拒绝删除或停用网站仍在使用的节点，也会拒绝占用托管监听地址的节点配置。改 HTTPUpgrade 路径应直接编辑已绑定的节点。如果是旧版本已经删除了节点并创建了替代节点，可显式把网站绑定到新 ID，例如：
 
@@ -230,30 +238,45 @@ XRAY_BINARY=/绝对路径/xray SINGBOX_BINARY=/绝对路径/sing-box \
 
 已验证内核组合改为 Xray `v26.10.31` / sing-box `v1.14.4`。Xray 官方因 MPTCP 安全问题撤回了 `v26.10.29`，详情见 [v26.10.31 发布说明](https://github.com/XTLS/Xray-core/releases/tag/v26.10.31)。升级面板不会默认替换内核；仍使用旧 Xray 的机器应在交互式 SSH 中执行 `proxy-panel update`，对更新 Xray 的询问选择 `y`，并按上游说明更新操作系统内核。
 
-网页命令执行器、没有分配 PTY 的 SSH 等环境可能存在 `/dev/tty` 文件，却无法打开。新版脚本通过实际打开设备检测交互终端，避免出现 `line 84: /dev/tty: No such device or address`。没有终端时保留 `[y/N]` 默认 N、`[Y/n]` 默认 Y，并明确显示采用默认值；正常 SSH 和 `curl | bash` 仍从终端读取回答，不消耗管道里的脚本内容。这项修复需要同步管理脚本，仅更新面板二进制不会替换 `/usr/local/bin/proxy-panel`。
+网页命令执行器、没有分配 PTY 的 SSH 等环境可能存在 `/dev/tty` 文件，却无法打开。新版脚本通过实际打开设备检测交互终端，避免出现 `line 84: /dev/tty: No such device or address`。没有终端时保留 `[y/N]` 默认 N、`[Y/n]` 默认 Y，并明确显示采用默认值；正常 SSH 和 `curl | bash` 仍从终端读取回答，不消耗管道里的脚本内容。已安装旧管理脚本的机器需要先完成下方的一次性迁移。
 
-新 `scripts/install.sh update`（检测到已有安装时的 `install` 同样走此路径）按以下顺序升级：
+新版 `proxy-panel update` 可接受正式发行标签（`update vX.Y.Z`）。检测到已有安装时，`install` 也使用以下升级流程。
 
-1. 当前服务继续运行，下载候选面板；核对 GitHub release asset 的 SHA-256 后才解包、执行。缺少摘要、下载失败或旧候选不支持预检时直接中止。
-2. 可选更新内核时使用候选面板内置 `internal/upgrade/compatibility.json` 的版本，不追随内核的 latest。当前测试组合为 Xray **26.10.29** / sing-box **1.14.4**；CI 和发布流程验证 27 种生成配置，以及真实 TLS / Vision / 网站回落和管理地址隔离。
+1. 当前服务继续运行，下载指定版本的发行包（省略版本时使用最新正式版）。核对 GitHub release asset 的 SHA-256 后，从同一归档提取面板和管理脚本。缺少摘要、下载失败或旧候选不支持预检时直接中止。
+2. 可选更新内核时使用候选面板内置 `internal/upgrade/compatibility.json` 的版本，不追随内核的 latest。当前测试组合为 Xray **26.10.31** / sing-box **1.14.4**；CI 和发布流程验证 27 种生成配置，以及真实 TLS / Vision / 网站回落和管理地址隔离。
 3. 使用 SQLite 一致快照，在副本上执行候选面板的迁移和配置生成。候选内核分别检查当前配置和新生成配置，验证面板证书/私钥；不启动服务，不修改线上数据库。
-4. 预检通过后才停服务，备份程序、数据库（含 WAL）、面板配置与内核配置，再对冻结的数据复检。候选文件在目标目录复制后原子重命名；不改写原监听地址、端口或 TLS 设置。
-5. 恢复原本运行的服务，检查 systemd 状态及面板实际 HTTP/TLS 响应。启动或健康检查失败自动恢复旧二进制、数据库和配置；失败诊断目录和备份均仅 root 可访问。正常成功也保留回退备份。
+4. 预检通过后才停服务，备份面板程序、已安装的管理脚本、数据库（含 WAL）、面板配置与内核配置，再对冻结的数据复检。候选文件在目标目录复制后原子重命名；不改写原监听地址、端口或 TLS 设置。
+5. 恢复原本运行的服务，检查 systemd 状态及面板实际 HTTP/TLS 响应。启动或健康检查失败自动恢复旧面板程序、管理脚本、数据库和配置。失败诊断目录和备份均仅 root 可访问。正常成功也保留回退备份。
 
-**旧安装需先更新管理脚本，再用新脚本升级**；单独替换面板二进制不会更新 `/usr/local/bin/proxy-panel` 里的旧升级逻辑。应在包含本修复的 release 发布后操作：
+### 旧版管理脚本迁移
+
+v1.19.8 等旧版执行 `proxy-panel update` 后，面板程序完成了升级，磁盘上的 CLI 仍使用旧命令。包含共享 443 和重新绑定命令的正式版发布后，在原服务器的 root Bash 中执行以下步骤。命令读取最新正式版的标签，并用同一标签的临时脚本升级到该版本。[查看正式发行版](https://github.com/mssHYC/proxy-panel/releases/latest)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mssHYC/proxy-panel/main/scripts/install.sh -o /tmp/proxy-panel-install.sh
-sudo install -m 755 /tmp/proxy-panel-install.sh /usr/local/bin/proxy-panel
-sudo proxy-panel update
+(
+  set -euo pipefail
+  repo=mssHYC/proxy-panel
+  release_tag=$(curl -fsSL "https://api.github.com/repos/$repo/releases/latest" | jq -er '.tag_name')
+  bootstrap=$(mktemp)
+  trap 'rm -- "$bootstrap"' EXIT
+  curl -fsSL "https://raw.githubusercontent.com/$repo/$release_tag/scripts/install.sh" -o "$bootstrap"
+  bash -n "$bootstrap"
+  if [[ $(bash "$bootstrap" help) != *'website rebind '* ]]; then
+    printf '%s 尚未提供新的托管网站命令，请在包含这些功能的正式版发布后重试。\n' "$release_tag" >&2
+    exit 1
+  fi
+  bash "$bootstrap" update "$release_tag"
+)
 ```
+
+升级器会备份原 `/usr/local/bin/proxy-panel`，再用经过校验的发行包替换它。升级完成后，运行 `proxy-panel help` 可看到 `website share-reality`、`website unshare-reality` 和 `website rebind`。此后可直接运行 `proxy-panel update`。
 
 旧版管理脚本在部分 AlmaLinux 等精简系统上可能报 `cmp: command not found`，随后误报“配置路径发生变化”并回退。AlmaLinux 可先运行 `sudo dnf install -y diffutils`，成功后重试升级。新脚本复用已检查的 `jq` 比较预检清单，不再依赖 `cmp`，并分别报告路径变化与清单读取/解析失败。
 
-手动回退使用升级完成时打印的真实备份目录：
+需要手动回退时，在 root shell 中传入升级完成时打印的备份目录。使用新版升级器创建的备份会同时还原面板和管理脚本。
 
 ```bash
-sudo proxy-panel rollback-update /opt/proxy-panel/backups/update-实际时间与编号
+proxy-panel rollback-update /opt/proxy-panel/backups/update-实际时间与编号
 ```
 
 回退会恢复升级时的数据库，之后新增的数据不会保留。自动回退处理脚本执行期间的失败；断电、`kill -9`、磁盘损坏等需要使用保留备份人工恢复。健康检查验证本机服务，不代替从中国大陆验证线路可达性。

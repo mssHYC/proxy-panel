@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/mssHYC/proxy-panel/main/scripts/ins
 
 面板默认仅监听 `127.0.0.1:8080`，远程管理使用 SSH 隧道或受保护的 HTTPS 反代；修改端口不会改变监听范围。`website setup` 部署的 443 网站用于展示页面，不提供管理面板入口。启用 TLS / 域名绑定时的访问示例及故障排查见[管理接口隔离与 443 网站部署](deploy/README.md)，升级前也请阅读其中的迁移说明。
 
-已有 HTTPUpgrade 托管网站要与 Reality 共用公网 443，可用 `proxy-panel website share-reality <Reality 节点ID>`。
+已有 HTTPUpgrade 托管网站要与 Reality 共用公网 443，可用 `proxy-panel website share-reality <Reality 节点ID>`。从 v1.19.8 等旧版本升级时，请先按[旧版管理脚本迁移步骤](deploy/README.md#旧版管理脚本迁移)安装支持该命令的发行版。
 
 ### Docker
 

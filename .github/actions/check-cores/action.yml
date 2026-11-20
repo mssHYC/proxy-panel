@@ -42,4 +42,5 @@ runs:
         sudo ip address add 192.0.2.10/32 dev lo
         trap 'sudo ip address del 192.0.2.10/32 dev lo; sudo ip -6 address del 2001:db8::10/128 dev lo' EXIT
         sudo ip -6 address add 2001:db8::10/128 dev lo nodad
-        sudo env NGINX_BINARY="$(command -v nginx)" XRAY_BINARY="$DIR/xray" SYSTEMD_ANALYZE_BINARY="$(command -v systemd-analyze)" /usr/bin/python3 scripts/tests/test_website.py
+        sudo env NGINX_BINARY="$(command -v nginx)" XRAY_BINARY="$DIR/xray" SYSTEMD_ANALYZE_BINARY="$(command -v systemd-analyze)" \
+          /usr/bin/python3 -m unittest discover -s scripts/tests -p 'test_website*.py'

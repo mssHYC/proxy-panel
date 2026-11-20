@@ -16,6 +16,7 @@ NC='\033[0m'
 
 # 路径常量
 INSTALL_DIR="/opt/proxy-panel"
+CLI_PATH="/usr/local/bin/proxy-panel"
 CONFIG_FILE="${INSTALL_DIR}/config.yaml"
 DB_FILE="${INSTALL_DIR}/data/panel.db"
 BACKUP_DIR="${INSTALL_DIR}/backups"
@@ -127,10 +128,10 @@ install_deps() {
 # 下载核心组件
 # ============================================
 
-download_panel() {
+download_panel() (
     step "下载 ProxyPanel..."
     local latest_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
-    local version
+    local version stage cli
 
     # 尝试获取最新版本号
     version=$(curl -s "$latest_url" | jq -r '.tag_name' 2>/dev/null) || true
@@ -140,13 +141,26 @@ download_panel() {
         return 1
     fi
 
-    local download_url="https://github.com/${GITHUB_REPO}/releases/download/${version}/proxy-panel-linux-${ARCH}.tar.gz"
-    wget -q --show-progress -O /tmp/proxy-panel.tar.gz "$download_url" || error "下载 ProxyPanel 失败"
-    tar -xzf /tmp/proxy-panel.tar.gz -C "${INSTALL_DIR}/" || return 1
-    chmod +x "${INSTALL_DIR}/proxy-panel" || return 1
-    rm -f /tmp/proxy-panel.tar.gz
+    stage=$(mktemp -d) || return 1
+    trap 'rm -rf "$stage"' EXIT
+    fetch_update_asset "$GITHUB_REPO" "tags/$version" "proxy-panel-linux-${ARCH}.tar.gz" "$stage/panel.tar.gz" || {
+        warn "下载或校验 ProxyPanel 失败"
+        return 1
+    }
+    tar -xzf "$stage/panel.tar.gz" -C "$stage" || return 1
+    cli="$stage/scripts/install.sh"
+    if [[ ! -f "$cli" ]]; then
+        # Older release archives contain only the server. Use their tagged CLI.
+        cli="$stage/legacy-cli"
+        curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPO}/${version}/scripts/install.sh" -o "$cli" || return 1
+    fi
+    bash -n "$cli" || return 1
+    mkdir -p "${CLI_PATH%/*}" || return 1
+    replace_update_binary "$cli" "$CLI_PATH" || return 1
+    # do_install uses the presence of this file to distinguish an upgrade.
+    replace_update_binary "$stage/proxy-panel" "${INSTALL_DIR}/proxy-panel" || return 1
     info "ProxyPanel ${version} 安装完成"
-}
+)
 
 download_xray() {
     step "下载 Xray..."
@@ -1362,20 +1376,6 @@ print_summary() {
 }
 
 # ============================================
-# 安装 CLI 管理命令
-# ============================================
-
-install_cli() {
-    step "安装 proxy-panel 管理命令..."
-    # 将脚本自身复制到 /usr/local/bin/proxy-panel
-    local script_path
-    script_path=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")
-    cp "$script_path" /usr/local/bin/proxy-panel
-    chmod +x /usr/local/bin/proxy-panel
-    info "已安装 proxy-panel 命令，可直接使用: proxy-panel status / restart / logs 等"
-}
-
-# ============================================
 # install 子命令: 完整安装
 # ============================================
 
@@ -1409,7 +1409,6 @@ do_install() {
     download_xray
     download_singbox
     download_panel || return 1
-    install_cli
     setup_systemd
     start_services || return 1
     print_summary
@@ -2148,8 +2147,39 @@ install_website_deps() (
     for cmd in nginx openssl ip jq flock systemd-analyze; do command -v "$cmd" >/dev/null || error "缺少网站部署依赖: $cmd"; done
 )
 
+check_website_selinux_bind() (
+    local endpoint="$1" probe unit context nginx
+    local properties=(-p Type=oneshot)
+    command -v systemd-run >/dev/null || { warn "SELinux 监听预检需要 systemd-run，请安装 systemd 工具后重试"; return 1; }
+    nginx=$(type -P nginx) || return 1
+    context=$(systemctl show -p SELinuxContext "$WEBSITE_SERVICE") || return 1
+    if [[ -n "${context#SELinuxContext=}" ]]; then properties+=(-p "$context"); fi
+
+    # Use the active configuration's directory and label so the service can read the probe.
+    probe=$(mktemp "$WEBSITE_CONFIG_DIR/.bind-check.XXXXXXXX") || return 1
+    trap 'rm -f -- "$probe"' EXIT
+    chcon --reference="$WEBSITE_CONFIG_DIR/nginx.conf" "$probe" || return 1
+    printf 'pid /dev/null;
+error_log stderr;
+events {}
+http { access_log off; server { listen %s; } }
+' "$endpoint" > "$probe" || return 1
+
+    # nginx -t attempts bind(2). Type=oneshot makes systemd-run wait for its result.
+    unit="proxy-panel-web-bind-${probe##*.}"
+    if ! systemd-run --quiet --unit="$unit" "${properties[@]}" "$nginx" -t -c "$probe"; then
+        journalctl -u "$unit" -n 8 --no-pager >&2 || true
+        systemctl reset-failed "$unit" 2>/dev/null || true
+        warn "SELinux enforcing 下 Nginx 服务未通过 $endpoint 监听预检。请核对上方错误和 ausearch -m AVC -ts recent；若 name_bind 被拒绝，用 semanage port -l 核对现有端口类型，并请管理员确认允许的端口策略。"
+        return 1
+    fi
+)
+
 setup_website_selinux() {
     [[ -r /sys/fs/selinux/enforce && "$(cat /sys/fs/selinux/enforce)" == 1 ]] || return 0
+    local backend
+    backend=$(jq -r '.reality_frontend.web_listen // empty' "$1") || return 1
+    if [[ -n "$backend" ]]; then check_website_selinux_bind "$backend" || return 1; fi
     # Keep SELinux enforcing. Permit the HTTPS reverse proxy and label only its certs.
     if ! command -v semanage >/dev/null || ! command -v setsebool >/dev/null; then
         [[ "$PKG_MGR" == yum ]] || { warn "请安装 SELinux 管理工具后重试"; return 1; }
@@ -2168,29 +2198,169 @@ setup_website_selinux() {
     fi
 }
 
+# The path unit survives both the deployment process group and a reboot. Its
+# worker takes the same lock as the CLI, so a healthy transaction finishes first.
+website_start_gate() {
+    local journal="$INSTALL_DIR/.website-transaction"
+    [[ -L "$journal" ]] || return 0
+    # Standalone deployments never stop or change the panel and its cores.
+    if [[ "${1:-}" == core ]] && jq -e '.mode == "standalone"' "$journal/state.json" >/dev/null; then return 0; fi
+    exec 8<"$INSTALL_DIR/.website-start.lock" || return 1
+    if flock -s -n -E 75 8; then
+        [[ -L "$journal" ]] || return 0
+        echo "网站部署未完成，等待 proxy-panel-website-recover.service" >&2
+        return 1
+    else
+        # The transaction (or its recovery) has published a complete set of
+        # files and is starting services to verify it. SIGKILL releases the lock.
+        [[ $? == 75 ]]
+    fi
+}
+
+website_allow_starts() {
+    exec 8>"$INSTALL_DIR/.website-start.lock" && flock -x 8
+}
+
+website_finish_journal() {
+    # The database, Nginx, systemd files and backup can be on different mounts.
+    sync && rm "$INSTALL_DIR/.website-transaction" && sync
+}
+
+website_restore_locked() {
+    local journal="$INSTALL_DIR/.website-transaction" backup state mode svc attempt healthy panel_active=false
+    local affected=("$WEBSITE_SERVICE" proxy-panel-web-cert.path) active=()
+    [[ -L "$journal" ]] || return 0
+    backup=$(readlink "$journal") || return 1
+    [[ "$backup" == "$BACKUP_DIR"/website-* ]] || return 1
+    state="$backup/state.json"
+    mode=$(jq -er 'select((.active|type) == "array" and (.enabled|type) == "array") | .mode | select(. == "standalone" or . == "proxy")' "$state") || return 1
+    for svc in proxy-panel-web-cert.path "$WEBSITE_SERVICE" proxy-panel-web-reload; do
+        if [[ "$(systemctl show -p LoadState --value "$svc")" == loaded ]]; then
+            systemctl stop "$svc" || return 1
+        fi
+    done
+    if [[ "$mode" != standalone ]]; then
+        affected+=("$SERVICE_NAME" "$XRAY_SERVICE" "$SINGBOX_SERVICE")
+        stop_update_services || return 1
+    fi
+    # Remove newly-created enable links while the candidate units still exist.
+    for svc in "$WEBSITE_SERVICE" proxy-panel-web-cert.path; do
+        if ! jq -e --arg svc "$svc" '.enabled | index($svc) != null' "$state" >/dev/null &&
+            systemctl is-enabled --quiet "$svc" 2>/dev/null; then
+            systemctl disable "$svc" || return 1
+        fi
+    done
+    # Before this marker exists only services may have stopped. A partial
+    # snapshot must never be used to remove files that were not copied yet.
+    if [[ -f "$backup/files-ready" ]]; then restore_update_files "$backup" || return 1; fi
+    systemctl daemon-reload || return 1
+    for svc in "$WEBSITE_SERVICE" proxy-panel-web-cert.path; do
+        if jq -e --arg svc "$svc" '.enabled | index($svc) != null' "$state" >/dev/null; then
+            systemctl enable "$svc" || return 1
+        fi
+    done
+    website_allow_starts || return 1
+    # Starts gated during early boot may have hit systemd's restart limit.
+    for svc in "${affected[@]}"; do
+        if jq -e --arg svc "$svc" '.active | index($svc) != null' "$state" >/dev/null; then
+            systemctl reset-failed "$svc" || return 1
+            active+=("$svc")
+            if [[ "$svc" == "$SERVICE_NAME" ]]; then panel_active=true; fi
+        fi
+    done
+    if [[ "$mode" != standalone ]]; then
+        start_update_services "$state" && keep_update_services_inactive "$state" || return 1
+    fi
+    for svc in "$WEBSITE_SERVICE" proxy-panel-web-cert.path; do
+        if jq -e --arg svc "$svc" '.active | index($svc) != null' "$state" >/dev/null; then
+            systemctl start "$svc" || return 1
+        fi
+    done
+    for attempt in {1..10}; do
+        healthy=true
+        for svc in "${active[@]}"; do systemctl is-active --quiet "$svc" || healthy=false; done
+        if [[ "$healthy" == true ]] && { [[ "$panel_active" == false ]] || "$INSTALL_DIR/proxy-panel" -config "$CONFIG_FILE" -check-health; }; then
+            website_finish_journal
+            return
+        fi
+        sleep 1
+    done
+    echo "恢复后的服务未通过检查，已保留 $journal" >&2
+    return 1
+}
+
+install_website_recovery() {
+    local helper="$WEBSITE_UNIT_DIR/proxy-panel-website-recovery.sh" unit=proxy-panel-website-recover svc dir role
+    mkdir -p "$WEBSITE_UNIT_DIR" || return 1
+    # Store an independent, root-owned worker. Recovery must also work when
+    # the CLI was run from a download or its installed version has changed.
+    {
+        printf '#!/bin/bash\nset -eo pipefail\numask 077\n'
+        declare -p INSTALL_DIR BACKUP_DIR CONFIG_FILE SERVICE_NAME XRAY_SERVICE SINGBOX_SERVICE WEBSITE_SERVICE
+        declare -f website_start_gate website_allow_starts website_finish_journal website_restore_locked \
+            restore_update_files stop_update_services start_update_services keep_update_services_inactive
+        cat <<'RECOVER'
+case "$1" in
+    gate) website_start_gate "${2:-}" ;;
+    recover)
+        exec 9>"$INSTALL_DIR/.update.lock"
+        flock -x 9
+        website_restore_locked ;;
+    *) exit 2 ;;
+esac
+RECOVER
+    } > "$helper.new" && chmod 700 "$helper.new" && mv -f "$helper.new" "$helper" || return 1
+    cat > "$WEBSITE_UNIT_DIR/$unit.service.new" <<EOF
+[Unit]
+Description=Recover interrupted proxy-panel website deployment
+[Service]
+Type=oneshot
+TimeoutStartSec=infinity
+ExecStart=/bin/bash "$helper" recover
+EOF
+    cat > "$WEBSITE_UNIT_DIR/$unit.path.new" <<EOF
+[Unit]
+Description=Watch for interrupted proxy-panel website deployments
+[Path]
+PathExists=$INSTALL_DIR/.website-transaction
+[Install]
+WantedBy=multi-user.target
+EOF
+    for svc in "$unit.service" "$unit.path"; do
+        chmod 644 "$WEBSITE_UNIT_DIR/$svc.new" && mv -f "$WEBSITE_UNIT_DIR/$svc.new" "$WEBSITE_UNIT_DIR/$svc" || return 1
+    done
+    for svc in "$SERVICE_NAME" "$XRAY_SERVICE" "$SINGBOX_SERVICE" "$WEBSITE_SERVICE" proxy-panel-web-reload; do
+        dir="$WEBSITE_UNIT_DIR/$svc.service.d"
+        role=website
+        if [[ "$svc" == "$SERVICE_NAME" || "$svc" == "$XRAY_SERVICE" || "$svc" == "$SINGBOX_SERVICE" ]]; then role=core; fi
+        mkdir -p "$dir" || return 1
+        printf '[Service]\nExecStartPre=+/bin/bash "%s" gate %s\n' "$helper" "$role" > "$dir/website-recovery.conf.new" && \
+            chmod 644 "$dir/website-recovery.conf.new" && mv -f "$dir/website-recovery.conf.new" "$dir/website-recovery.conf" || return 1
+    done
+    touch "$INSTALL_DIR/.website-start.lock" && systemctl daemon-reload && \
+        systemctl enable "$unit.path" && systemctl start "$unit.path"
+}
+
 run_website_setup() (
     set -eEo pipefail
     umask 077
     cd "$INSTALL_DIR"
     exec 9>"${INSTALL_DIR}/.update.lock"
     flock -n 9 || { warn "另一个升级或网站部署正在运行"; exit 1; }
-    local stage backup phase=prepare mode=proxy file svc index=0 website_domain="${1:-}" active=() enabled=()
+    [[ ! -L "$INSTALL_DIR/.website-transaction" ]] || { warn "网站部署正在恢复，请先检查 proxy-panel-website-recover.service"; exit 1; }
+    local stage backup mode=proxy file svc index=0 website_domain="${1:-}" active=() enabled=()
     stage=$(mktemp -d "${INSTALL_DIR}/.website.XXXXXX")
-    backup="${BACKUP_DIR}/website-$(date +%Y%m%d_%H%M%S)-$$"
     finish_website_setup() {
         local status=$?
         trap - EXIT INT TERM
-        if [[ "$phase" == stopped || "$phase" == installed ]]; then
+        if [[ -L "$INSTALL_DIR/.website-transaction" ]]; then
             warn "网站部署失败，正在恢复节点配置及服务..."
-            systemctl stop "$WEBSITE_SERVICE" proxy-panel-web-cert.path 2>/dev/null || true
-            if { [[ "$mode" == standalone ]] || stop_update_services; } && { [[ "$phase" == stopped ]] || restore_update_files "$backup"; } && systemctl daemon-reload && { [[ "$mode" == standalone ]] || { start_update_services "$stage/state.json" && keep_update_services_inactive "$stage/state.json"; }; }; then
-                for svc in "$WEBSITE_SERVICE" proxy-panel-web-cert.path; do
-                    if jq -e --arg svc "$svc" '.active | index($svc) != null' "$stage/state.json" >/dev/null; then systemctl start "$svc" || status=1; fi
-                    if ! jq -e --arg svc "$svc" '.enabled | index($svc) != null' "$stage/state.json" >/dev/null; then systemctl disable "$svc" 2>/dev/null || true; fi
-                done
+            exec 8>&-
+            if website_restore_locked; then
                 warn "已恢复部署前配置；备份: $backup"
             else
-                warn "自动恢复未完成，请检查备份: $backup"
+                warn "自动恢复未完成，已保留恢复记录和备份: $backup"
+                status=1
             fi
         fi
         if [[ "$status" == 0 ]]; then rm -rf "$stage"; else warn "网站诊断目录: $stage"; fi
@@ -2214,26 +2384,34 @@ run_website_setup() (
     done
     jq --argjson active "$(printf '%s\n' "${active[@]}" | jq -Rsc 'split("\n") | map(select(length>0))')" \
        --argjson enabled "$(printf '%s\n' "${enabled[@]}" | jq -Rsc 'split("\n") | map(select(length>0))')" \
-       '{files,active:$active,enabled:$enabled}' "$stage/check/plan.json" > "$stage/state.json"
+       '{files,mode:(.mode // "proxy"),active:$active,enabled:$enabled}' "$stage/check/plan.json" > "$stage/state.json"
     step "网站与证书预检通过，备份并切换 443 入口..."
-    phase=stopped
+    install_website_recovery
+    mkdir -p "$BACKUP_DIR"
+    backup=$(mktemp -d "$BACKUP_DIR/website-$(date +%Y%m%d_%H%M%S)-XXXXXX")
+    cp "$stage/state.json" "$backup/state.json"
+    # Publish the service snapshot and watcher before stopping anything.
+    sync
+    ln -s "$backup" "$INSTALL_DIR/.website-transaction"
+    sync
     if [[ -f "$WEBSITE_CONFIG_DIR/managed.json" ]]; then systemctl stop "$WEBSITE_SERVICE" proxy-panel-web-cert.path; fi
     if [[ "$mode" != standalone ]]; then stop_update_services; fi
-    mkdir -p "$backup"
     while IFS= read -r file; do
         if [[ -f "$file" ]]; then cp -p "$file" "$backup/$index"; fi
         index=$((index+1))
     done < <(jq -r '.files[]' "$stage/state.json")
-    cp "$stage/state.json" "$backup/state.json"
     if [[ "$mode" != standalone ]]; then
         "${INSTALL_DIR}/proxy-panel" -config "$CONFIG_FILE" -check-update "$stage/final-panel-check" > "$stage/final-panel-check.log" 2>&1
     fi
     website_tool prepare "$stage/final" "$website_domain" "${@:2}"
     jq -e -s 'length == 2 and .[0] == .[1]' "$stage/check/plan.json" "$stage/final/plan.json" >/dev/null || { warn "预检期间节点或网站配置变化，请重新部署"; exit 1; }
-    phase=installed
+    sync
+    touch "$backup/files-ready"
+    sync
     website_tool apply "$stage/final"
     if command -v restorecon >/dev/null; then restorecon -R "$WEBSITE_CONFIG_DIR" "$WEBSITE_ROOT" "$WEBSITE_UNIT_DIR/proxy-panel-web.service" "$WEBSITE_UNIT_DIR/proxy-panel-web-reload.service" "$WEBSITE_UNIT_DIR/proxy-panel-web-cert.path"; fi
     systemctl daemon-reload
+    website_allow_starts
     if [[ "$mode" != standalone ]]; then start_update_services "$stage/state.json"; fi
     systemctl start "$WEBSITE_SERVICE"
     local healthy=false attempt
@@ -2245,7 +2423,7 @@ run_website_setup() (
     if [[ "$mode" != standalone ]]; then keep_update_services_inactive "$stage/state.json"; fi
     systemctl enable "$WEBSITE_SERVICE" proxy-panel-web-cert.path
     systemctl start proxy-panel-web-cert.path
-    phase=complete
+    website_finish_journal
     if [[ "$mode" == standalone ]]; then
         info "独立 HTTPS 网站部署完成，无需代理节点。备份: $backup"
     else
@@ -2370,6 +2548,9 @@ run_safe_update() (
     cd "$INSTALL_DIR"
     exec 9>"${INSTALL_DIR}/.update.lock"
     flock -n 9 || { warn "另一个升级正在运行"; exit 1; }
+    [[ ! -L "$INSTALL_DIR/.website-transaction" ]] || { warn "网站部署正在恢复，请先检查 proxy-panel-website-recover.service"; exit 1; }
+    local release=latest
+    if [[ $# -gt 0 ]]; then release="tags/$1"; fi
     local stage backup phase="prepare" svc i file version xray_arch xray_path singbox_path
     local xray_candidate="" singbox_candidate="" active=()
     stage=$(mktemp -d "${INSTALL_DIR}/.update.XXXXXX")
@@ -2393,8 +2574,12 @@ run_safe_update() (
     trap 'exit 143' TERM
 
     step "下载并验证升级候选（当前服务继续运行）..."
-    fetch_update_asset "$GITHUB_REPO" latest "proxy-panel-linux-${ARCH}.tar.gz" "$stage/panel.tar.gz"
-    tar -xzf "$stage/panel.tar.gz" -C "$stage" proxy-panel
+    fetch_update_asset "$GITHUB_REPO" "$release" "proxy-panel-linux-${ARCH}.tar.gz" "$stage/panel.tar.gz"
+    tar -xzf "$stage/panel.tar.gz" -C "$stage" proxy-panel scripts/install.sh || {
+        warn "发行包缺少面板或配套管理脚本，请选择包含二者的发行版本"
+        exit 1
+    }
+    bash -n "$stage/scripts/install.sh"
     chmod 755 "$stage/proxy-panel"
     "$stage/proxy-panel" -compatibility > "$stage/compatibility.json"
     if confirm "是否同时更新 Xray 到本版本已验证的内核?"; then
@@ -2420,10 +2605,10 @@ run_safe_update() (
     for svc in "$SERVICE_NAME" "$XRAY_SERVICE" "$SINGBOX_SERVICE"; do
         if systemctl is-active --quiet "$svc"; then active+=("$svc"); fi
     done
-    jq --arg panel "${INSTALL_DIR}/proxy-panel" \
+    jq --arg panel "${INSTALL_DIR}/proxy-panel" --arg cli "$CLI_PATH" \
         --arg website_access "${WEBSITE_UNIT_DIR}/${SERVICE_NAME}.service.d/managed-website.conf" \
         --argjson active "$(printf '%s\n' "${active[@]}" | jq -Rsc 'split("\n") | map(select(length>0))')" \
-        '.files += [$panel, $website_access] | .files |= unique | .active=$active' "$stage/check/manifest.json" > "$stage/state.json"
+        '.files += [$panel, $cli, $website_access] | .files |= unique | .active=$active' "$stage/check/manifest.json" > "$stage/state.json"
     step "预检通过，停止服务并创建一致备份..."
     phase="stopped"
     stop_update_services
@@ -2449,6 +2634,7 @@ run_safe_update() (
     }
     phase="installed"
     replace_update_binary "$stage/proxy-panel" "${INSTALL_DIR}/proxy-panel"
+    replace_update_binary "$stage/scripts/install.sh" "$CLI_PATH"
     if [[ -n "$xray_candidate" ]]; then replace_update_binary "$xray_candidate" "$xray_path"; fi
     if [[ -n "$singbox_candidate" ]]; then replace_update_binary "$singbox_candidate" "$singbox_path"; fi
     setup_website_write_access
@@ -2481,6 +2667,7 @@ do_rollback_update() (
     set -eEo pipefail
     exec 9>"${INSTALL_DIR}/.update.lock"
     flock -n 9 || error "另一个升级正在运行"
+    [[ ! -L "$INSTALL_DIR/.website-transaction" ]] || error "网站部署正在恢复，请先检查 proxy-panel-website-recover.service"
     stop_update_services
     restore_update_files "$backup"
     start_update_services "$backup/state.json"
@@ -2488,13 +2675,16 @@ do_rollback_update() (
 )
 
 do_update() {
+    if [[ $# -gt 1 || ( $# -eq 1 && ! "$1" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ) ]]; then
+        error "用法: proxy-panel update [v主版本.次版本.修订号]"
+    fi
     check_root
     detect_os
     detect_arch
     [[ -f "$CONFIG_FILE" ]] || error "未检测到已安装的 ProxyPanel，请先执行 install"
     local cmd
     for cmd in curl jq sha256sum flock tar unzip; do command -v "$cmd" >/dev/null || error "缺少升级依赖: $cmd"; done
-    run_safe_update
+    run_safe_update "$@"
     local update_status=$?
     [[ "$update_status" == 0 ]] || return "$update_status"
     offer_website_setup
@@ -2515,6 +2705,7 @@ do_uninstall() {
         exit 0
     fi
 
+    [[ ! -L "$INSTALL_DIR/.website-transaction" ]] || { warn "网站部署正在恢复，请先检查 proxy-panel-website-recover.service"; return 1; }
     # 停止并禁用服务
     step "停止服务..."
     systemctl stop ${SERVICE_NAME} 2>/dev/null || true
@@ -2530,6 +2721,17 @@ do_uninstall() {
 
     # 删除 systemd 服务文件
     rm -f /etc/systemd/system/${SERVICE_NAME}.service
+    if [[ -f "$WEBSITE_UNIT_DIR/proxy-panel-website-recover.path" ]]; then
+        systemctl disable --now proxy-panel-website-recover.path || return 1
+        systemctl stop proxy-panel-website-recover.service || return 1
+        local svc
+        for svc in "$SERVICE_NAME" "$XRAY_SERVICE" "$SINGBOX_SERVICE" "$WEBSITE_SERVICE" proxy-panel-web-reload; do
+            rm -f "$WEBSITE_UNIT_DIR/$svc.service.d/website-recovery.conf"
+        done
+        rm -f "$WEBSITE_UNIT_DIR/proxy-panel-website-recover.path" "$WEBSITE_UNIT_DIR/proxy-panel-website-recover.service" \
+            "$WEBSITE_UNIT_DIR/proxy-panel-website-recovery.sh"
+        systemctl daemon-reload
+    fi
     rm -f "${WEBSITE_UNIT_DIR}/${SERVICE_NAME}.service.d/managed-website.conf"
     rm -f /etc/systemd/system/${XRAY_SERVICE}.service
     rm -f /etc/systemd/system/${SINGBOX_SERVICE}.service
@@ -2912,7 +3114,7 @@ show_help() {
     echo ""
     echo -e "${GREEN}[安装]${NC}"
     echo "  install            完整安装 ProxyPanel"
-    echo "  update             升级 (预检、保留配置、失败回退)"
+    echo "  update [vX.Y.Z]    升级面板和配套管理脚本 (默认最新发行版)"
     echo "  rollback-update <目录>  从 update-* 备份回退程序和数据"
     echo "  uninstall          卸载 (可选保留数据)"
     echo ""
@@ -2965,7 +3167,7 @@ show_context_hint() {
 main() {
     case "${1:-}" in
         install)    do_install ;;
-        update)     do_update ;;
+        update)     shift; do_update "$@" ;;
         rollback-update) do_rollback_update "${2:-}" ;;
         uninstall)  do_uninstall ;;
         status)     do_status ;;

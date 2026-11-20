@@ -899,6 +899,7 @@ website_tool() {
 }
 systemctl() {
  local op="$1" svc="${@: -1}"
+ if [[ "$svc" == proxy-panel-website-recover.path ]]; then return 0; fi
  echo "$*" >> "$TEST_ROOT/events"
  case "$op" in
  show) echo loaded;;

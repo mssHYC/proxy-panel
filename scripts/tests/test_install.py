@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
@@ -98,7 +99,7 @@ echo health >> "$TEST_ROOT/events"
         return self.run_shell('''
 for stage in detect_os detect_arch install_deps interactive_config setup_firewall \
     generate_config generate_default_xray_config generate_default_singbox_config \
-    download_xray download_singbox download_panel install_cli setup_systemd start_services; do
+    download_xray download_singbox download_panel setup_systemd start_services; do
     eval "$stage() { :; }"
 done
 print_summary() { echo INSTALL_SUCCESS; }
@@ -124,6 +125,39 @@ offer_website_setup() { echo WEBSITE_OFFER; }
     def test_missing_release_is_a_download_failure(self):
         result = self.run_shell('curl() { echo \'{"tag_name":null}\'; }; download_panel')
         self.assertNotEqual(result.returncode, 0)
+
+    def test_install_uses_bundled_cli_and_accepts_legacy_releases(self):
+        cli = self.root / "cli"
+        asset = self.root / "release.tar.gz"
+        candidate = self.root / "candidate-cli"
+        candidate.write_text("#!/bin/sh\necho release-cli\n")
+        server = self.root / "proxy-panel"
+        asset_binary = self.root / "sample-server"
+        server.rename(asset_binary)
+        for bundled, cli_writable in ((True, True), (False, True), (True, False)):
+            with self.subTest(bundled=bundled, cli_writable=cli_writable):
+                server.unlink(missing_ok=True)
+                with tarfile.open(asset, "w:gz") as archive:
+                    archive.add(asset_binary, arcname="proxy-panel")
+                    if bundled:
+                        archive.add(candidate, arcname="scripts/install.sh")
+                result = self.run_shell("""
+CLI_PATH="$CANDIDATE_DESTINATION"
+ARCH=amd64
+curl() {
+ if [[ "$1" == -s ]]; then echo '{"tag_name":"v9.8.7"}'; return; fi
+ [[ "$2" == https://raw.githubusercontent.com/mssHYC/proxy-panel/v9.8.7/scripts/install.sh ]] && cp "$INSTALLER" "$4"
+}
+fetch_update_asset() { [[ "$2" == tags/v9.8.7 ]] && cp "$TEST_ROOT/release.tar.gz" "$4"; }
+download_panel
+""", CANDIDATE_DESTINATION=str(cli if cli_writable else candidate / "invalid-cli"))
+                if not cli_writable:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(server.exists(), "retry must still enter the new-install path")
+                    continue
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(cli.read_bytes(), (candidate if bundled else INSTALLER).read_bytes())
+                self.assertTrue(os.access(cli, os.X_OK))
 
     def test_dependency_installation_includes_acme_requirements(self):
         result = self.run_shell('''
