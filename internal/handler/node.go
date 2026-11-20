@@ -12,6 +12,7 @@ import (
 
 	"proxy-panel/internal/model"
 	"proxy-panel/internal/service"
+	"proxy-panel/internal/website"
 
 	"github.com/gin-gonic/gin"
 )
@@ -68,11 +69,7 @@ func (h *NodeHandler) Create(c *gin.Context) {
 
 	node, err := h.svc.Create(&req)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, service.ErrInvalidNodeSettings) {
-			status = http.StatusBadRequest
-		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		writeNodeMutationError(c, err)
 		return
 	}
 
@@ -98,11 +95,7 @@ func (h *NodeHandler) Update(c *gin.Context) {
 
 	node, synced, err := h.svc.UpdateAndSync(id, &req)
 	if err != nil {
-		status := http.StatusInternalServerError
-		if errors.Is(err, service.ErrInvalidNodeSettings) {
-			status = http.StatusBadRequest
-		}
-		c.JSON(status, gin.H{"error": err.Error()})
+		writeNodeMutationError(c, err)
 		return
 	}
 	if node == nil {
@@ -162,7 +155,7 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 	}
 
 	if err := h.svc.Delete(id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		writeNodeMutationError(c, err)
 		return
 	}
 
@@ -174,6 +167,17 @@ func (h *NodeHandler) Delete(c *gin.Context) {
 		resp["firewall_warning"] = w
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+func writeNodeMutationError(c *gin.Context, err error) {
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, website.ErrManagedConflict):
+		status = http.StatusConflict
+	case errors.Is(err, service.ErrInvalidNodeSettings):
+		status = http.StatusBadRequest
+	}
+	c.JSON(status, gin.H{"error": err.Error()})
 }
 
 // firewallWarning returns a user-facing hint when firewall sync is enabled.

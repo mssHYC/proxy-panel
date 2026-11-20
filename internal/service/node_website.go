@@ -40,13 +40,17 @@ func (s *NodeService) UpdateAndSync(id int64, req *UpdateNodeReq) (*model.Node, 
 	if err != nil {
 		return nil, false, err
 	}
-	if s.website == nil {
-		node, err := s.updateStored(old, candidate, req)
-		return node, false, err
+	var change *website.Change
+	if s.website != nil {
+		change, err = s.website.Prepare(*old, candidate)
+		if err != nil {
+			return nil, false, fmt.Errorf("托管网站检查失败: %w", err)
+		}
 	}
-	change, err := s.website.Prepare(*old, candidate)
-	if err != nil {
-		return nil, false, fmt.Errorf("托管网站检查失败: %w", err)
+	if req.Settings != nil || (req.Enable != nil && *req.Enable) {
+		if err := s.validateRealityChange(old.Settings, candidate.Settings, req.Enable != nil && *req.Enable && !old.Enable); err != nil {
+			return nil, false, err
+		}
 	}
 	if change == nil {
 		node, err := s.updateStored(old, candidate, req)
@@ -158,11 +162,6 @@ func (s *NodeService) nodeCandidate(old *model.Node, req *UpdateNodeReq) (model.
 	// Allow disabling legacy invalid nodes without repairing their settings.
 	if req.Protocol != nil || req.Transport != nil || req.KernelType != nil || req.Port != nil || req.Settings != nil || (req.Enable != nil && *req.Enable) {
 		if err := validateNodeSettings(candidate.Protocol, candidate.Transport, candidate.KernelType, candidate.Port, candidate.Settings); err != nil {
-			return candidate, err
-		}
-	}
-	if req.Settings != nil || (req.Enable != nil && *req.Enable) {
-		if err := s.validateRealityChange(old.Settings, candidate.Settings, req.Enable != nil && *req.Enable && !old.Enable); err != nil {
 			return candidate, err
 		}
 	}

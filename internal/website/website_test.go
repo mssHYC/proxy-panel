@@ -222,7 +222,8 @@ func TestUnrelatedNodesAndStandaloneSitesDoNotRunNginx(t *testing.T) {
 	if change, err := f.manager.Prepare(candidate, candidate); err != nil || change != nil {
 		t.Fatalf("unrelated node: %v %v", change, err)
 	}
-	write(t, f.manifest, []byte(`{"mode":"standalone"}`))
+	candidate.Port = 14443
+	write(t, f.manifest, []byte(`{"mode":"standalone","listens":["192.0.2.21:443"]}`))
 	if change, err := f.manager.Prepare(f.node, candidate); err != nil || change != nil {
 		t.Fatalf("standalone website: %v %v", change, err)
 	}

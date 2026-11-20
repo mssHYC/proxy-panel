@@ -1424,6 +1424,7 @@ website_tool() {
     python3 - "$CONFIG_FILE" "$INSTALL_DIR" "$WEBSITE_CONFIG_DIR" "$WEBSITE_ROOT" "$WEBSITE_UNIT_DIR" "$@" <<'PY_WEBSITE'
 """Embedded by install.sh; prepare is read-only, apply runs while services stop."""
 from contextlib import closing, ExitStack
+import hashlib
 import ipaddress
 import json
 import os
@@ -1506,7 +1507,28 @@ def select_listens(original, available):
 
 
 def nginx_config(plan, root):
-    listen = '\n'.join('        listen ' + address + ' ssl;' for address in plan['listens'])
+    web_listens = plan['listens']
+    module, stream = '', ''
+    if 'reality_frontend' in plan:
+        front = plan['reality_frontend']
+        web_listens = [front['web_listen']]
+        if front['stream_module']:
+            module = f"load_module {quote(front['stream_module'])};\n"
+        public = '\n'.join(f'        listen {address};' for address in plan['listens'])
+        stream = f'''stream {{
+    map $ssl_preread_server_name $proxy_panel_backend {{
+        {domain(front['sni'])} {front['listen']};
+        default {front['web_listen']};
+    }}
+    server {{
+{public}
+        ssl_preread on;
+        proxy_pass $proxy_panel_backend;
+        proxy_timeout 3600s;
+    }}
+}}
+'''
+    listen = '\n'.join('        listen ' + address + ' ssl;' for address in web_listens)
     default_listen = listen.replace(' ssl;', ' ssl default_server;')
     locations = ''
     if plan.get('mode') != 'standalone':
@@ -1532,11 +1554,11 @@ def nginx_config(plan, root):
             proxy_send_timeout 3600s;
         }}
 '''
-    return f'''pid /run/proxy-panel-web.pid;
+    return f'''{module}pid /run/proxy-panel-web.pid;
 error_log stderr warn;
 worker_processes auto;
 events {{ worker_connections 1024; }}
-http {{
+{stream}http {{
     access_log off;
     server_tokens off;
     default_type text/html;
@@ -1663,7 +1685,71 @@ def prepare_standalone(cfg, install, managed, root, website_domain):
     return dict(mode='standalone', domains=[name], cert=cert, key=key, ca=ca, listens=listens, webroot=str(root))
 
 
-def prepare_proxy(cfg, database, row, managed, root, website_domain):
+STREAM_MODULES = ('/usr/lib/nginx/modules/ngx_stream_module.so', '/usr/lib64/nginx/modules/ngx_stream_module.so')
+
+
+def listen_ip(value):
+    address = ipaddress.ip_address(value or '0.0.0.0')
+    return getattr(address, 'ipv4_mapped', None) or address
+
+
+def check_other_443(listen, public, front):
+    address = listen_ip(listen)
+    reserved = {listen_ip(endpoint.rsplit(':', 1)[0].strip('[]')) for endpoint in public}
+    reserved.add(listen_ip('127.0.0.1'))
+    if front:
+        reserved.add(listen_ip('127.0.0.2'))
+    if address.is_unspecified or address in reserved:
+        raise ValueError(f'其他 TCP 443 节点的监听 {address} 与托管网站入口冲突')
+
+
+def reality_names(settings):
+    # Use the same list and alias precedence as the panel's Xray generator.
+    for key in ('server_names', 'serverNames'):
+        values = settings.get(key)
+        if isinstance(values, list):
+            names = [domain(value) for value in values if isinstance(value, str)]
+            if names:
+                return names
+    return [domain(settings.get('sni') or settings.get('serverName') or '')]
+
+
+def website_rows(db, managed):
+    rows = db.execute("""SELECT id,host,protocol,transport,settings,kernel_type FROM nodes
+                         WHERE enable=1 AND port=443 AND protocol NOT IN ('hysteria2','hy2','tuic')
+                         AND NOT (kernel_type='xray' AND transport IN ('kcp','quic'))""").fetchall()
+    if not managed or managed.get('mode') != 'proxy':
+        return rows
+    front = managed.get('reality_frontend')
+    http = [row for row in rows if row[0] == managed.get('node_id')]
+    if len(http) != 1:
+        raise ValueError('托管网站对应的节点已更换、缺失或禁用，请先检查现有部署')
+    if 'reality_frontend' in managed and (not isinstance(front, dict)
+            or front.get('listen') != '127.0.0.2:443' or front.get('web_listen') != '127.0.0.1:9443'
+            or front.get('stream_module') not in ('', *STREAM_MODULES)):
+        raise ValueError('无效的托管 Reality 入口配置')
+    ids = {http[0][0], front.get('node_id') if front else None}
+    for row in rows:
+        if row[0] not in ids:
+            check_other_443(json.loads(row[4]).get('listen'), managed['listens'], front)
+    if not front:
+        return http
+    reality = [row for row in rows if row[0] == front.get('node_id')]
+    if len(reality) != 1 or reality[0] == http[0]:
+        raise ValueError('托管 Reality 和网站的 443 节点已变化')
+    _, _, protocol, transport, original, kernel = reality[0]
+    settings = json.loads(original)
+    sni = domain(front['sni'])
+    names = reality_names(settings)
+    primary = settings.get('sni') or settings.get('serverName') or names[0]
+    if ((kernel, protocol, transport) != ('xray', 'vless', 'tcp') or settings.get('security') != 'reality'
+            or settings.get('listen') != '127.0.0.2' or domain(primary) != sni
+            or sni not in names):
+        raise ValueError('托管 Reality 节点的监听地址、协议或 SNI 已变化')
+    return http
+
+
+def prepare_proxy(cfg, database, row, managed, root, website_domain, rebinding=False):
     kernel_path = str(Path(cfg['kernel']['xray_config']).resolve())
     node_id, node_host, protocol, transport, original = row
     settings = json.loads(original)
@@ -1683,6 +1769,8 @@ def prepare_proxy(cfg, database, row, managed, root, website_domain):
         ipaddress.ip_address(node_host)
     except ValueError:
         names.append(domain(node_host))
+    if managed:
+        names.extend(domain(name) for name in managed.get('domains', []))
     if website_domain:
         names.append(domain(website_domain))
     # Keep logical certificate paths: certbot/acme can replace their symlink targets.
@@ -1703,14 +1791,42 @@ def prepare_proxy(cfg, database, row, managed, root, website_domain):
         except (ValueError, ssl.SSLError):
             pass
     before = settings.get('listen', '0.0.0.0')
-    if managed and before == '127.0.0.1':
+    if managed and (before == '127.0.0.1' or (rebinding and listen_ip(before).is_loopback)):
         before = managed['listen_before']
     listens = select_listens(before, interface_ips())
     next_settings = dict(settings, listen='127.0.0.1', alpn=['http/1.1'])
     current = json.loads(Path(kernel_path).read_text())
-    inbounds = [i for i in current.get('inbounds', []) if i.get('port') == 443]
-    if len(inbounds) != 1 or inbounds[0].get('tag') != 'node-' + str(node_id):
+    inbounds = [i for i in current.get('inbounds', []) if i.get('port') == 443
+                and i.get('streamSettings', {}).get('network') not in ('kcp', 'quic')]
+    front = managed.get('reality_frontend') if managed else None
+    if front:
+        tag = 'node-' + str(front['node_id'])
+        endpoints = [i for i in inbounds if i.get('tag') == tag]
+        if len(endpoints) != 1:
+            raise ValueError('运行配置的托管 Reality 节点缺失或重复')
+        endpoint = endpoints[0]
+        reality_stream = endpoint.get('streamSettings', {})
+        if (endpoint.get('listen') != '127.0.0.2' or endpoint.get('protocol') != 'vless'
+                or reality_stream.get('network') not in ('tcp', 'raw') or reality_stream.get('security') != 'reality'
+                or domain(front['sni']) not in [domain(n) for n in reality_stream.get('realitySettings', {}).get('serverNames', [])]
+                or domain(front['sni']) in names):
+            raise ValueError('运行配置的托管 Reality 入口或 SNI 与网站不兼容')
+        inbounds = [i for i in inbounds if i.get('tag') != tag]
+    tag = 'node-' + str(node_id)
+    if managed:
+        for inbound in inbounds:
+            if inbound.get('tag') != tag:
+                check_other_443(inbound.get('listen'), listens, front)
+        inbounds = [i for i in inbounds if i.get('tag') == tag]
+    if len(inbounds) != 1 or inbounds[0].get('tag') != tag:
         raise ValueError("运行配置与面板 443 节点不一致，请先同步内核")
+    db_listen = listen_ip(settings.get('listen'))
+    if rebinding and db_listen != listen_ip(inbounds[0].get('listen')):
+        raise ValueError('新节点的运行监听与数据库不符，请先同步内核')
+    if front and rebinding and (not db_listen.is_loopback or db_listen == listen_ip('127.0.0.2')):
+        raise ValueError('共享入口的新 HTTPUpgrade 节点必须使用空闲回环监听')
+    if front and not rebinding and (settings.get('listen') != '127.0.0.1' or inbounds[0].get('listen') != '127.0.0.1'):
+        raise ValueError('共享 443 的 HTTPUpgrade 节点必须监听 127.0.0.1')
     stream = inbounds[0].get('streamSettings', {})
     live = stream.get('httpupgradeSettings', {})
     certificates = stream.get('tlsSettings', {}).get('certificates', [])
@@ -1724,14 +1840,110 @@ def prepare_proxy(cfg, database, row, managed, root, website_domain):
                 database=database, kernel_path=kernel_path, node_host=node_host, protocol=protocol,
                 path=path, host=host, sni=sni, domains=sorted(names), cert=cert, key=key, ca=ca,
                 listens=listens, listen_before=before, webroot=str(root))
+    if front:
+        plan['reality_frontend'] = front
     return plan, current
 
 
-def prepare(config, install, confdir, root, units, stage, website_domain=''):
+def rebind_website(db, managed, args):
+    if not managed or managed.get('mode') != 'proxy' or not isinstance(managed.get('node_id'), int):
+        raise ValueError('重新绑定需要已有的 HTTPUpgrade 托管网站')
+    if len(args) != 1 or not re.fullmatch(r'[1-9][0-9]{0,18}', args[0]) or int(args[0]) > 2**63 - 1:
+        raise ValueError('请指定新 HTTPUpgrade 节点 ID')
+    new_id = int(args[0])
+    if db.execute('SELECT 1 FROM nodes WHERE id=?', (managed['node_id'],)).fetchone():
+        raise ValueError('已绑定节点仍存在，请直接编辑原节点；不会覆盖有效绑定')
+    if not db.execute("""SELECT 1 FROM nodes WHERE id=? AND enable=1 AND port=443
+                         AND kernel_type='xray' AND protocol IN ('vless','vmess') AND transport='httpupgrade'""",
+                      (new_id,)).fetchone():
+        raise ValueError('指定节点必须是已启用的 Xray HTTPUpgrade 443 节点')
+    return dict(managed, node_id=new_id)
+
+
+def finish_rebind_plan(plan, previous):
+    if plan['database'] != previous.get('database') or plan['kernel_path'] != previous.get('kernel_path'):
+        raise ValueError('网站清单的数据库或内核路径与当前部署不符')
+    if set(plan['listens']) != set(previous.get('listens', [])):
+        raise ValueError('新节点将改变网站公网监听地址，请先核对监听配置')
+    plan['rebind_from'] = previous['node_id']
+
+
+def plan_reality_change(db, plan, current, action, args):
+    front = plan.get('reality_frontend')
+    if action == 'share-reality':
+        if len(args) != 1 or not re.fullmatch(r'[1-9][0-9]*', args[0]):
+            raise ValueError('用法: website share-reality <Reality 节点ID>')
+        node_id = int(args[0])
+        if front:
+            if front['node_id'] != node_id:
+                raise ValueError('网站已绑定另一个 Reality 节点，请先 unshare-reality')
+            return  # Same request revalidates and retains the current deployment.
+    else:
+        if not front or len(args) not in (0, 2):
+            raise ValueError('用法: website unshare-reality [独立端口 监听IP]，需要现有的共享入口')
+        node_id = front['node_id']
+
+    row = db.execute('SELECT port,settings FROM nodes WHERE id=? AND enable=1 AND kernel_type="xray" AND protocol="vless" AND transport="tcp"', (node_id,)).fetchone()
+    if not row:
+        raise ValueError('指定的节点必须是已启用的 Xray VLESS/TCP Reality 节点')
+    old_port, original = row
+    settings = json.loads(original)
+    old_listen = settings.get('listen')
+    inbounds = [i for i in current['inbounds'] if i.get('tag') == 'node-' + str(node_id)]
+    if len(inbounds) != 1:
+        raise ValueError('运行配置缺少唯一的 Reality 节点，请先同步内核')
+    inbound = inbounds[0]
+    stream = inbound.get('streamSettings', {})
+    if (settings.get('security') != 'reality' or stream.get('security') != 'reality'
+            or stream.get('network') not in ('tcp', 'raw') or inbound.get('protocol') != 'vless'
+            or inbound.get('port') != old_port or inbound.get('listen') != (old_listen or '0.0.0.0')):
+        raise ValueError('Reality 节点与运行配置不一致，请先同步内核')
+    if action == 'share-reality':
+        names = stream.get('realitySettings', {}).get('serverNames', [])
+        configured = reality_names(settings)
+        sni = settings.get('sni') or settings.get('serverName') or configured[0]
+        if (len(names) != 1 or configured != [domain(sni)] or domain(names[0]) != domain(sni)
+                or domain(sni) in plan['domains'] or old_port == 443):
+            raise ValueError('共享入口需要一个独立端口和唯一的 Reality SNI，且不能与网站域名相同')
+        module = next((path for path in STREAM_MODULES if Path(path).is_file()), '')
+        front = dict(node_id=node_id, sni=domain(sni), listen='127.0.0.2:443',
+                     web_listen='127.0.0.1:9443', stream_module=module,
+                     previous_port=old_port, previous_listen=old_listen)
+        check_standalone_ports([front['listen'], front['web_listen']], None)
+        plan['reality_frontend'] = front
+        port, listen = 443, '127.0.0.2'
+    else:
+        if not args and 'previous_port' not in front:
+            raise ValueError('旧部署没有记录原监听，请执行 website unshare-reality <独立端口> <监听IP>')
+        port = int(args[0]) if args else front['previous_port']
+        listen = args[1] if args else front.get('previous_listen')
+        host = str(ipaddress.ip_address(listen or '0.0.0.0'))
+        if not 1 <= port <= 65535 or port == 443:
+            raise ValueError('请选择 1 至 65535 的非 443 独立端口')
+        check_standalone_ports([f'[{host}]:{port}' if ':' in host else f'{host}:{port}'], None)
+        del plan['reality_frontend']
+    plan['reality_change'] = dict(id=node_id, old_port=old_port, old_settings=original, port=port)
+    if listen is None:
+        settings.pop('listen', None)
+    else:
+        settings['listen'] = listen
+    plan['reality_change']['settings'] = json.dumps(settings, ensure_ascii=False)
+    inbound.update(listen=listen or '0.0.0.0', port=port)
+
+
+def prepare(config, install, confdir, root, units, stage, website_domain='', action='setup', *args):
     cfg = yaml.safe_load(Path(config).read_text())
     database = str(Path(cfg.get('database', {}).get('path', 'data/panel.db')).resolve())
     state_path = confdir / 'managed.json'
     managed = json.loads(state_path.read_text()) if state_path.exists() else None
+    # The original HTTPUpgrade installer wrote the node binding before mode existed.
+    if (isinstance(managed, dict) and 'mode' not in managed and 'reality_frontend' not in managed
+            and type(managed.get('node_id')) is int and managed['node_id'] > 0):
+        managed['mode'] = 'proxy'
+    if state_path.with_name('path-update.json').exists():
+        raise ValueError('网站有未完成的节点保存，请先启动面板恢复后重试')
+    if action != 'setup' and (not managed or managed.get('mode') != 'proxy'):
+        raise ValueError('该命令需要已经托管的 HTTPUpgrade 网站，请先执行 website setup')
     if not managed:
         for directory in (confdir, root):
             # A failed first deployment can leave empty directories after rollback.
@@ -1739,21 +1951,32 @@ def prepare(config, install, confdir, root, units, stage, website_domain=''):
                     (not directory.is_dir() or any(directory.iterdir()))):
                 raise ValueError("网站目录已存在但不是本脚本托管，拒绝覆盖")
     with closing(sqlite3.connect(Path(database).as_uri() + '?mode=ro', uri=True)) as db:
-        rows = db.execute('SELECT id,host,protocol,transport,settings,kernel_type FROM nodes WHERE enable=1 AND port=443 AND protocol NOT IN ("hysteria2","hy2","tuic")').fetchall()
-    if rows:
-        if len(rows) != 1 or rows[0][5] != 'xray' or (managed and managed.get('mode') == 'standalone'):
-            raise ValueError("TCP 443 已分配给其他节点，无法直接开启独立网站；现有反代仅支持单个 Xray HTTPUpgrade + TLS 节点")
-        plan, current = prepare_proxy(cfg, database, rows[0][:5], managed, root, website_domain)
-    else:
-        if managed and managed.get('mode') != 'standalone':
-            raise ValueError("托管网站的代理节点已缺失或禁用，请先检查原节点；不会自动删除反代")
-        plan = prepare_standalone(cfg, install, managed, root, website_domain)
+        previous = managed
+        if action == 'rebind':
+            managed = rebind_website(db, managed, args)
+        rows = website_rows(db, managed)
+        # Operations below prepare private staged files; the live database stays read-only.
+        if rows:
+            if len(rows) != 1 or rows[0][5] != 'xray' or (managed and managed.get('mode') == 'standalone'):
+                raise ValueError("TCP 443 已分配给其他节点，无法直接开启独立网站；现有反代仅支持单个 Xray HTTPUpgrade + TLS 节点")
+            plan, current = prepare_proxy(cfg, database, rows[0][:5], managed, root, website_domain, action == 'rebind')
+            if action == 'rebind':
+                finish_rebind_plan(plan, previous)
+            if action in ('share-reality', 'unshare-reality'):
+                plan_reality_change(db, plan, current, action, args)
+        else:
+            if managed and managed.get('mode') != 'standalone':
+                raise ValueError("托管网站的代理节点已缺失或禁用，请先检查原节点；不会自动删除反代")
+            plan = prepare_standalone(cfg, install, managed, root, website_domain)
     nginx = shutil.which('nginx')
     if not nginx:
         raise ValueError("请先安装 Nginx")
     config_file = confdir / 'nginx.conf'
+    if action != 'setup':
+        plan['source_hashes'] = {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+                                 for path in (state_path, config_file, Path(plan['kernel_path']))}
     files = {str(config_file): ('nginx.conf', nginx_config(plan, root), 0o600),
-             str(state_path): ('managed.json', json.dumps({k: v for k, v in plan.items() if k not in ('original_settings', 'settings')}), 0o600)}
+             str(state_path): ('managed.json', json.dumps({k: v for k, v in plan.items() if k not in ('original_settings', 'settings', 'reality_change', 'rebind_from', 'source_hashes')}), 0o600)}
     if plan['mode'] == 'proxy':
         files[plan['kernel_path']] = ('xray.json', json.dumps(current), 0o600)
     if not (root / 'index.html').exists():
@@ -1775,13 +1998,21 @@ def prepare(config, install, confdir, root, units, stage, website_domain=''):
         except ValueError as exc:
             (stage / 'xray-check.log').write_text(str(exc))
             raise ValueError('Xray 候选配置检查失败，诊断文件: ' + str(stage / 'xray-check.log')) from exc
-    run([nginx, '-t', '-c', str(stage / 'nginx.conf')])
+    try:
+        run([nginx, '-t', '-c', str(stage / 'nginx.conf')])
+    except ValueError as exc:
+        if 'reality_frontend' in plan and ('stream' in str(exc) or 'ssl_preread' in str(exc)):
+            raise ValueError('Nginx 共享入口预检失败。请确认已安装与当前 Nginx 匹配的 stream/ssl_preread 模块（Ubuntu/Debian: libnginx-mod-stream）: ' + str(exc)) from exc
+        raise
     run(['systemd-analyze', 'verify', '--man=no', *[str(stage / name) for name in unit_files]])
     print('网站预检通过: ' + ', '.join(plan['domains']) + ('；独立 HTTPS 网站，无需代理节点' if plan['mode'] == 'standalone' else '；保留端口 443、路径和节点凭据'))
 
 
 def apply(stage):
     plan = json.loads((stage / 'plan.json').read_text())
+    for file, expected in plan.get('source_hashes', {}).items():
+        if hashlib.sha256(Path(file).read_bytes()).hexdigest() != expected:
+            raise ValueError('网站配置在预检后发生变化，拒绝覆盖')
     with ExitStack() as stack:
         if plan.get('mode') != 'standalone':
             db = stack.enter_context(closing(sqlite3.connect(plan['database'])))
@@ -1790,6 +2021,18 @@ def apply(stage):
                                  (plan['settings'], plan['node_id'], plan['original_settings'], plan['node_host'], plan['protocol']))
             if changed.rowcount != 1:
                 raise ValueError("节点在预检后发生变化，拒绝覆盖")
+            if 'rebind_from' in plan and db.execute('SELECT 1 FROM nodes WHERE id=?', (plan['rebind_from'],)).fetchone():
+                raise ValueError('原节点在预检后重新出现，拒绝覆盖')
+            transition = plan.get('reality_change')
+            if transition:
+                changed = db.execute('UPDATE nodes SET port=?,settings=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND port=? AND settings=? AND kernel_type="xray" AND protocol="vless" AND transport="tcp" AND enable=1',
+                                     (transition['port'], transition['settings'], transition['id'], transition['old_port'], transition['old_settings']))
+                if changed.rowcount != 1:
+                    raise ValueError('Reality 节点在预检后发生变化，拒绝覆盖')
+            if 'reality_frontend' in plan or transition or 'rebind_from' in plan:
+                rows = website_rows(db, plan)
+                if len(rows) != 1 or rows[0][0] != plan['node_id']:
+                    raise ValueError('443 节点在预检后发生变化，拒绝覆盖')
         # The surrounding process uses umask 077; new public content directories
         # need explicit traversal permissions for Nginx workers.
         public = Path(plan['webroot'])
@@ -1834,6 +2077,12 @@ def health(state):
                     expected = b'101' if upgrade else b'200'
                     if response.split()[1:2] != [expected]:
                         raise ValueError(f'{name} {path} 应返回 {expected.decode()}，实际: {response[:160]!r}')
+    if 'reality_frontend' in plan:
+        # A normal TLS client reaches the REALITY target through the public SNI branch.
+        sni = plan['reality_frontend']['sni']
+        with socket.create_connection((address, int(port)), timeout=5) as conn:
+            with ssl.create_default_context(cafile=plan['ca']).wrap_socket(conn, server_hostname=sni):
+                pass
     print('网站 HTTPS 200 和证书验证通过' if plan.get('mode') == 'standalone' else '网站 HTTPS 200、HTTPUpgrade 101 和证书验证均通过')
 
 
@@ -1842,7 +2091,7 @@ def main():
     os.umask(0o077)
     os.chdir(install)
     if action == 'prepare':
-        prepare(config, install, Path(confdir), Path(root), Path(units), Path(args[0]), args[1] if len(args) > 1 else '')
+        prepare(config, install, Path(confdir), Path(root), Path(units), Path(args[0]), *args[1:])
     elif action == 'apply':
         apply(Path(args[0]))
     elif action == 'health':
@@ -1950,7 +2199,7 @@ run_website_setup() (
     trap finish_website_setup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    website_tool prepare "$stage/check" "$website_domain"
+    website_tool prepare "$stage/check" "$website_domain" "${@:2}"
     mode=$(jq -r '.mode // "proxy"' "$stage/check/plan.json")
     if [[ "$mode" != standalone ]]; then
         systemctl is-active --quiet "$XRAY_SERVICE" || { warn "Xray 未运行，请先恢复节点服务"; exit 1; }
@@ -1979,7 +2228,7 @@ run_website_setup() (
     if [[ "$mode" != standalone ]]; then
         "${INSTALL_DIR}/proxy-panel" -config "$CONFIG_FILE" -check-update "$stage/final-panel-check" > "$stage/final-panel-check.log" 2>&1
     fi
-    website_tool prepare "$stage/final" "$website_domain"
+    website_tool prepare "$stage/final" "$website_domain" "${@:2}"
     jq -e -s 'length == 2 and .[0] == .[1]' "$stage/check/plan.json" "$stage/final/plan.json" >/dev/null || { warn "预检期间节点或网站配置变化，请重新部署"; exit 1; }
     phase=installed
     website_tool apply "$stage/final"
@@ -2000,14 +2249,19 @@ run_website_setup() (
     if [[ "$mode" == standalone ]]; then
         info "独立 HTTPS 网站部署完成，无需代理节点。备份: $backup"
     else
-        info "网站和 HTTPUpgrade 反代部署完成；客户端请刷新订阅以同步 ALPN。备份: $backup"
+        info "网站和 HTTPUpgrade 反代部署完成；客户端请刷新订阅以同步端口及 ALPN。备份: $backup"
+        if [[ "${2:-}" == unshare-reality ]]; then info "请确保主机防火墙和云安全组放行恢复后的 Reality 独立端口"; fi
     fi
     info "如有主机防火墙或云安全组，请确保允许网站的 TCP 443 入站"
 )
 
 do_website() {
     case "${2:-setup}" in
-        setup)
+        setup|share-reality|unshare-reality|rebind)
+            case "${2:-setup}" in
+                share-reality|rebind) [[ $# -eq 3 && "$3" =~ ^[1-9][0-9]*$ ]] || error "用法: proxy-panel website $2 <节点ID>" ;;
+                unshare-reality) [[ $# -eq 2 || $# -eq 4 ]] || error "用法: proxy-panel website unshare-reality [独立端口 监听IP]" ;;
+            esac
             check_root
             detect_os
             [[ -f "$CONFIG_FILE" ]] || error "请先安装面板"
@@ -2015,12 +2269,16 @@ do_website() {
             install_website_deps
             local dependency_status=$?
             [[ "$dependency_status" == 0 ]] || return "$dependency_status"
-            run_website_setup "${3:-}"
+            if [[ "${2:-setup}" == setup ]]; then
+                run_website_setup "${3:-}"
+            else
+                run_website_setup "" "${@:2}"
+            fi
             ;;
         status)
             systemctl --no-pager status "$WEBSITE_SERVICE" proxy-panel-web-cert.path
             ;;
-        *) error "用法: proxy-panel website {setup [额外网站域名]|status}" ;;
+        *) error "用法: proxy-panel website {setup [额外网站域名]|share-reality <节点ID>|unshare-reality [独立端口 监听IP]|rebind <节点ID>|status}" ;;
     esac
 }
 
@@ -2671,6 +2929,9 @@ show_help() {
     echo "  disable-2fa        应急关闭 2FA (authenticator 设备丢失时)"
     echo "  cert <子命令>      证书管理 (setup|status|renew)"
     echo "  website setup [域名]  部署独立 443 网站，或已有 HTTPUpgrade 节点的反代"
+    echo "  website share-reality <节点ID>  让已托管网站与现有 Reality 节点共享公网 TCP 443"
+    echo "  website unshare-reality [端口 监听IP]  将共享的 Reality 恢复到独立端口"
+    echo "  website rebind <节点ID>  将已失去原节点的托管网站重新绑定到选定的 HTTPUpgrade 节点"
     echo "  website status    查看托管网站与证书续期监听状态"
     echo "  firewall <子命令>  防火墙管理 (enable|disable|status)"
     echo ""

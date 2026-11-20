@@ -108,7 +108,7 @@ func (h *FirewallHandler) Apply(c *gin.Context) {
 				ports = append(ports, n.Port)
 			}
 			appliedPorts = len(ports)
-			go h.fw.EnsureAll(context.Background(), ports)
+			go h.nodeSvc.EnsureFirewallPorts(ports)
 		}
 	}
 

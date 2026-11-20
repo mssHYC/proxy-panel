@@ -136,6 +136,15 @@ func (s *NodeService) GetByID(id int64) (*model.Node, error) {
 
 // Create 创建节点
 func (s *NodeService) Create(req *CreateNodeReq) (*model.Node, error) {
+	s.mutationMu.Lock()
+	defer s.mutationMu.Unlock()
+	if s.syncSvc != nil {
+		s.syncSvc.syncMu.Lock()
+		defer s.syncSvc.syncMu.Unlock()
+	}
+	if err := s.recoverManagedWebsiteLocked(); err != nil {
+		return nil, err
+	}
 	now := time.Now()
 
 	// 设置默认值
@@ -156,6 +165,12 @@ func (s *NodeService) Create(req *CreateNodeReq) (*model.Node, error) {
 		return nil, err
 	}
 
+	if s.website != nil {
+		candidate := model.Node{Host: req.Host, Port: req.Port, Protocol: req.Protocol, Transport: transport, KernelType: kernelType, Settings: settings, Enable: true}
+		if err := s.website.CheckCreate(candidate); err != nil {
+			return nil, err
+		}
+	}
 	if err := s.validateRealityChange("", settings, true); err != nil {
 		return nil, err
 	}
@@ -174,7 +189,7 @@ func (s *NodeService) Create(req *CreateNodeReq) (*model.Node, error) {
 	if err != nil || node == nil {
 		return node, err
 	}
-	go s.fw.Allow(node.Port)
+	go s.applyFirewallPort(node.Port, allowPort)
 	return node, nil
 }
 
@@ -247,41 +262,14 @@ func (s *NodeService) updateStored(old *model.Node, candidate model.Node, req *U
 		return nil, fmt.Errorf("更新节点失败: %w", err)
 	}
 
-	s.syncFirewallOnUpdate(old, req)
+	if old.Enable && (!candidate.Enable || old.Port != candidate.Port) {
+		go s.applyFirewallPort(old.Port, revokePort)
+	}
+	if candidate.Enable && (!old.Enable || old.Port != candidate.Port) {
+		go s.applyFirewallPort(candidate.Port, allowPort)
+	}
 
 	return &candidate, nil
-}
-
-// syncFirewallOnUpdate 按新旧状态差异触发防火墙操作；所有调用都是异步的
-// 规则：
-//  1. enable 由 true 变 false：撤销旧端口
-//  2. enable 由 false 变 true：放行当前端口（可能已被 port 变更）
-//  3. enable 未变 且 enable=true：端口变化则撤旧+放新；否则 no-op
-//  4. enable 未变 且 enable=false：不操作（节点本就不在防火墙中）
-func (s *NodeService) syncFirewallOnUpdate(old *model.Node, req *UpdateNodeReq) {
-	newEnable := old.Enable
-	if req.Enable != nil {
-		newEnable = *req.Enable
-	}
-	newPort := old.Port
-	if req.Port != nil {
-		newPort = *req.Port
-	}
-
-	switch {
-	case old.Enable && !newEnable:
-		// 关闭节点：撤销旧端口
-		go s.fw.Revoke(old.Port)
-	case !old.Enable && newEnable:
-		// 重新启用：放行当前端口
-		go s.fw.Allow(newPort)
-	case old.Enable && newEnable && old.Port != newPort:
-		// 仅改端口
-		go func(oldPort, port int) {
-			s.fw.Revoke(oldPort)
-			s.fw.Allow(port)
-		}(old.Port, newPort)
-	}
 }
 
 // Delete 删除节点
@@ -302,10 +290,17 @@ func (s *NodeService) Delete(id int64) error {
 	if old == nil {
 		return fmt.Errorf("节点不存在")
 	}
+	if s.website != nil {
+		if err := s.website.CheckDelete(id); err != nil {
+			return err
+		}
+	}
 	if _, err := s.db.Exec("DELETE FROM nodes WHERE id = ?", id); err != nil {
 		return fmt.Errorf("删除节点失败: %w", err)
 	}
-	go s.fw.Revoke(old.Port)
+	if old.Enable {
+		go s.applyFirewallPort(old.Port, revokePort)
+	}
 	return nil
 }
 

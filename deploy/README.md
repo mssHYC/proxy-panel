@@ -101,6 +101,30 @@ proxy-panel website status
 
 上述 101 检查验证 HTTPUpgrade 隧道建立，部署后仍应使用真实客户端验证代理外网访问。
 
+### 已托管 HTTPUpgrade 的网站与 Reality 共用 TCP 443
+
+先用 `proxy-panel website setup` 托管 HTTPUpgrade 节点。准备一个已能独立连接的 Xray VLESS/TCP Reality 节点，使用独立端口和单一 SNI，该 SNI 须与网站域名不同。在服务器上执行以下命令，例中的 `17` 要换成自己的 Reality 节点 ID：
+
+```sh
+proxy-panel website share-reality 17
+```
+
+Nginx 需要支持 stream 和 ssl_preread；Debian/Ubuntu 的动态模块包为 `libnginx-mod-stream`，版本须与安装的 Nginx 匹配。命令会预检、备份并短暂停止相关服务，应用变更后检查网站和两个 SNI 分支。公网 443 由 Nginx 接收，Reality 握手透传至 `127.0.0.2:443`。网站在 `127.0.0.1:9443` 终止 TLS，按已有路径转到 HTTPUpgrade 的 `127.0.0.1:443`。订阅同时公布两个节点的 443 端口。刷新订阅并用客户端分别验证它们能否出网，服务端对 Reality SNI 的普通 TLS 检查不验证订阅凭据。改变端口不能解除已有 IP 封锁。
+
+执行 `proxy-panel website unshare-reality` 可将 Reality 恢复到共享前的监听 IP 和端口，网站继续提供 HTTPUpgrade。旧的共享部署若未记录原地址，须显式提供端口和 IP，例如 `proxy-panel website unshare-reality 1279 0.0.0.0`。请按实际需要选择监听范围、检查防火墙，并刷新订阅。运行普通 `website setup` 会保留已有共享入口。
+
+### 删除、替换托管节点
+
+面板会拒绝删除或停用网站仍在使用的节点，也会拒绝占用托管监听地址的节点配置。改 HTTPUpgrade 路径应直接编辑已绑定的节点。如果是旧版本已经删除了节点并创建了替代节点，可显式把网站绑定到新 ID，例如：
+
+```sh
+proxy-panel website rebind 23
+```
+
+新节点须是已启用的 Xray VLESS/VMess HTTPUpgrade + TLS，端口为 443，证书覆盖原网站域名。原节点必须已不存在。如果还没有替代节点，可以先在面板用空闲的回环地址（例如 `127.0.0.3:443`）创建它。重新绑定会将它迁至 `127.0.0.1:443`，沿用已托管网站的公网监听和域名。重新绑定后，请按新 ID 核对用户或套餐授权。
+
+如需永久停用整个托管网站，先解除共享的 Reality，确认不再需要网站和 HTTPUpgrade 的公网入口，再停止并禁用 `proxy-panel-web-cert.path` 和 `proxy-panel-web.service`。备份并移出 `/etc/nginx/proxy-panel` 和 `/var/www/proxy-panel-managed-site`（包括自定义首页）。清单移出后可在面板编辑或删除原节点。请勿在仍运行的网站上单独删除 `managed.json` 来强行取消保护。
+
 ### 普通 TCP + TLS：网站回落
 
 拓扑：浏览器 / 代理客户端 → **Xray TCP 443（TLS）** → 正常代理流量或 **Nginx 127.0.0.1:8081（HTTP 网站）**。

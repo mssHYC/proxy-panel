@@ -32,7 +32,7 @@ runs:
         python3 scripts/tests/test_tls_install.py
         python3 scripts/tests/test_update.py
         sudo apt-get update
-        sudo apt-get install -y nginx python3-yaml
+        sudo apt-get install -y nginx libnginx-mod-stream python3-yaml
         sudo systemctl stop nginx
         NGINX_BINARY="$(command -v nginx)" go test ./internal/website -count=1
         go test -c ./internal/website -o "$DIR/website.test"

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path"
@@ -31,20 +32,21 @@ func New(manifestPath, configPath, databasePath, kernelPath string) *Manager {
 }
 
 type manifest struct {
-	Mode       string   `json:"mode"`
-	NodeID     int64    `json:"node_id"`
-	Database   string   `json:"database"`
-	KernelPath string   `json:"kernel_path"`
-	Path       string   `json:"path"`
-	NodeHost   string   `json:"node_host"`
-	Protocol   string   `json:"protocol"`
-	Host       string   `json:"host"`
-	SNI        string   `json:"sni"`
-	Cert       string   `json:"cert"`
-	Key        string   `json:"key"`
-	Domains    []string `json:"domains"`
-	CA         string   `json:"ca"`
-	Listens    []string `json:"listens"`
+	Mode            string           `json:"mode"`
+	NodeID          int64            `json:"node_id"`
+	Database        string           `json:"database"`
+	KernelPath      string           `json:"kernel_path"`
+	Path            string           `json:"path"`
+	NodeHost        string           `json:"node_host"`
+	Protocol        string           `json:"protocol"`
+	Host            string           `json:"host"`
+	SNI             string           `json:"sni"`
+	Cert            string           `json:"cert"`
+	Key             string           `json:"key"`
+	Domains         []string         `json:"domains"`
+	CA              string           `json:"ca"`
+	Listens         []netip.AddrPort `json:"listens"`
+	RealityFrontend *realityFrontend `json:"reality_frontend"`
 }
 
 // Change must be coordinated with the node database and Xray under the caller's lock.
@@ -67,16 +69,12 @@ func (m *Manager) Prepare(old, candidate model.Node) (*Change, error) {
 	if sameWebsiteRoute(old, candidate) {
 		return nil, nil
 	}
-	data, err := os.ReadFile(m.manifestPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+	state, data, err := m.readManifest()
+	if state == nil || err != nil {
+		return nil, err
 	}
-	if err != nil {
-		return nil, fmt.Errorf("读取托管网站失败: %w", err)
-	}
-	var state manifest
-	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("读取托管网站清单失败: %w", err)
+	if err := state.checkListener(candidate); err != nil {
+		return nil, err
 	}
 	if state.Mode == "standalone" || state.NodeID != old.ID {
 		return nil, nil
@@ -86,25 +84,25 @@ func (m *Manager) Prepare(old, candidate model.Node) (*Change, error) {
 		return nil, errors.New("托管节点 settings 必须是 JSON 对象")
 	}
 	if candidate.ID != old.ID || candidate.Host != old.Host || candidate.Port != old.Port || candidate.Protocol != old.Protocol || candidate.Transport != old.Transport || candidate.KernelType != old.KernelType || candidate.Enable != old.Enable {
-		return nil, errors.New("托管网站依赖此节点的地址、端口、协议和启用状态；请先调整网站部署，面板当前仅自动同步路径")
+		return nil, fmt.Errorf("%w：托管网站依赖此节点的地址、端口、协议和启用状态；请先调整网站部署，面板当前仅自动同步路径", ErrManagedConflict)
 	}
 	for _, key := range []string{"security", "listen"} {
 		if !reflect.DeepEqual(before[key], after[key]) {
-			return nil, fmt.Errorf("托管网站依赖节点的 %s 设置，请先调整网站部署；面板当前仅自动同步路径", key)
+			return nil, fmt.Errorf("%w：托管网站依赖节点的 %s 设置，请先调整网站部署；面板当前仅自动同步路径", ErrManagedConflict, key)
 		}
 	}
 	if !reflect.DeepEqual(routeALPN(before), routeALPN(after)) {
-		return nil, errors.New("托管网站依赖节点的 ALPN 设置，请先调整网站部署")
+		return nil, fmt.Errorf("%w：托管网站依赖节点的 ALPN 设置，请先调整网站部署", ErrManagedConflict)
 	}
 	if text(before, "host") != text(after, "host") {
-		return nil, errors.New("托管网站依赖节点的 Host 设置，请先调整网站部署；面板当前仅自动同步路径")
+		return nil, fmt.Errorf("%w：托管网站依赖节点的 Host 设置，请先调整网站部署；面板当前仅自动同步路径", ErrManagedConflict)
 	}
 	// The panel normalizes legacy aliases when saving the complete settings form.
 	// Compare their effective values, not the spelling of the stored JSON keys.
 	if firstText(before, "sni", "serverName", old.Host) != firstText(after, "sni", "serverName", candidate.Host) ||
 		!sameFilePath(firstText(before, "cert_path", "certPath", ""), firstText(after, "cert_path", "certPath", "")) ||
 		!sameFilePath(firstText(before, "key_path", "keyPath", ""), firstText(after, "key_path", "keyPath", "")) {
-		return nil, errors.New("托管网站依赖节点的 SNI 和证书设置，请先调整网站部署；面板当前仅自动同步路径")
+		return nil, fmt.Errorf("%w：托管网站依赖节点的 SNI 和证书设置，请先调整网站部署；面板当前仅自动同步路径", ErrManagedConflict)
 	}
 	oldPath, _ := before["path"].(string)
 	if oldPath == "" {
@@ -131,13 +129,6 @@ func (m *Manager) Prepare(old, candidate model.Node) (*Change, error) {
 	}
 	if len(state.Domains) == 0 || len(state.Listens) == 0 {
 		return nil, errors.New("托管网站清单缺少域名或监听地址")
-	}
-	for _, address := range state.Listens {
-		host, port, err := net.SplitHostPort(address)
-		ip := net.ParseIP(host)
-		if err != nil || port == "" || ip == nil || ip.IsUnspecified() {
-			return nil, errors.New("托管网站监听地址无效")
-		}
 	}
 	for _, filename := range []string{m.manifestPath, m.configPath} {
 		if err := regularFile(filename); err != nil {
@@ -177,7 +168,7 @@ func (m *Manager) Prepare(old, candidate model.Node) (*Change, error) {
 	if err := command(context.Background(), "nginx", "-t", "-e", "stderr", "-c", filename); err != nil {
 		return nil, fmt.Errorf("Nginx 路径预检失败: %w", err)
 	}
-	return &Change{manager: m, state: state, oldManifest: data, newManifest: nextManifest, oldConfig: config, newConfig: nextConfig, newPath: newPath}, nil
+	return &Change{manager: m, state: *state, oldManifest: data, newManifest: nextManifest, oldConfig: config, newConfig: nextConfig, newPath: newPath}, nil
 }
 
 func sameWebsiteRoute(a, b model.Node) bool {
@@ -203,6 +194,9 @@ func sameWebsiteRoute(a, b model.Node) bool {
 			return "tls"
 		}
 		return "none"
+	}
+	if security(before) == "reality" && !strings.EqualFold(realitySNI(before), realitySNI(after)) {
+		return false
 	}
 	if security(before) != security(after) || !reflect.DeepEqual(routeALPN(before), routeALPN(after)) ||
 		firstText(before, "listen", "listen", "0.0.0.0") != firstText(after, "listen", "listen", "0.0.0.0") ||
@@ -379,7 +373,7 @@ func (c *Change) health(ctx context.Context, route string) error {
 				path   string
 				status int
 			}{{"/", 200}, {route, 101}} {
-				if err := probe(ctx, c.state.Listens[0], domain, check.path, check.status, pool); err != nil {
+				if err := probe(ctx, c.state.Listens[0].String(), domain, check.path, check.status, pool); err != nil {
 					last = err
 					break
 				}
