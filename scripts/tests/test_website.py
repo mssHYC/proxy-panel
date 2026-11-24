@@ -231,6 +231,22 @@ class WebsiteTests(unittest.TestCase):
             self.prepare('', 'share-reality', '2')
         self.assertEqual([path.read_bytes() for path in files], before)
 
+    def test_share_preflight_explains_only_stream_module_failures(self):
+        self.add_independent_reality()
+        for message, hint in [('unknown directive "stream"', True), ('unknown directive "ssl_preread"', True),
+                              ('host not found in upstream "example.com"', False)]:
+            def run(args):
+                if args[:2] == [self.nginx, '-t']:
+                    raise ValueError(message)
+                return self.checked_run(args)
+
+            with self.subTest(message=message), patch.object(tool, 'check_standalone_ports'), patch.object(tool, 'run', side_effect=run):
+                with self.assertRaises(ValueError) as error:
+                    self.prepare('', 'share-reality', '2')
+                self.assertIn(message, str(error.exception))
+                for command in ('apt-get install libnginx-mod-stream', 'dnf install nginx-mod-stream'):
+                    self.assertEqual(command in str(error.exception), hint)
+
     def test_share_rejects_target_with_more_than_one_sni(self):
         self.add_independent_reality()
         cfg = json.loads(self.kernel.read_bytes())

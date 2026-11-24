@@ -31,7 +31,7 @@ func TestRealNginxSharedRealityEdits(t *testing.T) {
 		Protocol: "vless", Transport: "tcp", KernelType: "xray", Settings: `{"security":"reality","dest":"a.example.com:443","sni":"a.example.com"}`}
 	save := func(next model.Node) {
 		t.Helper()
-		change, err := f.manager.PrepareUpdate(old, &next)
+		change, err := f.manager.PrepareUpdate(old, &next, nil)
 		if err != nil || change == nil {
 			t.Fatalf("prepare: %v (change %v)", err, change != nil)
 		}

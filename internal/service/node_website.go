@@ -45,9 +45,12 @@ func (s *NodeService) UpdateAndSync(id int64, req *UpdateNodeReq) (*model.Node, 
 		return nil, false, err
 	}
 	var change *website.Change
+	if s.website == nil && req.ShareWebsite443 != nil && *req.ShareWebsite443 {
+		return nil, false, fmt.Errorf("%w：请先部署托管 HTTPUpgrade 网站，再共享 443", website.ErrManagedConflict)
+	}
 	if s.website != nil {
 		requestedSettings := candidate.Settings
-		change, err = s.website.PrepareUpdate(*old, &candidate)
+		change, err = s.website.PrepareUpdate(*old, &candidate, req.ShareWebsite443)
 		if err != nil {
 			return nil, false, fmt.Errorf("托管网站检查失败: %w", err)
 		}

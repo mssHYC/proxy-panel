@@ -27,7 +27,7 @@ func realityNode(n model.Node) bool {
 	return n.Enable && n.KernelType == "xray" && n.Protocol == "vless" && n.Transport == "tcp"
 }
 
-func wantsRealityShare(s manifest, old, candidate model.Node) bool {
+func wantsRealityShare(s manifest, old, candidate model.Node, shareWebsite443 *bool) bool {
 	if s.RealityFrontend != nil || old.Port == 443 || candidate.Port != 443 || !realityNode(old) || !realityNode(candidate) {
 		return false
 	}
@@ -35,6 +35,10 @@ func wantsRealityShare(s manifest, old, candidate model.Node) bool {
 	if json.Unmarshal([]byte(candidate.Settings), &settings) != nil || text(settings, "security") != "reality" {
 		return false
 	}
+	if shareWebsite443 != nil {
+		return *shareWebsite443
+	}
+	// Older clients only send the port and bind. Keep their automatic choice.
 	listen := text(settings, "listen")
 	if listen == "" {
 		return true
@@ -43,7 +47,7 @@ func wantsRealityShare(s manifest, old, candidate model.Node) bool {
 	return err == nil && (addr.Unmap().IsUnspecified() || slices.ContainsFunc(s.Listens, func(a netip.AddrPort) bool { return a.Addr().Unmap() == addr.Unmap() }))
 }
 
-func (m *Manager) prepareReality(state manifest, data []byte, old model.Node, candidate *model.Node) (*Change, error) {
+func (m *Manager) prepareReality(state manifest, data []byte, old model.Node, candidate *model.Node, explicitShare bool) (*Change, error) {
 	if old.ID != candidate.ID {
 		return nil, fmt.Errorf("%w：共享入口节点 ID 不匹配", ErrManagedConflict)
 	}
@@ -67,7 +71,7 @@ func (m *Manager) prepareReality(state manifest, data []byte, old model.Node, ca
 			return nil, fmt.Errorf("%w：Reality SNI 必须是有效的独立域名，且不能与网站域名重叠", ErrManagedConflict)
 		}
 		if front != nil {
-			if listen != "" && listen != front.Listen.Addr().String() {
+			if !explicitShare && listen != "" && listen != front.Listen.Addr().String() {
 				return nil, fmt.Errorf("%w：共享 443 时 Reality 必须监听 %s", ErrManagedConflict, front.Listen.Addr())
 			}
 			updated := *front
@@ -179,8 +183,13 @@ func (m *Manager) prepareReality(state manifest, data []byte, old model.Node, ca
 	if err != nil {
 		return nil, err
 	}
+	if front == nil {
+		if err := checkRealityWebBind(next.RealityFrontend.WebListen); err != nil {
+			return nil, err
+		}
+	}
 	change := &Change{manager: m, state: state, nodeID: old.ID, oldManifest: data, newManifest: nextData, oldConfig: config, newConfig: nextConfig, newPath: state.Path, newReality: newProbe}
-	return change.preflight()
+	return change.preflight(next.RealityFrontend != nil)
 }
 
 type realityProbe struct {

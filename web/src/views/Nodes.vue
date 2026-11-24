@@ -77,14 +77,22 @@
           <Field class="nf-col-2" label="节点名称" :error="errors.name">
             <Input v-model="form.name" placeholder="如: Tokyo-01" />
           </Field>
-          <Field class="nf-col-2" label="主机地址" hint="客户端连接的 IP 或域名（可与监听 IP 不同）" :error="errors.host">
+          <Field class="nf-col-2" label="主机地址" :hint="sharingWebsite443 ? '填写托管网站监听的公网 IP，或指向该 IP 的域名' : '客户端连接的 IP 或域名（可与监听 IP 不同）'" :error="errors.host">
             <Input v-model="form.host" placeholder="example.com 或 1.2.3.4" />
           </Field>
-          <Field label="监听 IP" hint="留空使用 0.0.0.0">
-            <Input v-model="form.listen" placeholder="0.0.0.0" />
+          <Field label="监听 IP" :hint="sharingWebsite443 ? '解除共享时可恢复原监听 IP' : '留空使用 0.0.0.0'">
+            <Input v-if="sharingWebsite443" disabled placeholder="由托管网站分配" />
+            <Input v-else v-model="form.listen" placeholder="0.0.0.0" />
           </Field>
           <Field label="端口" :error="errors.port" :hint="realityPortHint">
             <NumberInput v-model="form.port" :min="1" :max="65535" />
+          </Field>
+          <Field v-if="chooseReality443" class="nf-col-2" label="443 入口" :error="form.reality443Mode ? '' : errors.reality443">
+            <RadioGroup
+              v-model="form.reality443Mode"
+              aria-label="443 入口"
+              :options="[{ label: '与托管网站共享', value: 'shared' }, { label: '独立监听', value: 'independent' }]"
+            />
           </Field>
           <Field label="排序" hint="数值越小越靠前">
             <NumberInput v-model="form.sort_order" :min="0" />
@@ -231,9 +239,9 @@
           </template>
           <Field v-if="canUseVision" label="Flow" hint="启用后需更新客户端订阅">
             <Select
-              :model-value="form.flow"
-              :options="[{label:'无',value:''},{label:'xtls-rprx-vision',value:'xtls-rprx-vision'}]"
-              @update:model-value="(v) => (form.flow = String(v))"
+              :model-value="form.flow || 'none'"
+              :options="[{label:'无',value:'none'},{label:'xtls-rprx-vision',value:'xtls-rprx-vision'}]"
+              @update:model-value="(v) => (form.flow = v === 'none' ? '' : String(v))"
             />
           </Field>
           <Field v-if="canUseFallback" class="nf-col-2" label="网站回落端口" hint="留空关闭。先部署本机静态网站（默认 8081），仅使用 http/1.1；不要填面板或管理接口端口。">
@@ -304,7 +312,7 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { Plus, Pencil, Trash2, RefreshCw } from 'lucide-vue-next'
 import {
-  Button, Input, NumberInput, Select, MultiSelect, Switch, Modal, Field, Tooltip, StatusDot,
+  Button, Input, NumberInput, Select, MultiSelect, RadioGroup, Switch, Modal, Field, Tooltip, StatusDot,
   toast, confirm,
 } from '../ui'
 import { getNodes, createNode, updateNode, deleteNode, generateRealityKeypair, checkRealityTarget } from '../api/node'
@@ -319,7 +327,7 @@ const isEdit = ref(false)
 const editId = ref<number | null>(null)
 const submitting = ref(false)
 const syncing = ref(false)
-const errors = reactive<{ name?: string; host?: string; port?: string }>({})
+const errors = reactive<{ name?: string; host?: string; port?: string; reality443?: string }>({})
 
 async function handleManualSync() {
   syncing.value = true
@@ -413,7 +421,7 @@ const canUseVision = computed(() => form.protocol === 'vless' && form.transport 
 const canUseFallback = computed(() => form.kernel_type === 'xray' && ['vless', 'trojan'].includes(form.protocol) && form.transport === 'tcp' && form.security === 'tls')
 
 const defaultForm = () => ({
-  name: '', listen: '', host: '', port: 443,
+  name: '', listen: '', host: '', port: 443, reality443Mode: '',
   protocol: 'vless', transport: 'tcp', kernel_type: 'xray', sort_order: 0,
   security: 'none', sni: '', fingerprint: 'chrome', alpn: [] as string[],
   allow_insecure: false, cert_path: '', key_path: '', fallback_port: '',
@@ -429,10 +437,15 @@ const form = reactive(defaultForm())
 const originalRealityNames = ref<string[]>([])
 const originalRealitySNI = ref('')
 
+const editingNode = computed(() => nodes.value.find(n => n.id === editId.value))
+const isXrayReality = computed(() => form.kernel_type === 'xray' && form.protocol === 'vless' && form.transport === 'tcp' && form.security === 'reality')
+const chooseReality443 = computed(() => isXrayReality.value && editingNode.value?.enable && editingNode.value.port !== 443 && form.port === 443)
+const sharingWebsite443 = computed(() => chooseReality443.value && form.reality443Mode === 'shared')
+
 const realityPortHint = computed(() => {
-  if (form.kernel_type !== 'xray' || form.protocol !== 'vless' || form.transport !== 'tcp' || form.security !== 'reality') return ''
+  if (!isXrayReality.value) return ''
   return isEdit.value
-    ? '已有托管网站时，保存到公网 443 可共享入口；改到独立端口会解除共享。'
+    ? '共享节点改到独立端口后，会解除与网站的共享。'
     : '如需与托管网站共享 443，先用空闲端口创建节点，再编辑端口为 443。'
 })
 
@@ -496,7 +509,7 @@ function formToSettings(): string {
     if (form.allow_insecure) s.skip_cert_verify = true
     if (form.hy2_ignore_client_bandwidth) s.ignore_client_bandwidth = true
   }
-  if (form.listen) s.listen = form.listen
+  if (form.listen && !sharingWebsite443.value) s.listen = form.listen
   return JSON.stringify(s)
 }
 
@@ -569,7 +582,7 @@ const openDialog = (row?: any) => {
   originalRealityNames.value = []
   originalRealitySNI.value = ''
   Object.assign(form, defaultForm())
-  errors.name = ''; errors.host = ''; errors.port = ''
+  errors.name = ''; errors.host = ''; errors.port = ''; errors.reality443 = ''
   if (row) {
     isEdit.value = true
     editId.value = row.id
@@ -607,7 +620,8 @@ const handleSubmit = async () => {
   errors.name = form.name.trim() ? '' : '请输入节点名称'
   errors.host = form.host.trim() ? '' : '请输入主机地址'
   errors.port = form.port ? '' : '请输入端口'
-  if (errors.name || errors.host || errors.port) return
+  errors.reality443 = chooseReality443.value && !form.reality443Mode ? '请选择 443 入口' : ''
+  if (errors.name || errors.host || errors.port || errors.reality443) return
   submitting.value = true
   try {
     let transport = form.transport
@@ -619,7 +633,8 @@ const handleSubmit = async () => {
       settings: formToSettings(),
     }
     if (isEdit.value && editId.value) {
-      const previous = nodes.value.find(n => n.id === editId.value)
+      const previous = editingNode.value
+      if (chooseReality443.value) payload.share_website_443 = sharingWebsite443.value
       const { data } = await updateNode(editId.value, payload)
       if (form.security === 'reality' && previous && (previous.port !== form.port || originalRealitySNI.value !== form.sni)) {
         toast.success('Reality 节点已更新，请刷新客户端订阅')

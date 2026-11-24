@@ -62,9 +62,10 @@ func newFixture(t *testing.T, intercept ...func(http.ResponseWriter, *http.Reque
 	if err := os.Mkdir(bin, 0700); err != nil {
 		t.Fatal(err)
 	}
+	write(t, filepath.Join(bin, "getenforce"), []byte("#!/bin/sh\necho Disabled\n"))
 	write(t, filepath.Join(bin, "nginx"), []byte("#!/bin/sh\n[ -z \"$FAKE_NGINX_FAIL\" ] || { echo invalid-config >&2; exit 1; }\nexit 0\n"))
 	write(t, filepath.Join(bin, "systemctl"), []byte("#!/bin/sh\n[ -z \"$FAKE_RELOAD_FAIL\" ] || { echo reload-failed >&2; exit 1; }\nexit 0\n"))
-	for _, name := range []string{"nginx", "systemctl"} {
+	for _, name := range []string{"getenforce", "nginx", "systemctl"} {
 		if err := os.Chmod(filepath.Join(bin, name), 0700); err != nil {
 			t.Fatal(err)
 		}

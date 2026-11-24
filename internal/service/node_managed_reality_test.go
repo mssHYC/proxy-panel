@@ -79,20 +79,21 @@ func (e *localRealityEngine) ApplyConfigContext(ctx context.Context, data []byte
 
 type managedRealityFixture struct {
 	*nodeWebsiteFixture
-	site *website.Manager
-	port int
+	site           *website.Manager
+	port           int
+	previousListen string
 }
 
-func newManagedRealityFixture(t *testing.T) *managedRealityFixture {
+func newManagedRealityFixture(t *testing.T, listen string) *managedRealityFixture {
 	t.Helper()
 	f := newNodeWebsiteFixture(t)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", net.JoinHostPort(listen, "0"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
-	settings := `{"security":"reality","dest":"a.example.com:443","sni":"a.example.com","listen":"0.0.0.0"}`
+	settings := fmt.Sprintf(`{"security":"reality","dest":"a.example.com:443","sni":"a.example.com","listen":%q}`, listen)
 	if _, err := f.db.Exec(`INSERT INTO nodes (id,name,host,port,protocol,transport,kernel_type,settings,enable) VALUES (41,'reality','vpn.example.com',?,'vless','tcp','xray',?,1)`, port, settings); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +119,7 @@ func newManagedRealityFixture(t *testing.T) *managedRealityFixture {
 	f.nodes.SetRealityCheckForTest(func(context.Context, map[string]any) (*service.RealityCheck, error) {
 		return &service.RealityCheck{}, nil
 	})
-	return &managedRealityFixture{f, site, port}
+	return &managedRealityFixture{f, site, port, listen}
 }
 
 func (f *managedRealityFixture) put(t *testing.T, fields map[string]any, status int) {
@@ -181,8 +182,8 @@ func (f *managedRealityFixture) verify(t *testing.T, port int, bind, sni string)
 		t.Fatal(err)
 	}
 	active := string(f.read(t, "active-nginx.conf"))
-	if port == 443 {
-		if state.RealityFrontend == nil || state.RealityFrontend.SNI != sni || state.RealityFrontend.PreviousPort != f.port || state.RealityFrontend.PreviousListen != "0.0.0.0" || !strings.Contains(active, sni+" 127.0.0.2:443;") {
+	if port == 443 && bind == "127.0.0.2" {
+		if state.RealityFrontend == nil || state.RealityFrontend.SNI != sni || state.RealityFrontend.PreviousPort != f.port || state.RealityFrontend.PreviousListen != f.previousListen || !strings.Contains(active, sni+" 127.0.0.2:443;") {
 			t.Fatal("active shared route, manifest or prior bind disagree")
 		}
 	} else if state.RealityFrontend != nil || strings.Contains(active, "ssl_preread") || !strings.Contains(active, "listen "+f.web.Listener.Addr().String()+" ssl;") {
@@ -205,7 +206,7 @@ func (f *managedRealityFixture) read(t *testing.T, name string) []byte {
 }
 
 func TestManagedRealitySaveDuringCLIDeployment(t *testing.T) {
-	f := newManagedRealityFixture(t)
+	f := newManagedRealityFixture(t, "0.0.0.0")
 	unlock, err := f.site.LockDeployment()
 	if err != nil {
 		t.Fatal(err)
@@ -223,7 +224,7 @@ func TestManagedRealitySaveDuringCLIDeployment(t *testing.T) {
 }
 
 func TestManagedRealitySaveRoundTrip(t *testing.T) {
-	f := newManagedRealityFixture(t)
+	f := newManagedRealityFixture(t, "0.0.0.0")
 	f.put(t, map[string]any{"port": 443}, 200)
 	shared := f.verify(t, 443, "127.0.0.2", "a.example.com")
 	newSettings := strings.ReplaceAll(shared.Settings, "a.example.com", "b.example.com")
@@ -234,8 +235,90 @@ func TestManagedRealitySaveRoundTrip(t *testing.T) {
 	f.verify(t, f.port, "0.0.0.0", "b.example.com")
 }
 
+func TestManagedRealityExplicitShareFromDifferentAddress(t *testing.T) {
+	f := newManagedRealityFixture(t, "::1")
+	original := f.verify(t, f.port, "::1", "a.example.com")
+	attach := map[string]any{"port": 443, "settings": original.Settings, "share_website_443": true}
+	f.put(t, attach, 200)
+	f.put(t, attach, 200) // retry after losing the first response
+	if err := f.sync.SyncNow(); err != nil {
+		t.Fatal(err)
+	}
+	f.verify(t, 443, "127.0.0.2", "a.example.com")
+	f.put(t, map[string]any{"port": f.port}, 200)
+	f.verify(t, f.port, "::1", "a.example.com")
+}
+
+func TestManagedRealityIndependent443(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		t.Run(fmt.Sprintf("explicit-%t", explicit), func(t *testing.T) {
+			f := newManagedRealityFixture(t, "::1")
+			state := f.read(t, "managed.json")
+			config := f.read(t, "active-nginx.conf")
+			fields := map[string]any{"port": 443}
+			if explicit {
+				fields["share_website_443"] = false
+			}
+			f.put(t, fields, 200)
+			if err := f.sync.SyncNow(); err != nil {
+				t.Fatal(err)
+			}
+			f.verify(t, 443, "::1", "a.example.com")
+			if !bytes.Equal(f.read(t, "managed.json"), state) || !bytes.Equal(f.read(t, "active-nginx.conf"), config) {
+				t.Fatal("independent port save changed the website")
+			}
+		})
+	}
+}
+
+func TestManagedRealityRejectsExplicitIndependentOverlap(t *testing.T) {
+	f := newManagedRealityFixture(t, "0.0.0.0")
+	f.put(t, map[string]any{"port": 443, "share_website_443": false}, 409)
+	f.verify(t, f.port, "0.0.0.0", "a.example.com")
+}
+
+func TestManagedRealityExplicitShareRequiresAvailableWebsite(t *testing.T) {
+	for _, site := range []string{"unconfigured", "missing", "standalone", "already shared"} {
+		t.Run(site, func(t *testing.T) {
+			f := newManagedRealityFixture(t, "::1")
+			path := filepath.Join(f.root, "managed.json")
+			var state map[string]any
+			if err := json.Unmarshal(f.read(t, "managed.json"), &state); err != nil {
+				t.Fatal(err)
+			}
+			switch site {
+			case "unconfigured":
+				f.nodes.ConfigureManagedWebsite(nil, nil, "")
+			case "missing":
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			case "standalone":
+				state["mode"] = "standalone"
+			case "already shared":
+				state["reality_frontend"] = map[string]any{"node_id": 99, "sni": "taken.example.com", "listen": "127.0.0.2:443", "web_listen": "127.0.0.1:9443"}
+			}
+			if site != "missing" {
+				data, err := json.Marshal(state)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			config := f.read(t, "active-nginx.conf")
+			f.put(t, map[string]any{"port": 443, "share_website_443": true}, 409)
+			node, err := f.nodes.GetByID(41)
+			if err != nil || node == nil || node.Port != f.port || !bytes.Equal(f.read(t, "active-nginx.conf"), config) {
+				t.Fatalf("failed share changed existing routes: %+v %v", node, err)
+			}
+		})
+	}
+}
+
 func TestManagedRealityRejectsBusyPortAndRestoresOnDBFailure(t *testing.T) {
-	f := newManagedRealityFixture(t)
+	f := newManagedRealityFixture(t, "0.0.0.0")
 	if _, err := f.db.Exec(`INSERT INTO nodes (name,host,port,protocol,transport,kernel_type,settings,enable) VALUES ('busy','other.example',9443,'vless','tcp','singbox','{}',1)`); err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +348,7 @@ func TestManagedRealityRejectsBusyPortAndRestoresOnDBFailure(t *testing.T) {
 }
 
 func TestManagedRealitySaveRejectsDriftedXrayConfig(t *testing.T) {
-	f := newManagedRealityFixture(t)
+	f := newManagedRealityFixture(t, "0.0.0.0")
 	path := filepath.Join(f.root, "xray.json")
 	config := bytes.Replace(f.read(t, "xray.json"), []byte(`"tag": "node-41"`), []byte(`"tag": "unmanaged"`), 1)
 	if err := os.WriteFile(path, config, 0600); err != nil {
@@ -281,14 +364,14 @@ func TestManagedRealitySaveRejectsDriftedXrayConfig(t *testing.T) {
 func TestManagedRealityStartupFollowsCommittedPort(t *testing.T) {
 	for _, committed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("committed-%v", committed), func(t *testing.T) {
-			f := newManagedRealityFixture(t)
+			f := newManagedRealityFixture(t, "0.0.0.0")
 			old, err := f.nodes.GetByID(41)
 			if err != nil || old == nil {
 				t.Fatalf("node: %v", err)
 			}
 			next := *old
 			next.Port = 443
-			change, err := f.site.PrepareUpdate(*old, &next)
+			change, err := f.site.PrepareUpdate(*old, &next, nil)
 			if err != nil || change == nil {
 				t.Fatalf("prepare: %v", err)
 			}

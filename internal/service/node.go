@@ -55,6 +55,9 @@ type UpdateNodeReq struct {
 	Settings   *string `json:"settings"`
 	Enable     *bool   `json:"enable"`
 	SortOrder  *int    `json:"sort_order"`
+
+	// Omit to preserve the port-and-listen behavior of older clients.
+	ShareWebsite443 *bool `json:"share_website_443"`
 }
 
 // NodeService 节点业务逻辑

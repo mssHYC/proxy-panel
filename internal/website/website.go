@@ -67,23 +67,39 @@ var routePath = regexp.MustCompile(`^/[A-Za-z0-9/_~.\-]*$`)
 // Prepare is read-only except for a temporary nginx -t configuration, removed before return.
 // Unmanaged sites and unrelated nodes do not participate in the synchronous update.
 func (m *Manager) Prepare(old, candidate model.Node) (*Change, error) {
-	return m.PrepareUpdate(old, &candidate)
+	return m.PrepareUpdate(old, &candidate, nil)
 }
 
 // PrepareUpdate also resolves the installer's loopback binding when a Reality
 // route changes. Persist and apply the returned candidate under the same lock.
-func (m *Manager) PrepareUpdate(old model.Node, candidate *model.Node) (*Change, error) {
+func (m *Manager) PrepareUpdate(old model.Node, candidate *model.Node, shareWebsite443 *bool) (*Change, error) {
 	// Display metadata does not affect the managed route and must remain editable
 	// even when the independently managed website manifest needs repair.
-	if sameWebsiteRoute(old, *candidate) {
+	if shareWebsite443 == nil && sameWebsiteRoute(old, *candidate) {
 		return nil, nil
 	}
 	state, data, err := m.readManifest()
-	if state == nil || err != nil {
+	if err != nil {
 		return nil, err
 	}
-	if state.Mode != "standalone" && state.NodeID != old.ID && (state.RealityFrontend != nil && state.RealityFrontend.NodeID == old.ID || wantsRealityShare(*state, old, *candidate)) {
-		return m.prepareReality(*state, data, old, candidate)
+	explicitShare := shareWebsite443 != nil && *shareWebsite443
+	if state != nil && state.Mode != "standalone" && state.NodeID != old.ID {
+		ownsFrontend := state.RealityFrontend != nil && state.RealityFrontend.NodeID == old.ID
+		if ownsFrontend && shareWebsite443 != nil && *shareWebsite443 != (candidate.Port == 443) {
+			return nil, fmt.Errorf("%w：继续共享时端口须为 443，解除共享时请填写其他独立端口", ErrManagedConflict)
+		}
+		if ownsFrontend || wantsRealityShare(*state, old, *candidate, shareWebsite443) {
+			return m.prepareReality(*state, data, old, candidate, explicitShare)
+		}
+	}
+	if explicitShare {
+		if state != nil && state.RealityFrontend != nil {
+			return nil, fmt.Errorf("%w：网站已与节点 %d 共享 443", ErrManagedConflict, state.RealityFrontend.NodeID)
+		}
+		return nil, fmt.Errorf("%w：共享 443 需要托管 HTTPUpgrade 网站，并将已启用的独立 Xray VLESS/TCP Reality 节点改为端口 443", ErrManagedConflict)
+	}
+	if state == nil {
+		return nil, nil
 	}
 	if err := state.checkListener(*candidate); err != nil {
 		return nil, err
@@ -158,7 +174,7 @@ func (m *Manager) PrepareUpdate(old model.Node, candidate *model.Node) (*Change,
 		return nil, err
 	}
 	change := &Change{manager: m, state: *state, nodeID: old.ID, oldManifest: data, newManifest: nextManifest, oldConfig: config, newConfig: nextConfig, newPath: newPath}
-	return change.preflight()
+	return change.preflight(state.RealityFrontend != nil)
 }
 
 func (m *Manager) managedConfig(oldPath string) ([]byte, error) {
@@ -178,7 +194,11 @@ func (m *Manager) managedConfig(oldPath string) ([]byte, error) {
 	return config, nil
 }
 
-func (c *Change) preflight() (*Change, error) {
+var streamModuleFailure = regexp.MustCompile(`unknown directive "(stream|ssl_preread)"|unknown "ssl_preread_server_name" variable` +
+	`|dlopen\(\) "[^"]*/ngx_stream_module\.so" failed \([^\n]*No such file or directory` +
+	`|module "[^"]*/ngx_stream_module\.so" (is not binary compatible|version [0-9]+ instead of [0-9]+)`)
+
+func (c *Change) preflight(sharedReality bool) (*Change, error) {
 	// nginx -t opens its PID file even without starting workers. Keep the candidate
 	// PID in the writable managed directory, rather than requiring writable /run.
 	stage, err := os.MkdirTemp(filepath.Dir(c.manager.configPath), ".path-check-")
@@ -192,6 +212,11 @@ func (c *Change) preflight() (*Change, error) {
 		return nil, err
 	}
 	if err := command(context.Background(), "nginx", "-t", "-e", "stderr", "-c", filename); err != nil {
+		if sharedReality && streamModuleFailure.MatchString(err.Error()) {
+			return nil, fmt.Errorf("Nginx 共享入口需要与当前 Nginx 匹配的 stream/ssl_preread 模块。使用发行版软件包时，请以 root 执行 "+
+				"Debian/Ubuntu 的 apt-get install libnginx-mod-stream 或 Fedora/RHEL 系的 dnf install nginx-mod-stream（旧系统使用 yum），"+
+				"然后重试。自编译 Nginx 请启用 --with-stream 和 --with-stream_ssl_preread_module。%w", err)
+		}
 		return nil, fmt.Errorf("Nginx 配置预检失败: %w", err)
 	}
 	return c, nil
@@ -402,7 +427,9 @@ func (c *Change) health(ctx context.Context, route string, reality *realityProbe
 	}
 	var last error
 	consecutive := 0
+	deadline, _ := ctx.Deadline()
 	for {
+		previous := last
 		last = nil
 		for _, addr := range addresses {
 			last = c.checkWebsite(ctx, addr, route, pool)
@@ -412,6 +439,11 @@ func (c *Change) health(ctx context.Context, route string, reality *realityProbe
 		}
 		if last == nil && reality != nil {
 			last = reality.check(ctx, realityRoots)
+		}
+		// If the overall deadline interrupted a retry, report the failure that
+		// prompted the retry (for example, a Reality certificate mismatch).
+		if previous != nil && last != nil && (ctx.Err() != nil || !time.Now().Before(deadline)) {
+			last = previous
 		}
 		if last == nil {
 			// A reload briefly overlaps worker generations. A single healthy

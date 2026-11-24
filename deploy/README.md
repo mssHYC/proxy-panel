@@ -103,7 +103,9 @@ proxy-panel website status
 
 ### 已托管 HTTPUpgrade 的网站与 Reality 共用 TCP 443
 
-已部署托管 HTTPUpgrade 网站时，在面板打开已启用的 Xray VLESS/TCP Reality 节点。将独立端口改为 `443` 并保存，可与网站共享公网入口。将共享节点改到空闲的独立端口后保存，会解除共享。仅更换共享节点的 SNI 时保留端口 `443`。面板会校验配置、同步 Xray 和 Nginx、验证网站及节点入口，成功后才更新节点记录。监听范围、端口或 SNI 变化后请刷新客户端订阅。
+已部署托管 HTTPUpgrade 网站时，在面板打开已启用的 Xray VLESS/TCP Reality 节点。将独立端口改为 `443`，在「443 入口」中选择「与托管网站共享」并保存。即使节点原来绑定其他本机 IP，也会使用网站的公网入口，并记录原监听 IP 供解除共享时恢复。请确认节点「主机地址」指向网站实际监听的公网 IP。要在另一个本机 IP 上独立使用 443，选择「独立监听」并填写与网站监听不重叠的 IP。将共享节点改到空闲的独立端口后保存，会解除共享。仅更换共享节点的 SNI 时保留端口 `443`。面板会校验配置、同步 Xray 和 Nginx、验证网站及节点入口，成功后才更新节点记录。监听范围、端口或 SNI 变化后请刷新客户端订阅。
+
+更新节点的 API 请求可使用布尔字段 `share_website_443` 显式选择共享（`true`）或独立监听（`false`）。请求共享时，若网站尚未部署、不支持共享或已绑定其他 Reality 节点，保存会失败。旧客户端省略此字段时，仍按监听 IP 判断是否共享。
 
 如果 `proxy-panel help` 列出的网站子命令只有 `website setup` 和 `website status`，先完成[旧版管理脚本迁移](#旧版管理脚本迁移)，再使用 `share-reality` 或 `unshare-reality`。
 
@@ -113,9 +115,11 @@ proxy-panel website status
 proxy-panel website share-reality 17
 ```
 
-Nginx 需要支持 stream 和 ssl_preread；Debian/Ubuntu 的动态模块包为 `libnginx-mod-stream`，版本须与安装的 Nginx 匹配。命令会预检、备份并短暂停止相关服务，应用变更后检查网站和两个 SNI 分支。公网 443 由 Nginx 接收，Reality 握手透传至 `127.0.0.2:443`。网站在 `127.0.0.1:9443` 终止 TLS，按已有路径转到 HTTPUpgrade 的 `127.0.0.1:443`。订阅同时公布两个节点的 443 端口。刷新订阅并用客户端分别验证它们能否出网，服务端对 Reality SNI 的普通 TLS 检查不验证订阅凭据。改变端口不能解除已有 IP 封锁。
+只有共享入口需要 Nginx 的 stream 和 ssl_preread 支持。如果面板或 CLI 预检提示缺少模块，使用发行版 Nginx 的管理员可在 Debian/Ubuntu 上执行 `apt-get install libnginx-mod-stream`，在 Fedora/RHEL 系上执行 `dnf install nginx-mod-stream`（旧系统使用 `yum`），然后重试。模块须与当前 Nginx 来自同一软件源且版本匹配。自编译 Nginx 可通过 `--with-stream --with-stream_ssl_preread_module` 静态启用所需功能。
 
-在启用 SELinux enforcing 的主机上，脚本会在停服前让 systemd 启动 Nginx，检验它能否监听计划中的回环端口。如果策略拒绝绑定，当前服务继续运行。请根据预检输出和 AVC 日志检查端口用途。RHEL 系列策略可能已将 9443 分配给 PKI 服务。
+命令会预检、备份并短暂停止相关服务，应用变更后检查网站和两个 SNI 分支。公网 443 由 Nginx 接收，Reality 握手透传至 `127.0.0.2:443`。网站在 `127.0.0.1:9443` 终止 TLS，按已有路径转到 HTTPUpgrade 的 `127.0.0.1:443`。订阅同时公布两个节点的 443 端口。刷新订阅并用客户端分别验证它们能否出网，服务端对 Reality SNI 的普通 TLS 检查不验证订阅凭据。改变端口不能解除已有 IP 封锁。
+
+在启用 SELinux enforcing 的主机上，从面板或命令行首次开启共享时，都会在停服前通过 systemd 检查 Nginx 能否监听 `127.0.0.1:9443`。如果策略拒绝绑定，当前服务继续运行。请根据预检输出和 AVC 日志检查端口用途。RHEL 系列策略可能已将 9443 分配给 PKI 服务。
 
 网站切换前会启用 `proxy-panel-website-recover.path` 并在 `/opt/proxy-panel/.website-transaction` 写入待恢复记录。切换进程中断或主机重启后，systemd 会启动恢复服务，按备份还原受影响的文件和服务状态。可用 `journalctl -u proxy-panel-website-recover.service` 查看结果，备份位于 `/opt/proxy-panel/backups/website-*`。连续三次恢复失败后，记录会保留。根据日志修复原因后，执行以下命令重新触发恢复。
 

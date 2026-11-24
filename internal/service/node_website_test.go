@@ -117,6 +117,7 @@ func TestNodeSaveReportsIncompleteRollback(t *testing.T) {
 type nodeWebsiteFixture struct {
 	root  string
 	nodes *service.NodeService
+	sync  *service.KernelSyncService
 	node  *model.Node
 	web   *httptest.Server
 	api   *gin.Engine
@@ -219,6 +220,7 @@ func newNodeWebsiteFixture(t *testing.T) *nodeWebsiteFixture {
 	mgr := kernel.NewManager()
 	mgr.Register(kernel.NewXrayEngine("xray", kernelPath, 10085))
 	syncSvc := service.NewKernelSyncService(db, mgr)
+	f.sync = syncSvc
 	configs, err := syncSvc.GenerateForCheck()
 	if err != nil {
 		t.Fatal(err)
@@ -236,6 +238,7 @@ func newNodeWebsiteFixture(t *testing.T) *nodeWebsiteFixture {
 		"webroot": f.root,
 	})
 	manifestPath := write("managed.json", manifest, 0600)
+	write("getenforce", []byte("#!/bin/sh\necho Disabled\n"), 0755)
 	write("nginx", []byte("#!/bin/sh\nexit 0\n"), 0755)
 	write("systemctl", []byte(`#!/bin/sh
 set -eu

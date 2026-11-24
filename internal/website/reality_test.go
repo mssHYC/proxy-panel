@@ -78,7 +78,7 @@ func TestRealityChangesRecoverEitherCommittedRoute(t *testing.T) {
 		t.Helper()
 		beforeSite, _ := os.ReadFile(f.manifest)
 		beforeConf, _ := os.ReadFile(f.config)
-		change, err := f.manager.PrepareUpdate(previous, &next)
+		change, err := f.manager.PrepareUpdate(previous, &next, nil)
 		if err != nil || change == nil {
 			t.Fatalf("prepare: %v", err)
 		}
@@ -167,7 +167,7 @@ func TestRealityEditPreservesConflictGuards(t *testing.T) {
 			node := old
 			settings, _ := json.Marshal(map[string]string{"security": "reality", "listen": "127.0.0.2", "dest": "target.example.com:443", "sni": sni})
 			node.Settings = string(settings)
-			if _, err := f.manager.PrepareUpdate(old, &node); !errors.Is(err, website.ErrManagedConflict) {
+			if _, err := f.manager.PrepareUpdate(old, &node, nil); !errors.Is(err, website.ErrManagedConflict) {
 				t.Fatalf("unsafe map key accepted: %v", err)
 			}
 		})
@@ -177,15 +177,15 @@ func TestRealityEditPreservesConflictGuards(t *testing.T) {
 	node := old
 	node.Port = 9443
 	node.Settings = strings.Replace(node.Settings, `"listen":"127.0.0.2",`, "", 1)
-	if _, err := f.manager.PrepareUpdate(old, &node); !errors.Is(err, website.ErrManagedConflict) {
+	if _, err := f.manager.PrepareUpdate(old, &node, nil); !errors.Is(err, website.ErrManagedConflict) {
 		t.Fatalf("occupied 9443: %v", err)
 	}
 	node.Port = 15000
-	if change, err := f.manager.PrepareUpdate(old, &node); err != nil || change == nil || strings.Contains(node.Settings, `"listen"`) {
+	if change, err := f.manager.PrepareUpdate(old, &node, nil); err != nil || change == nil || strings.Contains(node.Settings, `"listen"`) {
 		t.Fatalf("empty independent bind: %v", err)
 	}
 	write(t, f.config, bytes.Replace(config, []byte("default 127.0.0.1:9443;"), []byte("extra.example.com 127.0.0.2:443;\n        default 127.0.0.1:9443;"), 1))
-	if _, err := f.manager.PrepareUpdate(old, &node); !errors.Is(err, website.ErrManagedConflict) {
+	if _, err := f.manager.PrepareUpdate(old, &node, nil); !errors.Is(err, website.ErrManagedConflict) {
 		t.Fatalf("custom map could be overwritten: %v", err)
 	}
 }
@@ -204,7 +204,7 @@ func TestBrokenOldRealityTargetDoesNotPreventRepairOrRecovery(t *testing.T) {
 	}
 	next := old
 	next.Settings = strings.ReplaceAll(next.Settings, "old.invalid", "new.invalid")
-	change, err := f.manager.PrepareUpdate(old, &next)
+	change, err := f.manager.PrepareUpdate(old, &next, nil)
 	if err != nil || change == nil {
 		t.Fatalf("prepare: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestRecoveryCanStartWhenCommittedRealityTargetGoesOffline(t *testing.T) {
 
 	next := old
 	next.Port = target.Listener.Addr().(*net.TCPAddr).Port
-	change, err := f.manager.PrepareUpdate(old, &next)
+	change, err := f.manager.PrepareUpdate(old, &next, nil)
 	if err != nil || change == nil {
 		t.Fatalf("prepare: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestLegacyRealityDetachKeepsWebsiteInterface(t *testing.T) {
 		if clear {
 			next.Settings = strings.Replace(next.Settings, `"listen":"127.0.0.2",`, "", 1)
 		}
-		change, err := f.manager.PrepareUpdate(old, &next)
+		change, err := f.manager.PrepareUpdate(old, &next, nil)
 		if err != nil || change == nil {
 			t.Fatalf("prepare: %v", err)
 		}
