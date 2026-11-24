@@ -45,34 +45,10 @@ func checkRealityTarget(ctx context.Context, settings map[string]interface{}, lo
 	}
 	result := &RealityCheck{Target: target, ServerNames: names, Warnings: []string{}}
 	for _, name := range names {
-		tc := &tls.Config{MinVersion: tls.VersionTLS13, ServerName: name}
-		if roots != nil {
-			tc.RootCAs = roots.RootCAs
-		}
-		transport := &http.Transport{
-			Proxy: nil, ForceAttemptHTTP2: true, TLSClientConfig: tc,
-			TLSHandshakeTimeout: 3 * time.Second, MaxResponseHeaderBytes: 32 * 1024,
-			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-				var last error
-				for _, ip := range ips {
-					conn, e := dial(ctx, "tcp", net.JoinHostPort(ip.IP.String(), port))
-					if e == nil {
-						return conn, nil
-					}
-					last = e
-				}
-				return nil, last
-			},
-		}
-		client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-		req, _ := http.NewRequestWithContext(ctx, http.MethodHead, "https://"+net.JoinHostPort(name, port)+"/", nil)
-		resp, err := client.Do(req)
+		resp, err := realityHead(ctx, name, port, ips, dial, roots)
 		if err != nil {
-			transport.CloseIdleConnections()
 			return nil, fmt.Errorf("Reality 目标 %s 检查失败（连通性、TLS 1.3 或证书/SNI）: %w", name, err)
 		}
-		resp.Body.Close()
-		transport.CloseIdleConnections()
 		if resp.TLS == nil || resp.TLS.Version != tls.VersionTLS13 || resp.TLS.NegotiatedProtocol != "h2" {
 			return nil, fmt.Errorf("Reality 目标 %s 必须支持 TLS 1.3 和 HTTP/2", name)
 		}
@@ -86,6 +62,43 @@ func checkRealityTarget(ctx context.Context, settings map[string]interface{}, lo
 	}
 	result.Warnings = append(result.Warnings, "检查仅验证当前连通性和协议能力，不能保证目标长期可用或识别所有 CDN")
 	return result, nil
+}
+
+// realityHead performs one HTTPS HEAD with the requested SNI. The caller has
+// validated every DNS answer. Redirects cannot initiate a second request.
+func realityHead(ctx context.Context, name, port string, ips []net.IPAddr, dial func(context.Context, string, string) (net.Conn, error), roots *tls.Config) (*http.Response, error) {
+	tc := &tls.Config{MinVersion: tls.VersionTLS13, ServerName: name}
+	if roots != nil {
+		tc.RootCAs = roots.RootCAs
+	}
+	transport := &http.Transport{
+		ForceAttemptHTTP2: true, TLSClientConfig: tc,
+		TLSHandshakeTimeout: 3 * time.Second, MaxResponseHeaderBytes: 32 * 1024,
+		DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+			// http.Transport may detach its dial context from the request. This
+			// transport serves just this request, so honor its cancellation.
+			var last error
+			for _, ip := range ips {
+				conn, err := dial(ctx, "tcp", net.JoinHostPort(ip.IP.String(), port))
+				if err == nil {
+					return conn, nil
+				}
+				last = err
+			}
+			return nil, last
+		},
+	}
+	defer transport.CloseIdleConnections()
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, "https://"+net.JoinHostPort(name, port)+"/", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body.Close()
+	return resp, nil
 }
 
 func (s *NodeService) validateRealityChange(oldSettings, newSettings string, enable bool) error {

@@ -2348,12 +2348,23 @@ EOF
     systemctl enable "$unit.path" && systemctl start "$unit.path"
 }
 
+# Called while holding INSTALL_DIR/.update.lock. The panel may have been
+# interrupted after publishing its recovery record and before committing.
+check_panel_website_journal() {
+    local journal="$WEBSITE_CONFIG_DIR/path-update.json"
+    if [[ -e "$journal" || -L "$journal" ]]; then
+        echo "面板网站保存待恢复，请先启动 proxy-panel 服务并检查其日志，再重试部署。" >&2
+        return 1
+    fi
+}
+
 run_website_setup() (
     set -eEo pipefail
     umask 077
     cd "$INSTALL_DIR"
     exec 9>"${INSTALL_DIR}/.update.lock"
     flock -n 9 || { warn "另一个升级或网站部署正在运行"; exit 1; }
+    check_panel_website_journal || exit 1
     [[ ! -L "$INSTALL_DIR/.website-transaction" ]] || { warn "网站部署正在恢复，请先检查 proxy-panel-website-recover.service"; exit 1; }
     local stage backup mode=proxy file svc index=0 website_domain="${1:-}" active=() enabled=()
     stage=$(mktemp -d "${INSTALL_DIR}/.website.XXXXXX")
@@ -2555,6 +2566,7 @@ run_safe_update() (
     cd "$INSTALL_DIR"
     exec 9>"${INSTALL_DIR}/.update.lock"
     flock -n 9 || { warn "另一个升级正在运行"; exit 1; }
+    check_panel_website_journal || exit 1
     [[ ! -L "$INSTALL_DIR/.website-transaction" ]] || { warn "网站部署正在恢复，请先检查 proxy-panel-website-recover.service"; exit 1; }
     local release=latest
     if [[ $# -gt 0 ]]; then release="tags/$1"; fi
@@ -2674,6 +2686,7 @@ do_rollback_update() (
     set -eEo pipefail
     exec 9>"${INSTALL_DIR}/.update.lock"
     flock -n 9 || error "另一个升级正在运行"
+    check_panel_website_journal || exit 1
     [[ ! -L "$INSTALL_DIR/.website-transaction" ]] || error "网站部署正在恢复，请先检查 proxy-panel-website-recover.service"
     stop_update_services
     restore_update_files "$backup"

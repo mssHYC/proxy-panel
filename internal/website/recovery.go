@@ -39,7 +39,7 @@ func (m *Manager) recoveryPath() string {
 // Begin must finish before the first runtime mutation. Publishing an immutable
 // synced file with Link refuses to overwrite another unfinished transaction.
 func (c *Change) Begin(old, candidate model.Node) error {
-	if old.ID != c.state.NodeID || candidate.ID != old.ID || sameWebsiteRoute(old, candidate) {
+	if old.ID != c.nodeID || candidate.ID != old.ID || sameWebsiteRoute(old, candidate) {
 		return errors.New("托管网站恢复记录的节点不匹配")
 	}
 	record := recoveryRecord{Version: 1, Database: c.manager.databasePath, KernelPath: c.manager.kernelPath,
@@ -89,7 +89,8 @@ func (m *Manager) Pending() (*Recovery, error) {
 	if record.Version != 1 || !sameFilePath(record.Database, m.databasePath) || !sameFilePath(record.KernelPath, m.kernelPath) || record.OldNode.ID <= 0 || record.NewNode.ID != record.OldNode.ID || sameWebsiteRoute(record.OldNode, record.NewNode) {
 		return nil, errors.New("路径恢复记录与当前数据库或节点不一致")
 	}
-	for _, snapshot := range []struct {
+	var oldState manifest
+	for i, snapshot := range []struct {
 		node             model.Node
 		manifest, config []byte
 	}{
@@ -98,10 +99,22 @@ func (m *Manager) Pending() (*Recovery, error) {
 		var state manifest
 		var settings map[string]any
 		if json.Unmarshal(snapshot.manifest, &state) != nil || json.Unmarshal([]byte(snapshot.node.Settings), &settings) != nil || settings == nil ||
-			state.NodeID != snapshot.node.ID || !sameFilePath(state.Database, m.databasePath) || !sameFilePath(state.KernelPath, m.kernelPath) ||
-			(state.Mode != "" && state.Mode != "proxy") || state.Path != firstText(settings, "path", "path", "/") ||
+			!sameFilePath(state.Database, m.databasePath) || !sameFilePath(state.KernelPath, m.kernelPath) ||
+			(state.Mode != "" && state.Mode != "proxy") || state.NodeID <= 0 || !routePath.MatchString(state.Path) ||
 			len(state.Domains) == 0 || len(state.Listens) == 0 || state.CA == "" || len(snapshot.config) == 0 {
-			return nil, errors.New("路径恢复记录缺少有效的网站快照")
+			return nil, errors.New("恢复记录缺少有效的网站快照")
+		}
+		if state.NodeID == snapshot.node.ID {
+			if state.Path != firstText(settings, "path", "path", "/") {
+				return nil, errors.New("节点路径与恢复快照不符")
+			}
+		} else if _, err := realityEndpoint(state, snapshot.node, settings); err != nil {
+			return nil, err
+		}
+		if i == 0 {
+			oldState = state
+		} else if state.NodeID != oldState.NodeID || (state.NodeID != snapshot.node.ID && (state.Path != oldState.Path || (state.RealityFrontend == nil && oldState.RealityFrontend == nil))) {
+			return nil, errors.New("恢复记录的网站绑定不一致")
 		}
 	}
 	return &Recovery{manager: m, record: record, data: data}, nil
@@ -161,7 +174,9 @@ func (r *Recovery) Restore(ctx context.Context, node model.Node) error {
 	if err := json.Unmarshal(manifestData, &state); err != nil {
 		return err
 	}
-	return (&Change{state: state}).health(ctx, state.Path)
+	// The live save verified the new fallback before the database commit.
+	// Boot recovery only depends on the restored local website and HTTPUpgrade.
+	return (&Change{state: state, nodeID: node.ID}).health(ctx, state.Path, nil)
 }
 
 // Complete only removes the exact record that was read, after successful
@@ -188,7 +203,7 @@ func (c *Change) Complete() error {
 	if err != nil || r == nil {
 		return err
 	}
-	if r.NodeID() != c.state.NodeID || !bytes.Equal(r.record.OldManifest, c.oldManifest) || !bytes.Equal(r.record.NewManifest, c.newManifest) || !bytes.Equal(r.record.OldConfig, c.oldConfig) || !bytes.Equal(r.record.NewConfig, c.newConfig) {
+	if r.NodeID() != c.nodeID || !bytes.Equal(r.record.OldManifest, c.oldManifest) || !bytes.Equal(r.record.NewManifest, c.newManifest) || !bytes.Equal(r.record.OldConfig, c.oldConfig) || !bytes.Equal(r.record.NewConfig, c.newConfig) {
 		return errors.New("路径恢复记录不属于当前保存，不能清除")
 	}
 	return r.Complete()

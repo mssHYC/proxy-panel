@@ -7,7 +7,6 @@ import (
 	"net/netip"
 	"os"
 	"slices"
-	"strings"
 
 	"proxy-panel/internal/kernel"
 	"proxy-panel/internal/model"
@@ -17,10 +16,13 @@ import (
 var ErrManagedConflict = errors.New("节点与托管网站冲突")
 
 type realityFrontend struct {
-	NodeID    int64          `json:"node_id"`
-	SNI       string         `json:"sni"`
-	Listen    netip.AddrPort `json:"listen"`
-	WebListen netip.AddrPort `json:"web_listen"`
+	NodeID         int64          `json:"node_id"`
+	SNI            string         `json:"sni"`
+	Listen         netip.AddrPort `json:"listen"`
+	WebListen      netip.AddrPort `json:"web_listen"`
+	StreamModule   string         `json:"stream_module"`
+	PreviousPort   int            `json:"previous_port,omitempty"`
+	PreviousListen *string        `json:"previous_listen"`
 }
 
 func (m *Manager) readManifest() (*manifest, []byte, error) {
@@ -52,7 +54,7 @@ func (m *Manager) readManifest() (*manifest, []byte, error) {
 			return nil, nil, errors.New("托管网站监听地址无效")
 		}
 	}
-	if f := state.RealityFrontend; f != nil && (state.Mode != "proxy" || f.NodeID <= 0 || f.NodeID == state.NodeID || f.SNI == "" || f.Listen != netip.MustParseAddrPort("127.0.0.2:443") || f.WebListen != netip.MustParseAddrPort("127.0.0.1:9443")) {
+	if f := state.RealityFrontend; f != nil && (state.Mode != "proxy" || f.NodeID <= 0 || f.NodeID == state.NodeID || f.SNI == "" || f.Listen != netip.MustParseAddrPort("127.0.0.2:443") || f.WebListen != netip.MustParseAddrPort("127.0.0.1:9443") || (f.StreamModule != "" && !slices.Contains(streamModules, f.StreamModule))) {
 		return nil, nil, errors.New("托管网站共享 Reality 入口无效")
 	}
 	return &state, data, nil
@@ -104,7 +106,7 @@ func (s *manifest) checkListener(n model.Node) error {
 	ownsReality := front != nil && n.ID == front.NodeID
 	udpOnly := n.Protocol == "hysteria2" || n.Protocol == "hy2" || n.Protocol == "tuic" ||
 		(n.KernelType == "xray" && (n.Transport == "kcp" || n.Transport == "quic"))
-	if !ownsReality && (!n.Enable || udpOnly) {
+	if !n.Enable || udpOnly {
 		return nil
 	}
 	reserved := append([]netip.AddrPort(nil), s.Listens...)
@@ -117,7 +119,7 @@ func (s *manifest) checkListener(n model.Node) error {
 			reserved = append(reserved, front.Listen)
 		}
 	}
-	if !ownsReality && !slices.ContainsFunc(reserved, func(a netip.AddrPort) bool { return int(a.Port()) == n.Port }) {
+	if !slices.ContainsFunc(reserved, func(a netip.AddrPort) bool { return int(a.Port()) == n.Port }) {
 		return nil
 	}
 	var settings map[string]any
@@ -133,12 +135,6 @@ func (s *manifest) checkListener(n model.Node) error {
 		ip, err = netip.ParseAddr(bind)
 		if err != nil {
 			return fmt.Errorf("节点监听地址无效: %w", err)
-		}
-	}
-	if ownsReality {
-		if !n.Enable || n.Protocol != "vless" || n.Transport != "tcp" || n.KernelType != "xray" || text(settings, "security") != "reality" ||
-			ip != front.Listen.Addr() || n.Port != int(front.Listen.Port()) || !strings.EqualFold(realitySNI(settings), front.SNI) {
-			return fmt.Errorf("%w：网站依赖此 Reality 节点的协议、启用状态、监听地址、端口和 SNI；请先调整网站部署", ErrManagedConflict)
 		}
 	}
 	for _, addr := range reserved {

@@ -849,6 +849,9 @@ class WebsiteTransactionTests(unittest.TestCase):
             root = Path(temp)
             (root / 'states').mkdir()
             (root / 'enabled').mkdir()
+            if failure == 'pending-api':
+                (root / 'site').mkdir()
+                (root / 'site/path-update.json').write_text('{}')
             original_services = ['proxy-panel'] if standalone else ['proxy-panel', 'xray']
             for svc in original_services:
                 (root / 'states' / svc).touch()
@@ -934,7 +937,7 @@ if [[ "$OFFER" == 1 ]]; then offer_website_setup; else do_website website setup;
                 self.assertTrue((root / 'site/nginx.conf').exists(), result.stdout)
                 self.assertTrue((root / 'states/proxy-panel-web').exists(), result.stdout)
                 self.assertTrue((root / 'states/proxy-panel-web-cert.path').exists(), result.stdout)
-            if failure in ('dependency', 'preflight'):
+            if failure in ('dependency', 'preflight', 'pending-api'):
                 events = (root / 'events').read_text() if (root / 'events').exists() else ''
                 self.assertNotIn('stop ', events, result.stdout)
             if standalone:
@@ -945,6 +948,7 @@ if [[ "$OFFER" == 1 ]]; then offer_website_setup; else do_website website setup;
                     self.assertNotIn('stop ' + svc + '\n', events)
                     self.assertNotIn('start ' + svc + '\n', events)
 
+    def test_pending_panel_save_keeps_services(self): self.run_case('pending-api')
     def test_success(self): self.run_case()
     def test_standalone_success_without_xray(self): self.run_case(standalone=True)
     def test_standalone_nginx_failure_keeps_panel_running(self): self.run_case('start', standalone=True)

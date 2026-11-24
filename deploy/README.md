@@ -103,9 +103,11 @@ proxy-panel website status
 
 ### 已托管 HTTPUpgrade 的网站与 Reality 共用 TCP 443
 
+已部署托管 HTTPUpgrade 网站时，在面板打开已启用的 Xray VLESS/TCP Reality 节点。将独立端口改为 `443` 并保存，可与网站共享公网入口。将共享节点改到空闲的独立端口后保存，会解除共享。仅更换共享节点的 SNI 时保留端口 `443`。面板会校验配置、同步 Xray 和 Nginx、验证网站及节点入口，成功后才更新节点记录。监听范围、端口或 SNI 变化后请刷新客户端订阅。
+
 如果 `proxy-panel help` 列出的网站子命令只有 `website setup` 和 `website status`，先完成[旧版管理脚本迁移](#旧版管理脚本迁移)，再使用 `share-reality` 或 `unshare-reality`。
 
-先用 `proxy-panel website setup` 托管 HTTPUpgrade 节点。准备一个已能独立连接的 Xray VLESS/TCP Reality 节点，使用独立端口和单一 SNI，该 SNI 须与网站域名不同。在服务器上执行以下命令，例中的 `17` 要换成自己的 Reality 节点 ID：
+首次部署网站使用 `proxy-panel website setup`。要从命令行开启共享，请使用已能独立连接的 Xray VLESS/TCP Reality 节点，配置独立端口和一个与网站域名不同的 SNI。以下示例的 `17` 是 Reality 节点 ID。
 
 ```sh
 proxy-panel website share-reality 17
@@ -230,6 +232,8 @@ XRAY_BINARY=/绝对路径/xray SINGBOX_BINARY=/绝对路径/sing-box \
 测试只启动临时回环高端口，不操作 systemd；使用测试证书，访问 Cloudflare `https://1.1.1.1/cdn-cgi/trace` 作为正常转发对照，检查网站回落、未知 SNI 拒绝、IPv4/IPv6/localhost 隔离、管理接口及统计采集。需要外网可达。
 
 ## Reality 目标检查与 TLS 参数
+
+打开「筛选候选网站」并选择「获取附近镜像」，可以查看 Fedora MirrorManager 为 VPS 出口推荐的 HTTPS 镜像和登记国家或地区。勾选域名或输入自己的候选，每批最多检测 8 个。通过证书、TLS 1.3 和 HTTP/2 检查且未识别到已知 CDN 或代理特征时，可将同一域名一起填入 Dest 和 SNI，再保存节点。连接耗时和登记地区可用于比较候选，具体机房、网站流量排名和 IP 封锁风险无法由该检测确定。[Fedora 镜像登记及政策](https://fedoraproject.org/wiki/Infrastructure/Mirroring#Mirror_Policies)
 
 节点编辑页的「检查目标」从 VPS 出发验证 DNS、证书与 SNI、TLS 1.3 和 HTTP/2。新建 Reality 节点、更换 dest / server_names、从禁用状态重新启用时，后端也会在写入数据库前检查；检查失败保留原配置。修改名称或保存未变化的目标不会重复联网，已有节点也不会因为面板启动时目标网站临时不可用而被关闭。
 

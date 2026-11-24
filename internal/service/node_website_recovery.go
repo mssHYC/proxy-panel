@@ -29,6 +29,17 @@ func (s *NodeService) recoverManagedWebsiteLocked() error {
 	if recovery == nil {
 		return nil
 	}
+	unlock, err := s.website.LockDeployment()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	// Another participant could have finished recovery between the discovery
+	// read and acquiring the CLI's deployment lock.
+	recovery, err = s.website.Pending()
+	if err != nil || recovery == nil {
+		return err
+	}
 	if s.syncSvc == nil {
 		return fmt.Errorf("网站路径恢复缺少内核同步服务")
 	}

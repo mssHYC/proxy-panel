@@ -208,6 +208,7 @@
               <Button :loading="checkingReality" @click="handleCheckReality">检查目标</Button>
               <p v-if="realityCheckMessage" role="status">{{ realityCheckMessage }}</p>
             </Field>
+            <RealityCandidates class="nf-col-2" @select="selectRealityCandidate" />
             <Field class="nf-col-2 nf-keypair" label="x25519 密钥对" hint="自动生成 Private Key / Public Key / Short IDs">
               <Button variant="primary" :loading="generatingKeypair" @click="handleGenerateKeypair">自动生成</Button>
             </Field>
@@ -308,6 +309,7 @@ import {
 } from '../ui'
 import { getNodes, createNode, updateNode, deleteNode, generateRealityKeypair, checkRealityTarget } from '../api/node'
 import { getSettings } from '../api/setting'
+import RealityCandidates from '../components/RealityCandidates.vue'
 import request from '../api/request'
 
 const loading = ref(false)
@@ -424,12 +426,14 @@ const defaultForm = () => ({
   hy2_max_up_mbps: 10, hy2_max_down_mbps: 10, hy2_ignore_client_bandwidth: false,
 })
 const form = reactive(defaultForm())
+const originalRealityNames = ref<string[]>([])
+const originalRealitySNI = ref('')
 
 const realityPortHint = computed(() => {
   if (form.kernel_type !== 'xray' || form.protocol !== 'vless' || form.transport !== 'tcp' || form.security !== 'reality') return ''
-  const listen = form.listen.trim().toLowerCase()
-  if (listen.startsWith('127.') || listen === '::1' || listen === 'localhost') return ''
-  return '若要与托管网站共用 443，先将此节点保存到空闲端口，再在服务器运行 proxy-panel website share-reality <节点ID>。'
+  return isEdit.value
+    ? '已有托管网站时，保存到公网 443 可共享入口；改到独立端口会解除共享。'
+    : '如需与托管网站共享 443，先用空闲端口创建节点，再编辑端口为 443。'
 })
 
 function onProtocolChange() {
@@ -455,7 +459,11 @@ function formToSettings(): string {
     if (form.key_path) s.key_path = form.key_path
     if (form.allow_insecure) s.allow_insecure = true
   } else if (form.security === 'reality') {
-    if (form.sni) { s.sni = form.sni; s.server_names = [form.sni] }
+    if (form.sni) {
+      s.sni = form.sni
+      s.server_names = form.sni === originalRealitySNI.value && originalRealityNames.value.length
+        ? originalRealityNames.value : [form.sni]
+    }
     if (form.reality_dest) s.dest = form.reality_dest
     if (form.reality_private_key) s.private_key = form.reality_private_key
     if (form.reality_public_key) s.public_key = form.reality_public_key
@@ -506,6 +514,10 @@ function settingsToForm(settingsStr: string) {
   form.listen = s.listen || ''
   if (s.security === 'reality') {
     form.security = 'reality'
+    const names = s.server_names ?? s.serverNames
+    if (Array.isArray(names)) originalRealityNames.value = names.filter((n): n is string => typeof n === 'string')
+    form.sni ||= originalRealityNames.value[0] || ''
+    originalRealitySNI.value = form.sni
     form.reality_dest = s.dest || ''
     form.reality_private_key = s.private_key || s.privateKey || ''
     form.reality_public_key = s.public_key || s.publicKey || ''
@@ -554,6 +566,8 @@ const fetchNodes = async () => {
 
 const openDialog = (row?: any) => {
   realityCheckMessage.value = ''
+  originalRealityNames.value = []
+  originalRealitySNI.value = ''
   Object.assign(form, defaultForm())
   errors.name = ''; errors.host = ''; errors.port = ''
   if (row) {
@@ -567,6 +581,13 @@ const openDialog = (row?: any) => {
     isEdit.value = false; editId.value = null
   }
   dialogVisible.value = true
+}
+
+function selectRealityCandidate(host: string) {
+  form.sni = host
+  form.reality_dest = host + ':443'
+  originalRealityNames.value = []
+  toast.success('已填入 Dest 和 SNI，保存后生效')
 }
 
 const checkingReality = ref(false)
@@ -598,8 +619,14 @@ const handleSubmit = async () => {
       settings: formToSettings(),
     }
     if (isEdit.value && editId.value) {
-      await updateNode(editId.value, payload)
-      toast.success('节点更新成功')
+      const previous = nodes.value.find(n => n.id === editId.value)
+      const { data } = await updateNode(editId.value, payload)
+      if (form.security === 'reality' && previous && (previous.port !== form.port || originalRealitySNI.value !== form.sni)) {
+        toast.success('Reality 节点已更新，请刷新客户端订阅')
+        if (previous.port !== form.port && data?.firewall_warning) toast.warn(data.firewall_warning)
+      } else {
+        toast.success('节点更新成功')
+      }
     } else {
       await createNode(payload)
       toast.success('节点创建成功')

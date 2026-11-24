@@ -20,6 +20,31 @@ import (
 // NGINX_BINARY enables the same public change operation with a real Nginx master.
 // The systemctl boundary maps reload to that isolated, unprivileged master.
 func TestRealNginxPathChangeAndRollback(t *testing.T) {
+	f, address, cert := startRealNginxSite(t)
+	candidate := f.node
+	candidate.Settings = strings.Replace(candidate.Settings, `"/old"`, `"/new"`, 1)
+	change, err := f.manager.Prepare(f.node, candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := change.CheckOld(context.Background()); err != nil {
+		details, _ := os.ReadFile(filepath.Join(filepath.Dir(f.config), "nginx.log"))
+		t.Fatalf("baseline: %v\n%s", err, details)
+	}
+	if err := change.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertUpgradeStatus(t, address, cert, "/new", 101)
+	assertUpgradeStatus(t, address, cert, "/old", 404)
+	if err := change.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertUpgradeStatus(t, address, cert, "/old", 101)
+	assertUpgradeStatus(t, address, cert, "/new", 404)
+}
+
+func startRealNginxSite(t *testing.T) (*fixture, string, string) {
+	t.Helper()
 	nginx := os.Getenv("NGINX_BINARY")
 	if nginx == "" {
 		t.Skip("set NGINX_BINARY for the real Nginx integration test")
@@ -73,6 +98,10 @@ events { worker_connections 64; }
 http {
     access_log off;
     server {
+        listen %s ssl default_server;
+        ssl_reject_handshake on;
+    }
+    server {
         listen %s ssl;
         server_name example.com;
         ssl_certificate "%s";
@@ -98,7 +127,7 @@ http {
         }
     }
 }
-`, address, cert, key, dir, cert)
+`, address, address, cert, key, dir, cert)
 	write(t, f.config, []byte(config))
 	runtime := filepath.Join(dir, "running.conf")
 	pid := filepath.Join(dir, "nginx.pid")
@@ -131,6 +160,9 @@ if os.environ.get('FAKE_RELOAD_FAIL'):
 config = pathlib.Path(os.environ['TEST_NGINX_CONFIG']).read_text()
 config = config.replace('pid /run/proxy-panel-web.pid;', 'pid "' + os.environ['TEST_NGINX_PID'] + '";')
 config = config.replace('https://127.0.0.1:443;', os.environ['TEST_NGINX_BACKEND'] + ';')
+if 'TEST_REALITY_FALLBACK' in os.environ:
+    config = config.replace('127.0.0.2:443;', os.environ['TEST_REALITY_FALLBACK'] + ';')
+    config = config.replace('127.0.0.1:9443', os.environ['TEST_REALITY_WEB'])
 pathlib.Path(os.environ['TEST_NGINX_RUNTIME']).write_text(config)
 sys.exit(subprocess.call([os.environ['TEST_NGINX_BINARY'], '-e', 'stderr', '-c', os.environ['TEST_NGINX_RUNTIME'], '-s', 'reload']))
 `))
@@ -139,26 +171,7 @@ sys.exit(subprocess.call([os.environ['TEST_NGINX_BINARY'], '-e', 'stderr', '-c',
 			t.Fatal(err)
 		}
 	}
-	candidate := f.node
-	candidate.Settings = strings.Replace(candidate.Settings, `"/old"`, `"/new"`, 1)
-	change, err := f.manager.Prepare(f.node, candidate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := change.CheckOld(context.Background()); err != nil {
-		details, _ := os.ReadFile(log.Name())
-		t.Fatalf("baseline: %v\n%s", err, details)
-	}
-	if err := change.Apply(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	assertUpgradeStatus(t, address, cert, "/new", 101)
-	assertUpgradeStatus(t, address, cert, "/old", 404)
-	if err := change.Rollback(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	assertUpgradeStatus(t, address, cert, "/old", 101)
-	assertUpgradeStatus(t, address, cert, "/new", 404)
+	return f, address, cert
 }
 
 func assertUpgradeStatus(t *testing.T, address, ca, route string, expected int) {

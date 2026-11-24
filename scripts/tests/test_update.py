@@ -62,6 +62,9 @@ class UpdateTests(unittest.TestCase):
             (root / "data").mkdir()
             (root / "states").mkdir()
             originals = {"proxy-panel": b"old-binary", "config.yaml": b"listen: 0.0.0.0", "data/panel.db": b"old-db", "xray.json": b"old-config", "xray": b"old-core"}
+            if failure == "pending-api":
+                (root / "website").mkdir()
+                (root / "website/path-update.json").write_text("{}")
             if failure == "pending-website":
                 (root / ".website-transaction").symlink_to(root / "website-backup")
             cli_name = "bin-managed/proxy-panel"
@@ -182,7 +185,7 @@ fi
             result = subprocess.run(["bash",str(script)],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
             self.assertEqual(result.returncode == 0, not failure, result.stdout)
             release = root / "fetched-release"
-            if failure in ("invalid-tag", "pending-website"):
+            if failure in ("invalid-tag", "pending-website", "pending-api"):
                 self.assertFalse(release.exists())
             else:
                 self.assertEqual(release.read_text().strip(), "tags/" + tag if tag else "latest")
@@ -203,11 +206,12 @@ fi
                 self.assertTrue(access.exists(), "upgraded panel needs managed Nginx write access")
                 self.assertEqual(access.read_text(), f"[Service]\nReadWritePaths=-{root}/website\n")
             self.assertEqual(sorted(p.name for p in (root / "states").iterdir()),sorted(services))
-            if failure in ("download","preflight","invalid-tag","missing-cli","pending-website"):
+            if failure in ("download","preflight","invalid-tag","missing-cli","pending-website","pending-api"):
                 events=(root / "events").read_text() if (root / "events").exists() else ""
                 self.assertNotIn("stop ",events,result.stdout)
             return result.stdout
 
+    def test_pending_panel_save_blocks_update(self): self.run_case("pending-api")
     def test_pending_website_recovery_blocks_update(self): self.run_case("pending-website")
     def test_pinned_update_installs_matching_cli(self): self.run_case(tag="v9.8.7")
     def test_missing_release_cli_keeps_installed_pair(self): self.run_case("missing-cli")
