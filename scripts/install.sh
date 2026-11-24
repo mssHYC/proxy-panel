@@ -1685,6 +1685,10 @@ def prepare_standalone(cfg, install, managed, root, website_domain):
 
 
 STREAM_MODULES = ('/usr/lib/nginx/modules/ngx_stream_module.so', '/usr/lib64/nginx/modules/ngx_stream_module.so')
+STREAM_MODULE_FAILURE = re.compile(
+    r'unknown directive "(stream|ssl_preread)"|unknown "ssl_preread_server_name" variable'
+    r'|dlopen\(\) "[^"]*/ngx_stream_module\.so" failed \([^\n]*No such file or directory'
+    r'|module "[^"]*/ngx_stream_module\.so" (is not binary compatible|version [0-9]+ instead of [0-9]+)')
 
 
 def listen_ip(value):
@@ -2000,8 +2004,10 @@ def prepare(config, install, confdir, root, units, stage, website_domain='', act
     try:
         run([nginx, '-t', '-c', str(stage / 'nginx.conf')])
     except ValueError as exc:
-        if 'reality_frontend' in plan and ('stream' in str(exc) or 'ssl_preread' in str(exc)):
-            raise ValueError('Nginx 共享入口预检失败。请确认已安装与当前 Nginx 匹配的 stream/ssl_preread 模块（Ubuntu/Debian: libnginx-mod-stream）: ' + str(exc)) from exc
+        if 'reality_frontend' in plan and STREAM_MODULE_FAILURE.search(str(exc)):
+            raise ValueError('Nginx 共享入口需要与当前 Nginx 匹配的 stream/ssl_preread 模块。使用发行版软件包时，请以 root 执行 '
+                             'Debian/Ubuntu 的 apt-get install libnginx-mod-stream 或 Fedora/RHEL 系的 dnf install nginx-mod-stream（旧系统使用 yum），'
+                             '然后重试。自编译 Nginx 请启用 --with-stream 和 --with-stream_ssl_preread_module。' + str(exc)) from exc
         raise
     run(['systemd-analyze', 'verify', '--man=no', *[str(stage / name) for name in unit_files]])
     print('网站预检通过: ' + ', '.join(plan['domains']) + ('；独立 HTTPS 网站，无需代理节点' if plan['mode'] == 'standalone' else '；保留端口 443、路径和节点凭据'))
@@ -2149,7 +2155,7 @@ install_website_deps() (
 
 check_website_selinux_bind() (
     local endpoint="$1" probe unit context nginx
-    local properties=(-p Type=oneshot)
+    local properties=(-p Type=oneshot -p TimeoutStartSec=5s)
     command -v systemd-run >/dev/null || { warn "SELinux 监听预检需要 systemd-run，请安装 systemd 工具后重试"; return 1; }
     nginx=$(type -P nginx) || return 1
     context=$(systemctl show -p SELinuxContext "$WEBSITE_SERVICE") || return 1
@@ -2348,12 +2354,23 @@ EOF
     systemctl enable "$unit.path" && systemctl start "$unit.path"
 }
 
+# Called while holding INSTALL_DIR/.update.lock. The panel may have been
+# interrupted after publishing its recovery record and before committing.
+check_panel_website_journal() {
+    local journal="$WEBSITE_CONFIG_DIR/path-update.json"
+    if [[ -e "$journal" || -L "$journal" ]]; then
+        echo "面板网站保存待恢复，请先启动 proxy-panel 服务并检查其日志，再重试部署。" >&2
+        return 1
+    fi
+}
+
 run_website_setup() (
     set -eEo pipefail
     umask 077
     cd "$INSTALL_DIR"
     exec 9>"${INSTALL_DIR}/.update.lock"
     flock -n 9 || { warn "另一个升级或网站部署正在运行"; exit 1; }
+    check_panel_website_journal || exit 1
     [[ ! -L "$INSTALL_DIR/.website-transaction" ]] || { warn "网站部署正在恢复，请先检查 proxy-panel-website-recover.service"; exit 1; }
     local stage backup mode=proxy file svc index=0 website_domain="${1:-}" active=() enabled=()
     stage=$(mktemp -d "${INSTALL_DIR}/.website.XXXXXX")
@@ -2442,6 +2459,10 @@ run_website_setup() (
 
 do_website() {
     case "${2:-setup}" in
+        check-reality-bind)
+            [[ $# -eq 3 && "$3" =~ ^127\.0\.0\.1:[0-9]{1,5}$ ]] || error "用法: proxy-panel website check-reality-bind 127.0.0.1:<端口>"
+            check_website_selinux_bind "$3"
+            ;;
         setup|share-reality|unshare-reality|rebind)
             case "${2:-setup}" in
                 share-reality|rebind) [[ $# -eq 3 && "$3" =~ ^[1-9][0-9]*$ ]] || error "用法: proxy-panel website $2 <节点ID>" ;;
@@ -2555,6 +2576,7 @@ run_safe_update() (
     cd "$INSTALL_DIR"
     exec 9>"${INSTALL_DIR}/.update.lock"
     flock -n 9 || { warn "另一个升级正在运行"; exit 1; }
+    check_panel_website_journal || exit 1
     [[ ! -L "$INSTALL_DIR/.website-transaction" ]] || { warn "网站部署正在恢复，请先检查 proxy-panel-website-recover.service"; exit 1; }
     local release=latest
     if [[ $# -gt 0 ]]; then release="tags/$1"; fi
@@ -2674,6 +2696,7 @@ do_rollback_update() (
     set -eEo pipefail
     exec 9>"${INSTALL_DIR}/.update.lock"
     flock -n 9 || error "另一个升级正在运行"
+    check_panel_website_journal || exit 1
     [[ ! -L "$INSTALL_DIR/.website-transaction" ]] || error "网站部署正在恢复，请先检查 proxy-panel-website-recover.service"
     stop_update_services
     restore_update_files "$backup"

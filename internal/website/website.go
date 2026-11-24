@@ -1,4 +1,4 @@
-// Package website updates only HTTPUpgrade paths in an installer-managed website.
+// Package website coordinates node route changes in an installer-managed website.
 package website
 
 import (
@@ -25,10 +25,11 @@ import (
 	"proxy-panel/internal/model"
 )
 
-type Manager struct{ manifestPath, configPath, databasePath, kernelPath string }
+type Manager struct{ manifestPath, configPath, databasePath, kernelPath, deploymentLock string }
 
 func New(manifestPath, configPath, databasePath, kernelPath string) *Manager {
-	return &Manager{manifestPath, configPath, databasePath, kernelPath}
+	return &Manager{manifestPath: manifestPath, configPath: configPath, databasePath: databasePath, kernelPath: kernelPath,
+		deploymentLock: filepath.Join(filepath.Dir(configPath), ".update.lock")}
 }
 
 type manifest struct {
@@ -55,7 +56,9 @@ type Change struct {
 	manager                                        *Manager
 	state                                          manifest
 	oldManifest, newManifest, oldConfig, newConfig []byte
+	nodeID                                         int64
 	newPath                                        string
+	newReality                                     *realityProbe
 	changed                                        bool
 }
 
@@ -64,16 +67,41 @@ var routePath = regexp.MustCompile(`^/[A-Za-z0-9/_~.\-]*$`)
 // Prepare is read-only except for a temporary nginx -t configuration, removed before return.
 // Unmanaged sites and unrelated nodes do not participate in the synchronous update.
 func (m *Manager) Prepare(old, candidate model.Node) (*Change, error) {
+	return m.PrepareUpdate(old, &candidate, nil)
+}
+
+// PrepareUpdate also resolves the installer's loopback binding when a Reality
+// route changes. Persist and apply the returned candidate under the same lock.
+func (m *Manager) PrepareUpdate(old model.Node, candidate *model.Node, shareWebsite443 *bool) (*Change, error) {
 	// Display metadata does not affect the managed route and must remain editable
 	// even when the independently managed website manifest needs repair.
-	if sameWebsiteRoute(old, candidate) {
+	if shareWebsite443 == nil && sameWebsiteRoute(old, *candidate) {
 		return nil, nil
 	}
 	state, data, err := m.readManifest()
-	if state == nil || err != nil {
+	if err != nil {
 		return nil, err
 	}
-	if err := state.checkListener(candidate); err != nil {
+	explicitShare := shareWebsite443 != nil && *shareWebsite443
+	if state != nil && state.Mode != "standalone" && state.NodeID != old.ID {
+		ownsFrontend := state.RealityFrontend != nil && state.RealityFrontend.NodeID == old.ID
+		if ownsFrontend && shareWebsite443 != nil && *shareWebsite443 != (candidate.Port == 443) {
+			return nil, fmt.Errorf("%w：继续共享时端口须为 443，解除共享时请填写其他独立端口", ErrManagedConflict)
+		}
+		if ownsFrontend || wantsRealityShare(*state, old, *candidate, shareWebsite443) {
+			return m.prepareReality(*state, data, old, candidate, explicitShare)
+		}
+	}
+	if explicitShare {
+		if state != nil && state.RealityFrontend != nil {
+			return nil, fmt.Errorf("%w：网站已与节点 %d 共享 443", ErrManagedConflict, state.RealityFrontend.NodeID)
+		}
+		return nil, fmt.Errorf("%w：共享 443 需要托管 HTTPUpgrade 网站，并将已启用的独立 Xray VLESS/TCP Reality 节点改为端口 443", ErrManagedConflict)
+	}
+	if state == nil {
+		return nil, nil
+	}
+	if err := state.checkListener(*candidate); err != nil {
 		return nil, err
 	}
 	if state.Mode == "standalone" || state.NodeID != old.ID {
@@ -130,6 +158,26 @@ func (m *Manager) Prepare(old, candidate model.Node) (*Change, error) {
 	if len(state.Domains) == 0 || len(state.Listens) == 0 {
 		return nil, errors.New("托管网站清单缺少域名或监听地址")
 	}
+	config, err := m.managedConfig(oldPath)
+	if err != nil {
+		return nil, err
+	}
+	location := "location = \"" + oldPath + "\" {"
+	nextConfig := bytes.Replace(config, []byte(location), []byte("location = \""+newPath+"\" {"), 1)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	fields["path"], _ = json.Marshal(newPath)
+	nextManifest, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	change := &Change{manager: m, state: *state, nodeID: old.ID, oldManifest: data, newManifest: nextManifest, oldConfig: config, newConfig: nextConfig, newPath: newPath}
+	return change.preflight(state.RealityFrontend != nil)
+}
+
+func (m *Manager) managedConfig(oldPath string) ([]byte, error) {
 	for _, filename := range []string{m.manifestPath, m.configPath} {
 		if err := regularFile(filename); err != nil {
 			return nil, err
@@ -143,32 +191,35 @@ func (m *Manager) Prepare(old, candidate model.Node) (*Change, error) {
 	if !routePath.MatchString(oldPath) || bytes.Count(config, []byte(location)) != 1 || bytes.Count(config, []byte("error_page 418 = @proxy_panel_node;")) != 1 || !bytes.Contains(config, []byte("location @proxy_panel_node {")) || !bytes.Contains(config, []byte("proxy_pass https://127.0.0.1:443;")) || bytes.Count(config, []byte("pid /run/proxy-panel-web.pid;")) != 1 {
 		return nil, errors.New("托管 Nginx 配置已变化，无法定位唯一的原路径；请先执行 proxy-panel website setup")
 	}
-	nextConfig := bytes.Replace(config, []byte(location), []byte("location = \""+newPath+"\" {"), 1)
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return nil, err
-	}
-	fields["path"], _ = json.Marshal(newPath)
-	nextManifest, err := json.Marshal(fields)
-	if err != nil {
-		return nil, err
-	}
+	return config, nil
+}
+
+var streamModuleFailure = regexp.MustCompile(`unknown directive "(stream|ssl_preread)"|unknown "ssl_preread_server_name" variable` +
+	`|dlopen\(\) "[^"]*/ngx_stream_module\.so" failed \([^\n]*No such file or directory` +
+	`|module "[^"]*/ngx_stream_module\.so" (is not binary compatible|version [0-9]+ instead of [0-9]+)`)
+
+func (c *Change) preflight(sharedReality bool) (*Change, error) {
 	// nginx -t opens its PID file even without starting workers. Keep the candidate
 	// PID in the writable managed directory, rather than requiring writable /run.
-	stage, err := os.MkdirTemp(filepath.Dir(m.configPath), ".path-check-")
+	stage, err := os.MkdirTemp(filepath.Dir(c.manager.configPath), ".path-check-")
 	if err != nil {
 		return nil, fmt.Errorf("无法写入托管网站目录，请升级管理脚本并执行 proxy-panel update 以更新服务权限: %w", err)
 	}
 	defer os.RemoveAll(stage)
-	check := bytes.Replace(nextConfig, []byte("pid /run/proxy-panel-web.pid;"), []byte("pid \""+filepath.Join(stage, "nginx.pid")+"\";"), 1)
+	check := bytes.Replace(c.newConfig, []byte("pid /run/proxy-panel-web.pid;"), []byte("pid \""+filepath.Join(stage, "nginx.pid")+"\";"), 1)
 	filename := filepath.Join(stage, "nginx.conf")
 	if err := os.WriteFile(filename, check, 0600); err != nil {
 		return nil, err
 	}
 	if err := command(context.Background(), "nginx", "-t", "-e", "stderr", "-c", filename); err != nil {
-		return nil, fmt.Errorf("Nginx 路径预检失败: %w", err)
+		if sharedReality && streamModuleFailure.MatchString(err.Error()) {
+			return nil, fmt.Errorf("Nginx 共享入口需要与当前 Nginx 匹配的 stream/ssl_preread 模块。使用发行版软件包时，请以 root 执行 "+
+				"Debian/Ubuntu 的 apt-get install libnginx-mod-stream 或 Fedora/RHEL 系的 dnf install nginx-mod-stream（旧系统使用 yum），"+
+				"然后重试。自编译 Nginx 请启用 --with-stream 和 --with-stream_ssl_preread_module。%w", err)
+		}
+		return nil, fmt.Errorf("Nginx 配置预检失败: %w", err)
 	}
-	return &Change{manager: m, state: *state, oldManifest: data, newManifest: nextManifest, oldConfig: config, newConfig: nextConfig, newPath: newPath}, nil
+	return c, nil
 }
 
 func sameWebsiteRoute(a, b model.Node) bool {
@@ -259,17 +310,13 @@ func sameFilePath(a, b string) bool {
 	return err == nil && aa == bb
 }
 
-func (c *Change) CheckOld(ctx context.Context) error { return c.health(ctx, c.state.Path) }
+func (c *Change) CheckOld(ctx context.Context) error {
+	return c.health(ctx, c.state.Path, nil)
+}
 
 func (c *Change) Apply(ctx context.Context) error {
-	for filename, expected := range map[string][]byte{c.manager.manifestPath: c.oldManifest, c.manager.configPath: c.oldConfig} {
-		if err := regularFile(filename); err != nil {
-			return err
-		}
-		actual, err := os.ReadFile(filename)
-		if err != nil || !bytes.Equal(actual, expected) {
-			return errors.New("托管网站配置在预检后发生变化，请重试")
-		}
+	if err := c.CheckSnapshot(); err != nil {
+		return err
 	}
 	c.changed = true
 	if err := atomicWrite(c.manager.configPath, c.newConfig); err != nil {
@@ -281,7 +328,7 @@ func (c *Change) Apply(ctx context.Context) error {
 	if err := command(ctx, "systemctl", "reload", "proxy-panel-web.service"); err != nil {
 		return err
 	}
-	return c.health(ctx, c.newPath)
+	return c.health(ctx, c.newPath, c.newReality)
 }
 
 func (c *Change) Rollback(ctx context.Context) error {
@@ -294,7 +341,7 @@ func (c *Change) Rollback(ctx context.Context) error {
 	if err := command(ctx, "systemctl", "reload", "proxy-panel-web.service"); err != nil {
 		return fmt.Errorf("恢复托管 Nginx 失败: %w", err)
 	}
-	if err := c.health(ctx, c.state.Path); err != nil {
+	if err := c.health(ctx, c.state.Path, nil); err != nil {
 		return fmt.Errorf("旧 HTTPUpgrade 路径恢复验证失败: %w", err)
 	}
 	c.changed = false
@@ -353,7 +400,7 @@ func command(ctx context.Context, name string, args ...string) error {
 	return nil
 }
 
-func (c *Change) health(ctx context.Context, route string) error {
+func (c *Change) health(ctx context.Context, route string, reality *realityProbe) error {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	cert, err := os.ReadFile(c.state.CA)
@@ -364,23 +411,39 @@ func (c *Change) health(ctx context.Context, route string) error {
 	if !pool.AppendCertsFromPEM(cert) {
 		return errors.New("托管网站 CA 文件无效")
 	}
+	addresses := c.state.Listens[:1]
+	if c.nodeID != c.state.NodeID {
+		addresses = c.state.Listens
+	}
+	var realityRoots *x509.CertPool
+	if reality != nil {
+		// The website may use a private CA bundle while the Reality target
+		// uses a public issuer. Accept both for the Reality handshake.
+		realityRoots, err = x509.SystemCertPool()
+		if err != nil {
+			return err
+		}
+		realityRoots.AppendCertsFromPEM(cert)
+	}
 	var last error
 	consecutive := 0
+	deadline, _ := ctx.Deadline()
 	for {
+		previous := last
 		last = nil
-		for _, domain := range c.state.Domains {
-			for _, check := range []struct {
-				path   string
-				status int
-			}{{"/", 200}, {route, 101}} {
-				if err := probe(ctx, c.state.Listens[0].String(), domain, check.path, check.status, pool); err != nil {
-					last = err
-					break
-				}
-			}
+		for _, addr := range addresses {
+			last = c.checkWebsite(ctx, addr, route, pool)
 			if last != nil {
 				break
 			}
+		}
+		if last == nil && reality != nil {
+			last = reality.check(ctx, realityRoots)
+		}
+		// If the overall deadline interrupted a retry, report the failure that
+		// prompted the retry (for example, a Reality certificate mismatch).
+		if previous != nil && last != nil && (ctx.Err() != nil || !time.Now().Before(deadline)) {
+			last = previous
 		}
 		if last == nil {
 			// A reload briefly overlaps worker generations. A single healthy
@@ -401,6 +464,18 @@ func (c *Change) health(ctx context.Context, route string) error {
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+func (c *Change) checkWebsite(ctx context.Context, addr netip.AddrPort, route string, pool *x509.CertPool) error {
+	for _, domain := range c.state.Domains {
+		if err := probe(ctx, addr.String(), domain, "/", 200, pool); err != nil {
+			return err
+		}
+		if err := probe(ctx, addr.String(), domain, route, 101, pool); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func probe(ctx context.Context, address, domain, route string, status int, pool *x509.CertPool) error {

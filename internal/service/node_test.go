@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
@@ -54,4 +55,9 @@ func TestNodeSecurityValidationBeforePersistence(t *testing.T) {
 	if err != nil || saved.Transport != "tcp" {
 		t.Fatal("invalid update persisted")
 	}
+}
+
+// SetRealityCheckForTest lets HTTP integration tests use a local target probe.
+func (s *NodeService) SetRealityCheckForTest(check func(context.Context, map[string]interface{}) (*RealityCheck, error)) {
+	s.realityCheck = check
 }

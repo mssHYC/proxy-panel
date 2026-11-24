@@ -55,7 +55,15 @@ func PublicRealityIP(ip net.IP) bool {
 	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
 		return false
 	}
-	for _, cidr := range append(blockedDestinations(), "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "2001:db8::/32") {
+	// Only native global IPv6 unicast is eligible. In particular, NAT64
+	// prefixes can translate an apparently remote address to a private IPv4.
+	if ip.To4() == nil && ip.To16()[0]&0xe0 != 0x20 {
+		return false
+	}
+	for _, cidr := range append(blockedDestinations(),
+		"168.63.129.16/32", // Azure host platform virtual IP
+		"192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24",
+		"2001::/23", "2001:db8::/32", "2002::/16", "3ffe::/16", "3fff::/20") {
 		_, subnet, _ := net.ParseCIDR(cidr)
 		if subnet.Contains(ip) {
 			return false

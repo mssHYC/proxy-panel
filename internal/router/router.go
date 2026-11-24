@@ -131,6 +131,8 @@ func Setup(cfg *config.Config, db *database.DB, mgr *kernel.Manager,
 			auth.DELETE("/nodes/:id", nodeHandler.Delete)
 			auth.POST("/nodes/generate-reality-keypair", nodeHandler.GenerateRealityKeypair)
 			auth.POST("/nodes/check-reality-target", nodeHandler.CheckRealityTarget)
+			auth.GET("/nodes/reality-candidate-catalog", nodeHandler.RealityCandidateCatalog)
+			auth.POST("/nodes/check-reality-candidates", nodeHandler.CheckRealityCandidates)
 
 			// 节点分组
 			auth.GET("/node-groups", nodeGroupHandler.List)

@@ -6,7 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
+	"net/netip"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"proxy-panel/internal/kernel"
@@ -41,10 +45,36 @@ func (s *NodeService) UpdateAndSync(id int64, req *UpdateNodeReq) (*model.Node, 
 		return nil, false, err
 	}
 	var change *website.Change
+	if s.website == nil && req.ShareWebsite443 != nil && *req.ShareWebsite443 {
+		return nil, false, fmt.Errorf("%w：请先部署托管 HTTPUpgrade 网站，再共享 443", website.ErrManagedConflict)
+	}
 	if s.website != nil {
-		change, err = s.website.Prepare(*old, candidate)
+		requestedSettings := candidate.Settings
+		change, err = s.website.PrepareUpdate(*old, &candidate, req.ShareWebsite443)
 		if err != nil {
 			return nil, false, fmt.Errorf("托管网站检查失败: %w", err)
+		}
+		if change != nil {
+			unlock, err := s.website.LockDeployment()
+			if err != nil {
+				return nil, false, err
+			}
+			defer unlock()
+			if err := change.CheckSnapshot(); err != nil {
+				return nil, false, err
+			}
+		}
+		if candidate.Settings != requestedSettings {
+			// The installer owns the shared loopback. Persist the actual bind even
+			// for a port-only update or a full form carrying the old listen value.
+			effective := *req
+			effective.Settings = &candidate.Settings
+			req = &effective
+		}
+		if change != nil && old.Port != candidate.Port {
+			if err := s.checkWebsiteTransitionPorts(candidate); err != nil {
+				return nil, false, err
+			}
 		}
 	}
 	if req.Settings != nil || (req.Enable != nil && *req.Enable) {
@@ -67,6 +97,11 @@ func (s *NodeService) UpdateAndSync(id int64, req *UpdateNodeReq) (*model.Node, 
 	previous, err := os.ReadFile(s.xrayConfig)
 	if err != nil {
 		return nil, false, fmt.Errorf("备份 Xray 配置失败: %w", err)
+	}
+	if old.Transport == "tcp" {
+		if err := checkStoredRealityInbound(*old, previous); err != nil {
+			return nil, false, err
+		}
 	}
 	engine, err := s.syncSvc.mgr.Get("xray")
 	if err != nil {
@@ -128,6 +163,126 @@ func (s *NodeService) UpdateAndSync(id int64, req *UpdateNodeReq) (*model.Node, 
 		log.Printf("[网站同步] 节点 %d 已保存，恢复记录待下次启动或保存时清理: %v", node.ID, err)
 	}
 	return node, true, nil
+}
+
+// Check the destination before restarting either service. An enabled listener
+// in the DB is reserved even when its kernel is temporarily stopped.
+func (s *NodeService) checkWebsiteTransitionPorts(candidate model.Node) error {
+	var destinations []netip.AddrPort
+	if candidate.Port == 443 {
+		destinations = []netip.AddrPort{netip.MustParseAddrPort("127.0.0.2:443"), netip.MustParseAddrPort("127.0.0.1:9443")}
+	} else {
+		if candidate.Port < 1 || candidate.Port > 65535 {
+			return fmt.Errorf("%w: 独立端口须为 1 至 65535", ErrInvalidNodeSettings)
+		}
+		addr, err := nodeListenIP(candidate.Settings)
+		if err != nil {
+			return err
+		}
+		destinations = []netip.AddrPort{netip.AddrPortFrom(addr, uint16(candidate.Port))}
+	}
+	nodes, err := s.ListEnabled()
+	if err != nil {
+		return err
+	}
+	for _, dest := range destinations {
+		for _, n := range nodes {
+			if n.Port != int(dest.Port()) || n.Protocol == "hysteria2" || n.Protocol == "hy2" || n.Protocol == "tuic" ||
+				(n.KernelType == "xray" && (n.Transport == "kcp" || n.Transport == "quic")) {
+				continue
+			}
+			ip, err := nodeListenIP(n.Settings)
+			if err != nil {
+				return err
+			}
+			if ip == dest.Addr() || ip.IsUnspecified() || dest.Addr().IsUnspecified() {
+				return fmt.Errorf("%w：节点 %d 的 TCP 监听与 %s 重叠", website.ErrManagedConflict, n.ID, dest)
+			}
+		}
+		if candidate.Port == 443 {
+			// These are installer-defined loopbacks. A connect check works from
+			// an unprivileged panel even if it cannot itself bind port 443.
+			if conn, err := net.DialTimeout("tcp", dest.String(), 300*time.Millisecond); err == nil {
+				conn.Close()
+				return fmt.Errorf("%w：托管网站所需的 TCP 地址 %s 已在使用中", website.ErrManagedConflict, dest)
+			}
+		} else {
+			listener, err := net.Listen("tcp", dest.String())
+			if err != nil {
+				return fmt.Errorf("%w：无法绑定 Reality 独立地址 %s: %v", website.ErrManagedConflict, dest, err)
+			}
+			listener.Close()
+		}
+	}
+	return nil
+}
+
+func nodeListenIP(settings string) (netip.Addr, error) {
+	var values struct{ Listen string }
+	if err := json.Unmarshal([]byte(settings), &values); err != nil {
+		return netip.Addr{}, err
+	}
+	if values.Listen == "" {
+		return netip.IPv4Unspecified(), nil
+	}
+	ip, err := netip.ParseAddr(values.Listen)
+	return ip.Unmap(), err
+}
+
+func checkStoredRealityInbound(old model.Node, data []byte) error {
+	var config struct {
+		Inbounds []struct {
+			Tag, Protocol, Listen string
+			Port                  int
+			StreamSettings        struct {
+				Network, Security string
+				RealitySettings   struct {
+					Dest, Target string
+					ServerNames  []string
+				}
+			}
+		}
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return fmt.Errorf("读取现用 Xray 配置失败: %w", err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(old.Settings), &settings); err != nil {
+		return err
+	}
+	dest, names, err := kernel.RealityTarget(settings)
+	if err != nil {
+		return err
+	}
+	ip, err := nodeListenIP(old.Settings)
+	if err != nil {
+		return err
+	}
+	count := 0
+	for _, inbound := range config.Inbounds {
+		if inbound.Tag != fmt.Sprintf("node-%d", old.ID) {
+			continue
+		}
+		count++
+		stream := inbound.StreamSettings
+		target := stream.RealitySettings.Target
+		if target == "" {
+			target = stream.RealitySettings.Dest
+		}
+		bind := netip.IPv4Unspecified()
+		if inbound.Listen != "" {
+			bind, err = netip.ParseAddr(inbound.Listen)
+		}
+		if err != nil || bind.Unmap() != ip || inbound.Port != old.Port || inbound.Protocol != old.Protocol ||
+			(stream.Network != "tcp" && stream.Network != "raw") || stream.Security != "reality" || target != dest ||
+			!slices.EqualFunc(names, stream.RealitySettings.ServerNames, strings.EqualFold) {
+			return fmt.Errorf("%w：现用 Xray 的 Reality 监听或目标与节点不一致，请先核对内核配置", website.ErrManagedConflict)
+		}
+	}
+	if count != 1 {
+		return fmt.Errorf("%w：现用 Xray 配置缺少唯一的 Reality 节点 %d", website.ErrManagedConflict, old.ID)
+	}
+	return nil
 }
 
 func (s *NodeService) nodeCandidate(old *model.Node, req *UpdateNodeReq) (model.Node, error) {

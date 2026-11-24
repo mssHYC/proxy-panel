@@ -103,17 +103,23 @@ proxy-panel website status
 
 ### 已托管 HTTPUpgrade 的网站与 Reality 共用 TCP 443
 
+已部署托管 HTTPUpgrade 网站时，在面板打开已启用的 Xray VLESS/TCP Reality 节点。将独立端口改为 `443`，在「443 入口」中选择「与托管网站共享」并保存。即使节点原来绑定其他本机 IP，也会使用网站的公网入口，并记录原监听 IP 供解除共享时恢复。请确认节点「主机地址」指向网站实际监听的公网 IP。要在另一个本机 IP 上独立使用 443，选择「独立监听」并填写与网站监听不重叠的 IP。将共享节点改到空闲的独立端口后保存，会解除共享。仅更换共享节点的 SNI 时保留端口 `443`。面板会校验配置、同步 Xray 和 Nginx、验证网站及节点入口，成功后才更新节点记录。监听范围、端口或 SNI 变化后请刷新客户端订阅。
+
+更新节点的 API 请求可使用布尔字段 `share_website_443` 显式选择共享（`true`）或独立监听（`false`）。请求共享时，若网站尚未部署、不支持共享或已绑定其他 Reality 节点，保存会失败。旧客户端省略此字段时，仍按监听 IP 判断是否共享。
+
 如果 `proxy-panel help` 列出的网站子命令只有 `website setup` 和 `website status`，先完成[旧版管理脚本迁移](#旧版管理脚本迁移)，再使用 `share-reality` 或 `unshare-reality`。
 
-先用 `proxy-panel website setup` 托管 HTTPUpgrade 节点。准备一个已能独立连接的 Xray VLESS/TCP Reality 节点，使用独立端口和单一 SNI，该 SNI 须与网站域名不同。在服务器上执行以下命令，例中的 `17` 要换成自己的 Reality 节点 ID：
+首次部署网站使用 `proxy-panel website setup`。要从命令行开启共享，请使用已能独立连接的 Xray VLESS/TCP Reality 节点，配置独立端口和一个与网站域名不同的 SNI。以下示例的 `17` 是 Reality 节点 ID。
 
 ```sh
 proxy-panel website share-reality 17
 ```
 
-Nginx 需要支持 stream 和 ssl_preread；Debian/Ubuntu 的动态模块包为 `libnginx-mod-stream`，版本须与安装的 Nginx 匹配。命令会预检、备份并短暂停止相关服务，应用变更后检查网站和两个 SNI 分支。公网 443 由 Nginx 接收，Reality 握手透传至 `127.0.0.2:443`。网站在 `127.0.0.1:9443` 终止 TLS，按已有路径转到 HTTPUpgrade 的 `127.0.0.1:443`。订阅同时公布两个节点的 443 端口。刷新订阅并用客户端分别验证它们能否出网，服务端对 Reality SNI 的普通 TLS 检查不验证订阅凭据。改变端口不能解除已有 IP 封锁。
+只有共享入口需要 Nginx 的 stream 和 ssl_preread 支持。如果面板或 CLI 预检提示缺少模块，使用发行版 Nginx 的管理员可在 Debian/Ubuntu 上执行 `apt-get install libnginx-mod-stream`，在 Fedora/RHEL 系上执行 `dnf install nginx-mod-stream`（旧系统使用 `yum`），然后重试。模块须与当前 Nginx 来自同一软件源且版本匹配。自编译 Nginx 可通过 `--with-stream --with-stream_ssl_preread_module` 静态启用所需功能。
 
-在启用 SELinux enforcing 的主机上，脚本会在停服前让 systemd 启动 Nginx，检验它能否监听计划中的回环端口。如果策略拒绝绑定，当前服务继续运行。请根据预检输出和 AVC 日志检查端口用途。RHEL 系列策略可能已将 9443 分配给 PKI 服务。
+命令会预检、备份并短暂停止相关服务，应用变更后检查网站和两个 SNI 分支。公网 443 由 Nginx 接收，Reality 握手透传至 `127.0.0.2:443`。网站在 `127.0.0.1:9443` 终止 TLS，按已有路径转到 HTTPUpgrade 的 `127.0.0.1:443`。订阅同时公布两个节点的 443 端口。刷新订阅并用客户端分别验证它们能否出网，服务端对 Reality SNI 的普通 TLS 检查不验证订阅凭据。改变端口不能解除已有 IP 封锁。
+
+在启用 SELinux enforcing 的主机上，从面板或命令行首次开启共享时，都会在停服前通过 systemd 检查 Nginx 能否监听 `127.0.0.1:9443`。如果策略拒绝绑定，当前服务继续运行。请根据预检输出和 AVC 日志检查端口用途。RHEL 系列策略可能已将 9443 分配给 PKI 服务。
 
 网站切换前会启用 `proxy-panel-website-recover.path` 并在 `/opt/proxy-panel/.website-transaction` 写入待恢复记录。切换进程中断或主机重启后，systemd 会启动恢复服务，按备份还原受影响的文件和服务状态。可用 `journalctl -u proxy-panel-website-recover.service` 查看结果，备份位于 `/opt/proxy-panel/backups/website-*`。连续三次恢复失败后，记录会保留。根据日志修复原因后，执行以下命令重新触发恢复。
 
@@ -230,6 +236,8 @@ XRAY_BINARY=/绝对路径/xray SINGBOX_BINARY=/绝对路径/sing-box \
 测试只启动临时回环高端口，不操作 systemd；使用测试证书，访问 Cloudflare `https://1.1.1.1/cdn-cgi/trace` 作为正常转发对照，检查网站回落、未知 SNI 拒绝、IPv4/IPv6/localhost 隔离、管理接口及统计采集。需要外网可达。
 
 ## Reality 目标检查与 TLS 参数
+
+打开「筛选候选网站」并选择「获取附近镜像」，可以查看 Fedora MirrorManager 为 VPS 出口推荐的 HTTPS 镜像和登记国家或地区。勾选域名或输入自己的候选，每批最多检测 8 个。通过证书、TLS 1.3 和 HTTP/2 检查且未识别到已知 CDN 或代理特征时，可将同一域名一起填入 Dest 和 SNI，再保存节点。连接耗时和登记地区可用于比较候选，具体机房、网站流量排名和 IP 封锁风险无法由该检测确定。[Fedora 镜像登记及政策](https://fedoraproject.org/wiki/Infrastructure/Mirroring#Mirror_Policies)
 
 节点编辑页的「检查目标」从 VPS 出发验证 DNS、证书与 SNI、TLS 1.3 和 HTTP/2。新建 Reality 节点、更换 dest / server_names、从禁用状态重新启用时，后端也会在写入数据库前检查；检查失败保留原配置。修改名称或保存未变化的目标不会重复联网，已有节点也不会因为面板启动时目标网站临时不可用而被关闭。
 

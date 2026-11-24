@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 
@@ -19,13 +21,14 @@ import (
 
 // NodeHandler 节点管理处理器
 type NodeHandler struct {
-	svc     *service.NodeService
-	syncSvc *service.KernelSyncService
+	svc            *service.NodeService
+	syncSvc        *service.KernelSyncService
+	candidateBatch chan struct{}
 }
 
 // NewNodeHandler 创建节点处理器
 func NewNodeHandler(svc *service.NodeService, syncSvc *service.KernelSyncService) *NodeHandler {
-	return &NodeHandler{svc: svc, syncSvc: syncSvc}
+	return &NodeHandler{svc: svc, syncSvc: syncSvc, candidateBatch: make(chan struct{}, 1)}
 }
 
 // List 获取节点列表
@@ -216,4 +219,28 @@ func (h *NodeHandler) CheckRealityTarget(c *gin.Context) {
 		return
 	}
 	c.JSON(200, result)
+}
+
+func (h *NodeHandler) CheckRealityCandidates(c *gin.Context) {
+	var req struct {
+		Hosts []string `json:"hosts"`
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10))
+	if err != nil || json.Unmarshal(body, &req) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的候选域名列表"})
+		return
+	}
+	select {
+	case h.candidateBatch <- struct{}{}:
+		defer func() { <-h.candidateBatch }()
+	default:
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "已有一批域名正在检查，请稍后重试"})
+		return
+	}
+	results, err := service.CheckRealityCandidates(c.Request.Context(), req.Hosts)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"results": results})
 }

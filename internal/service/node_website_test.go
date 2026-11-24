@@ -117,6 +117,7 @@ func TestNodeSaveReportsIncompleteRollback(t *testing.T) {
 type nodeWebsiteFixture struct {
 	root  string
 	nodes *service.NodeService
+	sync  *service.KernelSyncService
 	node  *model.Node
 	web   *httptest.Server
 	api   *gin.Engine
@@ -140,7 +141,7 @@ func newNodeWebsiteFixture(t *testing.T) *nodeWebsiteFixture {
 	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "cdn.example.com"},
-		DNSNames: []string{"cdn.example.com"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		DNSNames: []string{"cdn.example.com", "a.example.com", "b.example.com"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
 		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, BasicConstraintsValid: true, IsCA: true,
 	}
@@ -219,13 +220,14 @@ func newNodeWebsiteFixture(t *testing.T) *nodeWebsiteFixture {
 	mgr := kernel.NewManager()
 	mgr.Register(kernel.NewXrayEngine("xray", kernelPath, 10085))
 	syncSvc := service.NewKernelSyncService(db, mgr)
+	f.sync = syncSvc
 	configs, err := syncSvc.GenerateForCheck()
 	if err != nil {
 		t.Fatal(err)
 	}
 	write("xray.json", configs["xray"], 0600)
 	write("active-xray.json", configs["xray"], 0600)
-	nginx := []byte("pid /run/proxy-panel-web.pid;\nhttp {\nserver {\nlocation = \"/old\" {\nerror_page 418 = @proxy_panel_node;\n}\nlocation @proxy_panel_node {\nproxy_pass https://127.0.0.1:443;\n}\n}\n}\n")
+	nginx := []byte("pid /run/proxy-panel-web.pid;\nhttp {\nserver {\n        listen " + f.web.Listener.Addr().String() + " ssl default_server;\n}\nserver {\n        listen " + f.web.Listener.Addr().String() + " ssl;\nlocation = \"/old\" {\nerror_page 418 = @proxy_panel_node;\n}\nlocation @proxy_panel_node {\nproxy_pass https://127.0.0.1:443;\n}\n}\n}\n")
 	nginxPath := write("nginx.conf", nginx, 0644)
 	write("active-nginx.conf", nginx, 0644)
 	manifest, _ := json.Marshal(map[string]any{
@@ -236,6 +238,7 @@ func newNodeWebsiteFixture(t *testing.T) *nodeWebsiteFixture {
 		"webroot": f.root,
 	})
 	manifestPath := write("managed.json", manifest, 0600)
+	write("getenforce", []byte("#!/bin/sh\necho Disabled\n"), 0755)
 	write("nginx", []byte("#!/bin/sh\nexit 0\n"), 0755)
 	write("systemctl", []byte(`#!/bin/sh
 set -eu

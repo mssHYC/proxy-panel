@@ -231,6 +231,24 @@ class WebsiteTests(unittest.TestCase):
             self.prepare('', 'share-reality', '2')
         self.assertEqual([path.read_bytes() for path in files], before)
 
+    def test_share_preflight_explains_only_stream_module_failures(self):
+        self.add_independent_reality()
+        for message, hint in [('unknown directive "stream"', True), ('unknown directive "ssl_preread"', True),
+                              ('host not found in upstream "example.com"', False)]:
+            def run(args):
+                if args[:2] == [self.nginx, '-t']:
+                    raise ValueError(message)
+                if args[:3] == [os.environ.get('XRAY_BINARY', '/fixture/xray'), 'run', '-test']:
+                    return ''  # This fixture exercises the Nginx diagnostic with a synthetic Reality node.
+                return self.checked_run(args)
+
+            with self.subTest(message=message), patch.object(tool, 'check_standalone_ports'), patch.object(tool, 'run', side_effect=run):
+                with self.assertRaises(ValueError) as error:
+                    self.prepare('', 'share-reality', '2')
+                self.assertIn(message, str(error.exception))
+                for command in ('apt-get install libnginx-mod-stream', 'dnf install nginx-mod-stream'):
+                    self.assertEqual(command in str(error.exception), hint)
+
     def test_share_rejects_target_with_more_than_one_sni(self):
         self.add_independent_reality()
         cfg = json.loads(self.kernel.read_bytes())
@@ -849,6 +867,9 @@ class WebsiteTransactionTests(unittest.TestCase):
             root = Path(temp)
             (root / 'states').mkdir()
             (root / 'enabled').mkdir()
+            if failure == 'pending-api':
+                (root / 'site').mkdir()
+                (root / 'site/path-update.json').write_text('{}')
             original_services = ['proxy-panel'] if standalone else ['proxy-panel', 'xray']
             for svc in original_services:
                 (root / 'states' / svc).touch()
@@ -934,7 +955,7 @@ if [[ "$OFFER" == 1 ]]; then offer_website_setup; else do_website website setup;
                 self.assertTrue((root / 'site/nginx.conf').exists(), result.stdout)
                 self.assertTrue((root / 'states/proxy-panel-web').exists(), result.stdout)
                 self.assertTrue((root / 'states/proxy-panel-web-cert.path').exists(), result.stdout)
-            if failure in ('dependency', 'preflight'):
+            if failure in ('dependency', 'preflight', 'pending-api'):
                 events = (root / 'events').read_text() if (root / 'events').exists() else ''
                 self.assertNotIn('stop ', events, result.stdout)
             if standalone:
@@ -945,6 +966,7 @@ if [[ "$OFFER" == 1 ]]; then offer_website_setup; else do_website website setup;
                     self.assertNotIn('stop ' + svc + '\n', events)
                     self.assertNotIn('start ' + svc + '\n', events)
 
+    def test_pending_panel_save_keeps_services(self): self.run_case('pending-api')
     def test_success(self): self.run_case()
     def test_standalone_success_without_xray(self): self.run_case(standalone=True)
     def test_standalone_nginx_failure_keeps_panel_running(self): self.run_case('start', standalone=True)
