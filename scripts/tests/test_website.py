@@ -238,6 +238,8 @@ class WebsiteTests(unittest.TestCase):
             def run(args):
                 if args[:2] == [self.nginx, '-t']:
                     raise ValueError(message)
+                if args[:3] == [os.environ.get('XRAY_BINARY', '/fixture/xray'), 'run', '-test']:
+                    return ''  # This fixture exercises the Nginx diagnostic with a synthetic Reality node.
                 return self.checked_run(args)
 
             with self.subTest(message=message), patch.object(tool, 'check_standalone_ports'), patch.object(tool, 'run', side_effect=run):
